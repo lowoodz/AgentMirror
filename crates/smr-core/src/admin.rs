@@ -1,6 +1,6 @@
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::{Html, Json};
+use axum::http::{header, StatusCode};
+use axum::response::{Html, IntoResponse, Json};
 use axum::routing::{get, put};
 use axum::Router;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,7 @@ struct AuditsQuery {
 pub fn router() -> Router<HttpState> {
     Router::new()
         .route("/ui", get(ui_index))
+        .route("/favicon.ico", get(favicon))
         .route("/api/status", get(api_status))
         .route("/api/config", get(api_get_config).put(api_put_config))
         .route("/api/events", get(api_events))
@@ -42,6 +43,13 @@ pub fn router() -> Router<HttpState> {
 
 async fn ui_index() -> Html<&'static str> {
     Html(include_str!("../assets/index.html"))
+}
+
+async fn favicon() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "image/png")],
+        include_bytes!("../assets/favicon.png").as_slice(),
+    )
 }
 
 async fn api_status(State(s): State<HttpState>) -> Json<StatusResponse> {

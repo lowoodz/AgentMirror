@@ -4,12 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SecureModelRoute</title>
+  <link rel="icon" href="/favicon.ico" type="image/png" />
   <style>
     :root { --bg:#0f1117; --card:#1a1d27; --text:#e6e8ef; --muted:#8b90a0; --accent:#5b8def; --ok:#3ecf8e; --warn:#f0ad4e; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:-apple-system,BlinkMacSystemFont,sans-serif; background:var(--bg); color:var(--text); }
     header { padding:14px 24px; border-bottom:1px solid #2a2f3d; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
-    .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); }
+    .brand { display:flex; align-items:center; gap:10px; }
+    .brand-logo { width:28px; height:28px; flex-shrink:0; border-radius:7px; }
   .switch { display:flex; align-items:center; gap:8px; margin-left:auto; }
     .switch input { width:42px; height:22px; }
     main { display:flex; min-height:calc(100vh - 56px); }
@@ -46,8 +48,28 @@
 </head>
 <body>
 <header>
-  <div class="dot"></div>
+  <div class="brand">
+  <svg class="brand-logo" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <linearGradient id="lg-shield" x1="256" y1="120" x2="256" y2="340" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#6b9df5"/><stop offset="1" stop-color="#4a7fd4"/>
+      </linearGradient>
+    </defs>
+    <rect width="512" height="512" rx="112" fill="#1a1d27"/>
+    <path d="M256 248 C256 248 340 200 392 168" stroke="#5b8def" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.8"/>
+    <path d="M256 264 C256 264 380 280 420 320" stroke="#5b8def" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.65"/>
+    <path d="M256 264 C256 264 132 280 92 320" stroke="#5b8def" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.65"/>
+    <path d="M256 248 C256 248 172 200 120 168" stroke="#3ecf8e" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.8"/>
+    <circle cx="392" cy="168" r="22" fill="#3ecf8e"/>
+    <circle cx="420" cy="320" r="18" fill="#5b8def"/>
+    <circle cx="92" cy="320" r="18" fill="#5b8def"/>
+    <circle cx="120" cy="168" r="22" fill="#3ecf8e"/>
+    <path d="M256 128 L336 168 V248 C336 296 256 336 256 336 C256 336 176 296 176 248 V168 Z" fill="url(#lg-shield)"/>
+    <circle cx="256" cy="248" r="28" fill="#0f1117" stroke="#5b8def" stroke-width="6"/>
+    <path d="M244 248 L252 256 L272 232" stroke="#3ecf8e" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
   <h1 style="margin:0;font-size:18px">SecureModelRoute</h1>
+  </div>
   <span class="hint" id="statusText">加载中...</span>
   <div class="switch">
     <label class="hint">安全防护总开关</label>
