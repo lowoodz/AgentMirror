@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use crate::audit::{protocol_label, RequestAudit};
 use crate::events::EventKind;
-use crate::request::{ForwardRequest, ProxyRequest, ProxyResponse};
-use crate::router::{convert_response_body, ForwardOptions, RouteResult};
+use crate::request::{ForwardRequest, ProxyBody, ProxyRequest, ProxyResponse};
+use crate::router::{convert_response_body, ForwardOptions, RouteBody, RouteResult};
 use crate::state::SharedApp;
 use crate::streaming::{is_sse_content_type, process_sse_response, request_wants_stream};
 
@@ -120,77 +120,108 @@ impl ProxyService {
             .await?;
 
         let endpoint_protocol = infer_endpoint_protocol(&attempt.endpoint);
-        let mut resp_body = attempt.body;
-        let mut resp_headers = attempt.headers.clone();
+        let resp_headers = attempt.headers;
 
-        if client_protocol != endpoint_protocol
-            && !resp_body.is_empty()
-            && attempt.status.is_success()
-            && !is_sse_content_type(&resp_headers)
-        {
-            if let Ok(converted) =
-                convert_response_body(&resp_body, endpoint_protocol, client_protocol)
-            {
-                resp_body = converted;
-            }
-        }
-
-        if snap.config.pipeline.ops_active()
-            && (is_sse_content_type(&resp_headers) || wants_stream)
-        {
-            let before = resp_body.clone();
-            let (new_body, blocks, observes) =
-                process_sse_response(&resp_body, &snap.ops, snap.config.pipeline.operation_security_mode)?;
-            resp_body = new_body;
-            safety_blocks += blocks;
-            safety_observations += observes;
-            if resp_body != before {
-                events.push(
-                    EventKind::OpBlock,
-                    "blocked dangerous tool_call in SSE stream",
-                    None,
-                );
-            }
-        } else if snap.config.pipeline.ops_active() {
-            let resp_is_json = resp_headers
-                .get(http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.contains("application/json"))
-                .unwrap_or(false);
-
-            if resp_is_json && !resp_body.is_empty() && attempt.status.is_success() {
-                if let Ok(mut json) = parse_json_body(&resp_body) {
-                    if snap.config.pipeline.dlp_active() {
-                        let _ = snap.dlp.process_response_triggers(session_id, &json);
-                    }
-                    let extracted = extract_texts(&json)?;
-                    let tool_only = filter_tool_related(&json, &extracted);
-                    let (ops_replacements, blocks, observes) =
-                        snap.ops.process_fields_with_mode(&tool_only)?;
-                    safety_blocks += blocks;
-                    safety_observations += observes;
-                    if !ops_replacements.is_empty() {
-                        info!(
-                            count = ops_replacements.len(),
-                            "operation security blocked response fields"
-                        );
-                        inject_response_texts(&mut json, &ops_replacements)?;
-                        resp_body = Bytes::from(serialize_json_body(&json)?);
-                        events.push(
-                            EventKind::OpBlock,
-                            "blocked dangerous tool_call in response",
-                            None,
-                        );
-                    } else if snap.config.pipeline.dlp_active() {
-                        let _ = snap.dlp.process_response_triggers(session_id, &json);
-                    }
+        let proxy_body = match attempt.body {
+            RouteBody::SseStream(stream) => {
+                if snap.config.pipeline.ops_active() {
+                    ProxyBody::wrap_sse_ops(
+                        stream,
+                        snap.ops.clone(),
+                        snap.config.pipeline.operation_security_mode,
+                    )
+                } else {
+                    ProxyBody::SseStream(Box::pin(stream))
                 }
             }
-        } else if snap.config.pipeline.dlp_active() && attempt.status.is_success() {
-            if let Ok(json) = parse_json_body(&resp_body) {
-                let _ = snap.dlp.process_response_triggers(session_id, &json);
+            RouteBody::Buffered(mut resp_body) => {
+                if client_protocol != endpoint_protocol
+                    && !resp_body.is_empty()
+                    && attempt.status.is_success()
+                    && !is_sse_content_type(&resp_headers)
+                {
+                    if let Ok(converted) =
+                        convert_response_body(&resp_body, endpoint_protocol, client_protocol)
+                    {
+                        resp_body = converted;
+                    }
+                }
+
+                if snap.config.pipeline.ops_active()
+                    && (is_sse_content_type(&resp_headers) || wants_stream)
+                {
+                    let before = resp_body.clone();
+                    let (new_body, blocks, observes) = process_sse_response(
+                        &resp_body,
+                        &snap.ops,
+                        snap.config.pipeline.operation_security_mode,
+                    )?;
+                    resp_body = new_body;
+                    safety_blocks += blocks;
+                    safety_observations += observes;
+                    if resp_body != before {
+                        events.push(
+                            EventKind::OpBlock,
+                            "blocked dangerous tool_call in SSE stream",
+                            None,
+                        );
+                    }
+                } else if snap.config.pipeline.dlp_active() || snap.config.pipeline.ops_active() {
+                    let resp_is_json = resp_headers
+                        .get(http::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v.contains("application/json"))
+                        .unwrap_or(false);
+
+                    if resp_is_json && !resp_body.is_empty() && attempt.status.is_success() {
+                        if let Ok(mut json) = parse_json_body(&resp_body) {
+                            if snap.config.pipeline.dlp_active() {
+                                let extracted = extract_texts(&json)?;
+                                let (dlp_replacements, count) =
+                                    snap.dlp.process_response(session_id, &json, &extracted)?;
+                                dlp_count += count as u32;
+                                if !dlp_replacements.is_empty() {
+                                    inject_response_texts(&mut json, &dlp_replacements)?;
+                                    resp_body = Bytes::from(serialize_json_body(&json)?);
+                                    events.push(
+                                        EventKind::DlpReplace,
+                                        format!(
+                                            "sanitized {} response field(s)",
+                                            dlp_replacements.len()
+                                        ),
+                                        None,
+                                    );
+                                }
+                            }
+
+                            if snap.config.pipeline.ops_active() {
+                                let extracted = extract_texts(&json)?;
+                                let tool_only = filter_tool_related(&json, &extracted);
+                                let (ops_replacements, blocks, observes) =
+                                    snap.ops.process_fields_with_mode(&tool_only)?;
+                                safety_blocks += blocks;
+                                safety_observations += observes;
+                                if !ops_replacements.is_empty() {
+                                    info!(
+                                        count = ops_replacements.len(),
+                                        "operation security blocked response fields"
+                                    );
+                                    inject_response_texts(&mut json, &ops_replacements)?;
+                                    resp_body = Bytes::from(serialize_json_body(&json)?);
+                                    events.push(
+                                        EventKind::OpBlock,
+                                        "blocked dangerous tool_call in response",
+                                        None,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ProxyBody::Buffered(resp_body)
             }
-        }
+        };
 
         let success = attempt.status.is_success();
         if success {
@@ -206,6 +237,14 @@ impl ProxyService {
                 None,
             );
         }
+
+        let audit_message = if success {
+            format!("routed to {}", attempt.endpoint.model)
+        } else if let ProxyBody::Buffered(ref b) = proxy_body {
+            String::from_utf8_lossy(b).into_owned()
+        } else {
+            "streaming response".to_string()
+        };
 
         let audit = RequestAudit {
             id: audit_id,
@@ -223,16 +262,12 @@ impl ProxyService {
             safety_blocks,
             safety_observations,
             success,
-            message: if success {
-                format!("routed to {}", attempt.endpoint.model)
-            } else {
-                String::from_utf8_lossy(&resp_body).into_owned()
-            },
+            message: audit_message.clone(),
         };
         let _ = self.app.storage.insert_audit(&audit);
         events.push(EventKind::Info, audit.summary(), None);
 
-        Ok((attempt.status, resp_headers, resp_body))
+        Ok((attempt.status, resp_headers, proxy_body))
     }
 }
 

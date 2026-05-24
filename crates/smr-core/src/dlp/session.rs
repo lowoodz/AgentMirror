@@ -3,7 +3,8 @@ use std::sync::Mutex;
 use dashmap::DashMap;
 
 use crate::config::FileRule;
-use crate::dlp::file::{scan_text_for_file_content, FileContent};
+use crate::dlp::file::FileDlp;
+use crate::dlp::file::FileContent;
 
 #[derive(Clone)]
 pub struct ActiveFileContent {
@@ -18,6 +19,23 @@ struct SessionState {
 
 pub struct SessionGuard {
     sessions: DashMap<String, Mutex<SessionState>>,
+}
+
+impl Clone for SessionGuard {
+    fn clone(&self) -> Self {
+        let cloned = Self::new();
+        for entry in self.sessions.iter() {
+            let state = entry.value().lock().unwrap();
+            cloned.sessions.insert(
+                entry.key().clone(),
+                Mutex::new(SessionState {
+                    active: state.active.clone(),
+                    remaining_calls: state.remaining_calls,
+                }),
+            );
+        }
+        cloned
+    }
 }
 
 impl SessionGuard {
@@ -36,27 +54,49 @@ impl SessionGuard {
         });
         let mut state = entry.lock().unwrap();
 
-        state.active.push(ActiveFileContent {
-            rule: rule.clone(),
-            contents: contents.to_vec(),
-        });
+        let already = state
+            .active
+            .iter()
+            .any(|a| a.rule.id == rule.id && a.rule.path == rule.path);
+        if !already {
+            state.active.push(ActiveFileContent {
+                rule: rule.clone(),
+                contents: contents.to_vec(),
+            });
+        }
         state.remaining_calls = state.remaining_calls.max(window);
     }
 
-    pub fn sanitize_with_session(&self, session_id: &str, text: &str) -> anyhow::Result<String> {
+    /// Consume one model-call slot and return active file rules for this request.
+    pub fn begin_request(&self, session_id: &str) -> Option<Vec<ActiveFileContent>> {
         let key = session_id.to_string();
-        let Some(entry) = self.sessions.get(&key) else {
-            return Ok(text.to_string());
-        };
-
+        let entry = self.sessions.get(&key)?;
         let mut state = entry.lock().unwrap();
         if state.remaining_calls == 0 || state.active.is_empty() {
-            return Ok(text.to_string());
+            return None;
         }
-
         state.remaining_calls -= 1;
-        let active = state.active.clone();
-        Ok(scan_text_for_file_content(text, &active))
+        Some(state.active.clone())
+    }
+
+    /// Active rules without consuming a call slot (same HTTP response turn).
+    pub fn active_snapshot(&self, session_id: &str) -> Option<Vec<ActiveFileContent>> {
+        let key = session_id.to_string();
+        let entry = self.sessions.get(&key)?;
+        let state = entry.lock().unwrap();
+        if state.remaining_calls == 0 || state.active.is_empty() {
+            return None;
+        }
+        Some(state.active.clone())
+    }
+
+    pub fn sanitize_with_active(
+        &self,
+        text: &str,
+        active: &[ActiveFileContent],
+        file_dlp: &FileDlp,
+    ) -> String {
+        file_dlp.scan_text(text, active)
     }
 }
 

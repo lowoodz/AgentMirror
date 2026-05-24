@@ -12,9 +12,10 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::admin;
+use crate::body_util::{apply_streaming_headers, proxy_body_to_axum};
 use crate::http_state::HttpState;
 use crate::proxy::ProxyService;
-use crate::request::ProxyRequest;
+use crate::request::{ProxyBody, ProxyRequest};
 use crate::state::SharedApp;
 
 pub async fn run_app(app: Arc<SharedApp>) -> Result<()> {
@@ -83,10 +84,11 @@ async fn proxy_handler(
         })
         .await
     {
-        Ok((status, resp_headers, body)) => {
+        Ok((status, resp_headers, proxy_body)) => {
+            let is_stream = matches!(proxy_body, ProxyBody::SseStream(_));
             let mut resp = Response::builder()
                 .status(status)
-                .body(axum::body::Body::from(body))
+                .body(proxy_body_to_axum(proxy_body))
                 .unwrap_or_else(|_| {
                     (StatusCode::INTERNAL_SERVER_ERROR, "failed to build response").into_response()
                 });
@@ -98,6 +100,9 @@ async fn proxy_handler(
                         continue;
                     }
                     h.insert(name.clone(), value.clone());
+                }
+                if is_stream {
+                    apply_streaming_headers(h);
                 }
             }
             resp

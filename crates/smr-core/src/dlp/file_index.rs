@@ -11,6 +11,7 @@ use crate::config::FileRule;
 use crate::dlp::file::{load_rule_contents, FileContent};
 
 pub const CHUNK_SIZE: usize = 8192;
+pub const CHUNK_OVERLAP: usize = 64;
 
 #[derive(Clone)]
 pub struct FileChunk {
@@ -70,6 +71,45 @@ impl FileIndexManager {
         Ok(())
     }
 
+    /// Patterns to search in haystack for a given indexed file (full text or UTF-8 chunks).
+    pub fn search_patterns_for_file(&self, rule: &FileRule, file: &FileContent) -> Vec<String> {
+        let state = self.inner.read();
+        for indexed in &state.rules {
+            if indexed.rule.path == rule.path {
+                return patterns_for_file(file, &indexed.chunks);
+            }
+        }
+        patterns_for_file(file, &[])
+    }
+
+    /// Return true if any search pattern for this file appears in haystack.
+    pub fn file_content_matches(&self, haystack: &str, rule: &FileRule, file: &FileContent) -> bool {
+        let patterns = self.search_patterns_for_file(rule, file);
+        if patterns.is_empty() {
+            return false;
+        }
+        let state = self.inner.read();
+        if let Some(ac) = &state.automaton {
+            for mat in ac.find_iter(haystack) {
+                let pid = mat.pattern().as_usize();
+                if let Some(&(ri, ci, _)) = state.needle_map.get(pid) {
+                    if let Some(indexed) = state.rules.get(ri) {
+                        if indexed.rule.path == rule.path {
+                            if indexed
+                                .contents
+                                .get(ci)
+                                .is_some_and(|c| c.source == file.source)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        !super::rg::find_matching_needles(haystack, &patterns).is_empty()
+    }
+
     fn spawn_watcher(&self, rules: &[FileRule]) {
         let paths: Vec<PathBuf> = rules
             .iter()
@@ -116,6 +156,45 @@ impl FileIndexManager {
     }
 }
 
+pub fn patterns_for_file(file: &FileContent, chunks: &[FileChunk]) -> Vec<String> {
+    if file.text.is_empty() {
+        return Vec::new();
+    }
+    if file.text.chars().count() <= CHUNK_SIZE * 2 {
+        return vec![file.text.clone()];
+    }
+    let file_chunks: Vec<String> = chunks
+        .iter()
+        .filter(|c| c.source == file.source)
+        .map(|c| c.text.clone())
+        .collect();
+    if !file_chunks.is_empty() {
+        return file_chunks;
+    }
+    utf8_safe_chunk_strings(&file.text)
+}
+
+pub fn utf8_safe_chunk_strings(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= CHUNK_SIZE * 2 {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let end = (start + CHUNK_SIZE).min(chars.len());
+        let chunk: String = chars[start..end].iter().collect();
+        if chunk.chars().count() >= 4 {
+            out.push(chunk);
+        }
+        if end >= chars.len() {
+            break;
+        }
+        start = end.saturating_sub(CHUNK_OVERLAP);
+    }
+    out
+}
+
 fn build_index(rules: &[FileRule]) -> Result<FileIndexState> {
     let mut indexed_rules = Vec::new();
     let mut patterns: Vec<String> = Vec::new();
@@ -129,21 +208,26 @@ fn build_index(rules: &[FileRule]) -> Result<FileIndexState> {
             if file.text.is_empty() {
                 continue;
             }
-            if file.text.len() <= CHUNK_SIZE * 2 {
-                patterns.push(file.text.clone());
-                needle_map.push((ri, ci, 0));
+            let file_patterns = if file.text.chars().count() <= CHUNK_SIZE * 2 {
+                vec![(file.text.clone(), 0usize)]
             } else {
-                for (idx, chunk) in file.text.as_bytes().chunks(CHUNK_SIZE).enumerate() {
-                    let text = String::from_utf8_lossy(chunk).into_owned();
-                    if text.len() >= 4 {
-                        patterns.push(text.clone());
-                        needle_map.push((ri, ci, idx));
+                utf8_safe_chunk_strings(&file.text)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, text)| {
                         chunks.push(FileChunk {
                             source: file.source.clone(),
                             chunk_index: idx,
-                            text,
+                            text: text.clone(),
                         });
-                    }
+                        (text, idx)
+                    })
+                    .collect()
+            };
+            for (text, chunk_idx) in file_patterns {
+                if text.chars().count() >= 4 {
+                    patterns.push(text);
+                    needle_map.push((ri, ci, chunk_idx));
                 }
             }
         }
@@ -167,4 +251,21 @@ fn build_index(rules: &[FileRule]) -> Result<FileIndexState> {
         needle_map,
         ready: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf8_chunks_do_not_split_multibyte_chars() {
+        let text = "前缀".repeat(5000);
+        let chunks = utf8_safe_chunk_strings(&text);
+        for chunk in &chunks {
+            assert!(chunk.is_char_boundary(chunk.len()));
+            assert!(std::str::from_utf8(chunk.as_bytes()).is_ok());
+        }
+        let rejoined: String = chunks.join("");
+        assert!(rejoined.contains('前'));
+    }
 }

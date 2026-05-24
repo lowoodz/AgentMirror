@@ -89,13 +89,6 @@ pub fn is_tool_related(extracted: &ExtractedText, body: &Value) -> bool {
                     )
                 });
             }
-            if let Some(choices) = body.get("choices").and_then(|c| c.as_array()) {
-                if let Some(msg) = choices.first().and_then(|c| c.get("message")) {
-                    if msg.get("tool_calls").is_some() {
-                        return true;
-                    }
-                }
-            }
             false
         }
         _ => false,
@@ -293,4 +286,32 @@ pub fn parse_json_body(bytes: &[u8]) -> Result<Value> {
 
 pub fn serialize_json_body(value: &Value) -> Result<Vec<u8>> {
     serde_json::to_vec(value).context("failed to serialize JSON body")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn text_blocks_not_marked_tool_related_when_tool_calls_present() {
+        let body = json!({
+            "choices": [{
+                "message": {
+                    "content": "plain answer",
+                    "tool_calls": [{"function": {"arguments": "{}"}}]
+                }
+            }],
+            "content": [{"type": "text", "text": "plain answer"}]
+        });
+        let extracted = extract_texts(&body).unwrap();
+        let text_blocks: Vec<_> = extracted
+            .iter()
+            .filter(|e| matches!(e.pointer, TextPointer::AnthropicContentBlock { .. }))
+            .collect();
+        assert!(!text_blocks.is_empty());
+        for block in text_blocks {
+            assert!(!is_tool_related(block, &body));
+        }
+    }
 }

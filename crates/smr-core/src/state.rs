@@ -5,7 +5,7 @@ use anyhow::Result;
 use parking_lot::RwLock;
 
 use crate::config::AppConfig;
-use crate::dlp::DlpEngine;
+use crate::dlp::{DlpEngine, SessionGuard};
 use crate::events::{EventKind, EventLog};
 use crate::ops::OperationSecurity;
 use crate::router::Router;
@@ -20,10 +20,14 @@ pub struct AppEngines {
 
 impl AppEngines {
     pub fn from_config(config: AppConfig) -> Result<Self> {
+        Self::from_config_with_sessions(config, SessionGuard::new())
+    }
+
+    pub fn from_config_with_sessions(config: AppConfig, sessions: SessionGuard) -> Result<Self> {
         let config_arc = Arc::new(config.clone());
         let ops_enabled = config.pipeline.ops_active();
         Ok(Self {
-            dlp: Arc::new(DlpEngine::new(&config)?),
+            dlp: Arc::new(DlpEngine::with_sessions(&config, sessions)?),
             ops: Arc::new(if ops_enabled {
                 OperationSecurity::new(
                     &config.operation_rules,
@@ -74,11 +78,15 @@ impl SharedApp {
         self.inner.read().config.clone()
     }
 
+    fn replace_engines(&self, config: AppConfig) -> Result<()> {
+        let sessions = self.inner.read().dlp.sessions().clone();
+        *self.inner.write() = AppEngines::from_config_with_sessions(config, sessions)?;
+        Ok(())
+    }
+
     pub fn reload(&self) -> Result<()> {
         let config = AppConfig::load(&self.config_path)?;
-        let dlp = self.inner.read().dlp.clone();
-        dlp.reload(&config)?;
-        *self.inner.write() = AppEngines::from_config(config)?;
+        self.replace_engines(config)?;
         self.events.push(
             EventKind::ConfigReload,
             format!("reloaded {}", self.config_path.display()),
@@ -94,9 +102,7 @@ impl SharedApp {
         }
         let yaml = serde_yaml::to_string(config)?;
         std::fs::write(&self.config_path, yaml)?;
-        let dlp = self.inner.read().dlp.clone();
-        dlp.reload(config)?;
-        *self.inner.write() = AppEngines::from_config(config.clone())?;
+        self.replace_engines(config.clone())?;
         self.events.push(EventKind::ConfigReload, "config saved", None);
         Ok(())
     }

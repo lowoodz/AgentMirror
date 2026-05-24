@@ -145,7 +145,7 @@ async fn dlp_and_route_work() {
         .unwrap();
 
     assert!(status.is_success());
-    assert!(serde_json::from_slice::<serde_json::Value>(&resp_body).is_ok());
+    assert!(serde_json::from_slice::<serde_json::Value>(&extract_body_bytes(resp_body)).is_ok());
 }
 
 #[tokio::test]
@@ -173,10 +173,19 @@ async fn operation_security_blocks_response() {
         .await
         .unwrap();
 
-    let resp_json = parse_json_body(&resp_body).unwrap();
+    let resp_json = parse_json_body(&extract_body_bytes(resp_body)).unwrap();
     let texts = extract_texts(&resp_json).unwrap();
     let combined: String = texts.iter().map(|t| t.text.as_str()).collect();
     assert!(combined.contains("SMR BLOCKED"));
+}
+
+fn extract_body_bytes(body: smr_core::request::ProxyBody) -> Bytes {
+    match body {
+        smr_core::request::ProxyBody::Buffered(b) => b,
+        smr_core::request::ProxyBody::SseStream(_) => {
+            panic!("expected buffered response in test")
+        }
+    }
 }
 
 #[test]

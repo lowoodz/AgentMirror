@@ -34,18 +34,58 @@ impl FileDlp {
         self.index.is_ready()
     }
 
-  pub fn check_path_triggers_in_tool_text(
+    pub fn check_path_triggers_in_tool_text(
         &self,
         session_id: &str,
         tool_text: &str,
         activate: impl Fn(&str, &FileRule, &[FileContent]),
     ) {
         for indexed in self.index.rules() {
-            if tool_text.contains(&indexed.normalized_path) {
+            if path_trigger_match(&indexed.normalized_path, tool_text) {
                 activate(session_id, &indexed.rule, &indexed.contents);
             }
         }
     }
+
+    pub fn scan_text(&self, text: &str, active: &[ActiveFileContent]) -> String {
+        let mut result = text.to_string();
+        for item in active {
+            for file in &item.contents {
+                if file.text.is_empty() {
+                    continue;
+                }
+                let patterns = self.index.search_patterns_for_file(&item.rule, file);
+                if patterns.is_empty() || !self.index.file_content_matches(&result, &item.rule, file) {
+                    continue;
+                }
+                result = match item.rule.match_mode {
+                    MatchMode::Full => result.replace(&file.text, &sanitize_whole(&file.text)),
+                    MatchMode::Fragment => {
+                        apply_fragment_matches(&result, &file.text, &item.rule)
+                    }
+                };
+            }
+        }
+        result
+    }
+}
+
+/// Path must appear as a path segment, not as a prefix of a longer path token.
+pub fn path_trigger_match(normalized_path: &str, tool_text: &str) -> bool {
+    if normalized_path.is_empty() {
+        return false;
+    }
+    tool_text.match_indices(normalized_path).any(|(pos, _)| {
+        let before_ok = pos == 0 || !is_path_token_char(tool_text.as_bytes()[pos - 1]);
+        let after_pos = pos + normalized_path.len();
+        let after_ok = after_pos >= tool_text.len()
+            || !is_path_token_char(tool_text.as_bytes()[after_pos]);
+        before_ok && after_ok
+    })
+}
+
+fn is_path_token_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
 pub fn load_rule_contents(rule: &FileRule) -> Result<Vec<FileContent>> {
@@ -100,27 +140,6 @@ fn matches_format(path: &Path, formats: &[String]) -> bool {
         .unwrap_or(false)
 }
 
-pub fn scan_text_for_file_content(text: &str, active: &[ActiveFileContent]) -> String {
-    let mut result = text.to_string();
-    for item in active {
-        for file in &item.contents {
-            if file.text.is_empty() {
-                continue;
-            }
-            let needles = vec![file.text.clone()];
-            if !super::rg::find_matching_needles(&result, &needles).is_empty() {
-                result = match item.rule.match_mode {
-                    MatchMode::Full => result.replace(&file.text, &sanitize_whole(&file.text)),
-                    MatchMode::Fragment => {
-                        apply_fragment_matches(&result, &file.text, &item.rule)
-                    }
-                };
-            }
-        }
-    }
-    result
-}
-
 fn apply_fragment_matches(text: &str, needle: &str, rule: &FileRule) -> String {
     let min_len = crate::dlp::fragment::effective_min_fragment_len(
         needle.chars().count(),
@@ -156,4 +175,15 @@ fn apply_fragment_matches(text: &str, needle: &str, rule: &FileRule) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_trigger_avoids_prefix_false_positive() {
+        assert!(!path_trigger_match("/secret", "/secrets-backup/file.txt"));
+        assert!(path_trigger_match("/secret", "read /secret/file"));
+    }
 }

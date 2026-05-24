@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use crate::config::{AppConfig, ModelEndpoint};
 use crate::request::ForwardRequest;
+use crate::sse_stream::{collect_sse_for_routing, SseCollectResult, SsePassthroughStream};
 
 type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
@@ -38,12 +39,35 @@ impl Default for ForwardOptions {
     }
 }
 
+pub enum RouteBody {
+    Buffered(Bytes),
+    SseStream(SsePassthroughStream),
+}
+
+impl std::fmt::Debug for RouteBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RouteBody::Buffered(b) => f.debug_tuple("Buffered").field(b).finish(),
+            RouteBody::SseStream(_) => f.debug_tuple("SseStream").field(&"<stream>").finish(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct RouteAttempt {
     pub endpoint: ModelEndpoint,
     pub status: StatusCode,
-    pub body: Bytes,
+    pub body: RouteBody,
     pub headers: HeaderMap,
+}
+
+impl RouteAttempt {
+    pub fn body_bytes(&self) -> Option<&Bytes> {
+        match &self.body {
+            RouteBody::Buffered(b) => Some(b),
+            RouteBody::SseStream(_) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -83,7 +107,7 @@ impl Router {
 
         for (idx, endpoint) in group.iter().enumerate() {
             chain.push(endpoint.model.clone());
-            match self.forward_once(endpoint, &req).await {
+            match self.forward_once(endpoint, &req, opts.wants_stream).await {
                 Ok(attempt) if should_fallback_status(attempt.status) => {
                     warn!(
                         model = %endpoint.model,
@@ -94,7 +118,9 @@ impl Router {
                     last_error = Some(attempt);
                 }
                 Ok(attempt)
-                    if is_malformed_success(&attempt.status, &attempt.headers, &attempt.body) =>
+                    if attempt.body_bytes().is_some_and(|body| {
+                        is_malformed_success(&attempt.status, &attempt.headers, body)
+                    }) =>
                 {
                     warn!(model = %endpoint.model, "fallback triggered (malformed response)");
                     last_error = Some(attempt);
@@ -102,7 +128,7 @@ impl Router {
                 Ok(attempt)
                     if opts.wants_stream
                         && is_sse(&attempt.headers)
-                        && !sse_has_first_token(&attempt.body) =>
+                        && matches!(attempt.body, RouteBody::Buffered(ref b) if !sse_has_first_token(b)) =>
                 {
                     warn!(model = %endpoint.model, "fallback triggered (stream: no first token)");
                     last_error = Some(attempt);
@@ -120,7 +146,7 @@ impl Router {
                     last_error = Some(RouteAttempt {
                         endpoint: endpoint.clone(),
                         status: StatusCode::BAD_GATEWAY,
-                        body: Bytes::from(err.to_string()),
+                        body: RouteBody::Buffered(Bytes::from(err.to_string())),
                         headers: HeaderMap::new(),
                     });
                 }
@@ -139,7 +165,7 @@ impl Router {
                 attempt: RouteAttempt {
                     endpoint: last.endpoint,
                     status: StatusCode::BAD_GATEWAY,
-                    body: Bytes::from(msg),
+                    body: RouteBody::Buffered(Bytes::from(msg)),
                     headers: HeaderMap::new(),
                 },
                 fallback_chain: chain,
@@ -154,6 +180,7 @@ impl Router {
         &self,
         endpoint: &ModelEndpoint,
         req: &ForwardRequest<'_>,
+        wants_stream: bool,
     ) -> Result<RouteAttempt> {
         let target_protocol = infer_endpoint_protocol(endpoint);
         let mut path = req.path.to_string();
@@ -204,17 +231,29 @@ impl Router {
 
         let status = response.status();
         let headers = response.headers().clone();
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .context("read upstream body")?
-            .to_bytes();
+        let incoming = response.into_body();
+
+        let route_body = if wants_stream && status.is_success() && is_sse(&headers) {
+            match collect_sse_for_routing(incoming).await? {
+                SseCollectResult::Passthrough { prefix, rest } => {
+                    RouteBody::SseStream(SsePassthroughStream::new(prefix, rest))
+                }
+                SseCollectResult::Buffered(bytes) => RouteBody::Buffered(bytes),
+                SseCollectResult::NoFirstToken(bytes) => RouteBody::Buffered(bytes),
+            }
+        } else {
+            let body = incoming
+                .collect()
+                .await
+                .context("read upstream body")?
+                .to_bytes();
+            RouteBody::Buffered(body)
+        };
 
         Ok(RouteAttempt {
             endpoint: endpoint.clone(),
             status,
-            body,
+            body: route_body,
             headers,
         })
     }
@@ -230,8 +269,12 @@ pub fn convert_response_body(
     }
     let json: Value = serde_json::from_slice(body).context("parse response json")?;
     let converted = match (from, to) {
-        (ApiProtocol::Anthropic, ApiProtocol::OpenAi) => smr_protocol::anthropic_response_to_openai(&json),
-        (ApiProtocol::OpenAi, ApiProtocol::Anthropic) => smr_protocol::openai_response_to_anthropic(&json),
+        (ApiProtocol::Anthropic, ApiProtocol::OpenAi) => {
+            smr_protocol::anthropic_response_to_openai(&json)
+        }
+        (ApiProtocol::OpenAi, ApiProtocol::Anthropic) => {
+            smr_protocol::openai_response_to_anthropic(&json)
+        }
         _ => json,
     };
     Ok(Bytes::from(serde_json::to_vec(&converted)?))
@@ -300,7 +343,11 @@ fn sse_chunk_has_content(v: &Value) -> bool {
     if v.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
         return true;
     }
-  if v.get("delta").and_then(|d| d.get("text")).and_then(|t| t.as_str()).is_some_and(|s| !s.is_empty()) {
+    if v.get("delta")
+        .and_then(|d| d.get("text"))
+        .and_then(|t| t.as_str())
+        .is_some_and(|s| !s.is_empty())
+    {
         return true;
     }
     false
