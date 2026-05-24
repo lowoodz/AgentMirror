@@ -13,6 +13,7 @@ use crate::audit::{protocol_label, RequestAudit};
 use crate::events::EventKind;
 use crate::request::{ForwardRequest, ProxyBody, ProxyRequest, ProxyResponse};
 use crate::router::{convert_response_body, ForwardOptions, RouteBody, RouteResult};
+use crate::sse_stream::SseTransformConfig;
 use crate::state::SharedApp;
 use crate::streaming::{is_sse_content_type, process_sse_response, request_wants_stream};
 
@@ -119,16 +120,39 @@ impl ProxyService {
             )
             .await?;
 
-        let endpoint_protocol = infer_endpoint_protocol(&attempt.endpoint);
+        let endpoint_protocol = attempt.endpoint.resolve_protocol();
         let resp_headers = attempt.headers;
+
+        let needs_stream_transform = snap.config.pipeline.dlp_active()
+            || snap.config.pipeline.ops_active()
+            || (client_protocol != endpoint_protocol);
 
         let proxy_body = match attempt.body {
             RouteBody::SseStream(stream) => {
-                if snap.config.pipeline.ops_active() {
-                    ProxyBody::wrap_sse_ops(
+                if needs_stream_transform {
+                    ProxyBody::wrap_sse_response(
                         stream,
-                        snap.ops.clone(),
-                        snap.config.pipeline.operation_security_mode,
+                        SseTransformConfig {
+                            session_id: session_id.to_string(),
+                            dlp: if snap.config.pipeline.dlp_active() {
+                                Some(snap.dlp.clone())
+                            } else {
+                                None
+                            },
+                            ops: if snap.config.pipeline.ops_active() {
+                                Some((
+                                    snap.ops.clone(),
+                                    snap.config.pipeline.operation_security_mode,
+                                ))
+                            } else {
+                                None
+                            },
+                            protocol: if client_protocol != endpoint_protocol {
+                                Some((endpoint_protocol, client_protocol))
+                            } else {
+                                None
+                            },
+                        },
                     )
                 } else {
                     ProxyBody::SseStream(Box::pin(stream))
@@ -268,14 +292,5 @@ impl ProxyService {
         events.push(EventKind::Info, audit.summary(), None);
 
         Ok((attempt.status, resp_headers, proxy_body))
-    }
-}
-
-fn infer_endpoint_protocol(endpoint: &crate::config::ModelEndpoint) -> ApiProtocol {
-    let url = endpoint.base_url.to_ascii_lowercase();
-    if url.contains("anthropic.com") {
-        ApiProtocol::Anthropic
-    } else {
-        ApiProtocol::OpenAi
     }
 }

@@ -10,6 +10,17 @@ export CARGO_TARGET_DIR="${ROOT}/target"
 echo "==> Building SecureModelRoute (release)"
 cargo build --release
 
+if [[ -f "$ROOT/gui/package.json" ]]; then
+  echo "==> Building desktop app (Tauri)"
+  if command -v npm >/dev/null 2>&1; then
+  (cd "$ROOT/gui" && npm ci --silent && npm run build --silent) || {
+    echo "Warning: Tauri build failed or skipped; CLI package will still be produced."
+  }
+  else
+    echo "Warning: npm not found; skipping desktop app build."
+  fi
+fi
+
 BIN="$ROOT/target/release/smr"
 OUT="$ROOT/dist"
 mkdir -p "$OUT"
@@ -36,5 +47,6 @@ fi
 
 echo "==> Package: $OUT/${PKG}.tar.gz"
 echo "==> Binary:  $OUT/smr"
+echo "==> Arch:    ${OS}-${ARCH}"
 
 ls -lh "$OUT/${PKG}.tar.gz" "$OUT/smr"

@@ -22,6 +22,7 @@ fallback_groups:
     - id: anthropic-fallback
       base_url: "https://api.anthropic.com/v1"
       model: "claude-sonnet-4-20250514"
+      protocol: anthropic
       api_key_env: ANTHROPIC_API_KEY
       timeout_secs: 120
   medium:

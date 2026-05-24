@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use smr_protocol::ApiProtocol;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AppConfig {
@@ -100,6 +101,9 @@ pub struct ModelEndpoint {
     pub api_key_env: Option<String>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    /// Optional explicit API protocol: `openai` or `anthropic`. When omitted, inferred from base_url.
+    #[serde(default)]
+    pub protocol: Option<String>,
 }
 
 fn default_timeout_secs() -> u64 {
@@ -117,6 +121,22 @@ impl ModelEndpoint {
             return std::env::var(env_name).ok();
         }
         None
+    }
+
+    pub fn resolve_protocol(&self) -> ApiProtocol {
+        if let Some(protocol) = &self.protocol {
+            match protocol.to_ascii_lowercase().as_str() {
+                "anthropic" => return ApiProtocol::Anthropic,
+                "openai" => return ApiProtocol::OpenAi,
+                _ => {}
+            }
+        }
+        let url = self.base_url.to_ascii_lowercase();
+        if url.contains("anthropic.com") {
+            ApiProtocol::Anthropic
+        } else {
+            ApiProtocol::OpenAi
+        }
     }
 }
 

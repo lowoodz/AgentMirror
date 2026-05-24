@@ -9,7 +9,7 @@ pub use body::{
     TextPointer,
 };
 pub use convert::{
-    anthropic_response_to_openai, anthropic_to_openai, openai_response_to_anthropic,
+    anthropic_response_to_openai, anthropic_to_openai, convert_sse_chunk, openai_response_to_anthropic,
     openai_to_anthropic, target_path,
 };
 pub use protocol::{detect_protocol, ApiProtocol};

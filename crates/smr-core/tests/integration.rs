@@ -31,6 +31,7 @@ fn test_config(upstream_base: &str) -> AppConfig {
             api_key: Some("test-key".into()),
             api_key_env: None,
             timeout_secs: 10,
+            protocol: None,
         }],
     );
 

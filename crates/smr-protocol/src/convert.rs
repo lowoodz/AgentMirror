@@ -2,6 +2,8 @@
 
 use serde_json::{json, Value};
 
+use crate::protocol::ApiProtocol;
+
 pub fn openai_to_anthropic(body: &Value) -> Value {
     let messages = body.get("messages").and_then(|m| m.as_array()).cloned().unwrap_or_default();
     let mut system_parts: Vec<String> = Vec::new();
@@ -226,9 +228,67 @@ pub fn openai_response_to_anthropic(body: &Value) -> Value {
     })
 }
 
+/// Convert a single SSE JSON event between provider streaming formats (text deltas).
+pub fn convert_sse_chunk(chunk: &Value, from: ApiProtocol, to: ApiProtocol) -> Value {
+    if from == to {
+        return chunk.clone();
+    }
+    match (from, to) {
+        (ApiProtocol::Anthropic, ApiProtocol::OpenAi) => anthropic_sse_chunk_to_openai(chunk),
+        (ApiProtocol::OpenAi, ApiProtocol::Anthropic) => openai_sse_chunk_to_anthropic(chunk),
+        _ => chunk.clone(),
+    }
+}
+
+fn anthropic_sse_chunk_to_openai(chunk: &Value) -> Value {
+    match chunk.get("type").and_then(|t| t.as_str()) {
+        Some("content_block_delta") => {
+            if let Some(text) = chunk
+                .get("delta")
+                .and_then(|d| d.get("text"))
+                .and_then(|t| t.as_str())
+            {
+                return json!({
+                    "choices": [{"index": 0, "delta": {"content": text}}]
+                });
+            }
+        }
+        Some("message_stop") => {
+            return json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]});
+        }
+        _ => {}
+    }
+    chunk.clone()
+}
+
+fn openai_sse_chunk_to_anthropic(chunk: &Value) -> Value {
+    if let Some(choice) = chunk
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|c| c.first())
+    {
+        if let Some(content) = choice
+            .get("delta")
+            .and_then(|d| d.get("content"))
+            .and_then(|c| c.as_str())
+        {
+            return json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": content}
+            });
+        }
+        if choice.get("finish_reason").and_then(|f| f.as_str()) == Some("stop") {
+            return json!({"type": "message_stop"});
+        }
+    }
+    chunk.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::ApiProtocol;
     use serde_json::json;
 
     #[test]
@@ -243,5 +303,23 @@ mod tests {
         let out = openai_to_anthropic(&body);
         assert_eq!(out["system"], "You are helpful");
         assert_eq!(out["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn converts_openai_sse_text_delta_to_anthropic() {
+        let chunk = json!({"choices":[{"delta":{"content":"Hi"}}]});
+        let out = convert_sse_chunk(&chunk, ApiProtocol::OpenAi, ApiProtocol::Anthropic);
+        assert_eq!(out["type"], "content_block_delta");
+        assert_eq!(out["delta"]["text"], "Hi");
+    }
+
+    #[test]
+    fn converts_anthropic_sse_text_delta_to_openai() {
+        let chunk = json!({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "Hi"}
+        });
+        let out = convert_sse_chunk(&chunk, ApiProtocol::Anthropic, ApiProtocol::OpenAi);
+        assert_eq!(out["choices"][0]["delta"]["content"], "Hi");
     }
 }

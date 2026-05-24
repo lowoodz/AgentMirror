@@ -10,7 +10,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
-use smr_protocol::ApiProtocol;
+use smr_protocol::{convert_body, ApiProtocol};
 use tracing::{info, warn};
 
 use crate::config::{AppConfig, ModelEndpoint};
@@ -182,25 +182,23 @@ impl Router {
         req: &ForwardRequest<'_>,
         wants_stream: bool,
     ) -> Result<RouteAttempt> {
-        let target_protocol = infer_endpoint_protocol(endpoint);
+        let target_protocol = endpoint.resolve_protocol();
         let mut path = req.path.to_string();
         let mut body = patch_model_in_body(req.body.clone(), &endpoint.model)?;
 
         if req.protocol != target_protocol && !body.is_empty() {
-            if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&body) {
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
                 path = smr_protocol::target_path(&path, target_protocol == ApiProtocol::Anthropic);
-                json = match (req.protocol, target_protocol) {
-                    (ApiProtocol::OpenAi, ApiProtocol::Anthropic) => {
-                        info!(model = %endpoint.model, "converting request OpenAI -> Anthropic");
-                        smr_protocol::openai_to_anthropic(&json)
-                    }
-                    (ApiProtocol::Anthropic, ApiProtocol::OpenAi) => {
-                        info!(model = %endpoint.model, "converting request Anthropic -> OpenAI");
-                        smr_protocol::anthropic_to_openai(&json)
-                    }
-                    _ => json,
-                };
-                body = Bytes::from(serde_json::to_vec(&json)?);
+                let converted = convert_body(&json, req.protocol, target_protocol);
+                body = Bytes::from(serde_json::to_vec(&converted)?);
+                if req.protocol != target_protocol {
+                    info!(
+                        model = %endpoint.model,
+                        from = ?req.protocol,
+                        to = ?target_protocol,
+                        "converting request via unified body"
+                    );
+                }
             }
         }
 
@@ -351,15 +349,6 @@ fn sse_chunk_has_content(v: &Value) -> bool {
         return true;
     }
     false
-}
-
-fn infer_endpoint_protocol(endpoint: &ModelEndpoint) -> ApiProtocol {
-    let url = endpoint.base_url.to_ascii_lowercase();
-    if url.contains("anthropic.com") {
-        ApiProtocol::Anthropic
-    } else {
-        ApiProtocol::OpenAi
-    }
 }
 
 fn patch_model_in_body(body: Bytes, model: &str) -> Result<Bytes> {

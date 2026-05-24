@@ -6,7 +6,7 @@ use bytes::Bytes;
 use smr_protocol::ApiProtocol;
 
 use crate::router::RouteBody;
-use crate::sse_stream::{SseOpsTransformStream, SsePassthroughStream};
+use crate::sse_stream::{SsePassthroughStream, SseResponseTransformStream, SseTransformConfig};
 
 pub struct ProxyRequest<'a> {
     pub session_id: &'a str,
@@ -38,18 +38,15 @@ impl ProxyBody {
     pub fn from_route(body: RouteBody) -> Self {
         match body {
             RouteBody::Buffered(b) => ProxyBody::Buffered(b),
-            RouteBody::SseStream(stream) => {
-                ProxyBody::SseStream(Box::pin(stream))
-            }
+            RouteBody::SseStream(stream) => ProxyBody::SseStream(Box::pin(stream)),
         }
     }
 
-    pub fn wrap_sse_ops(
+    pub fn wrap_sse_response(
         stream: SsePassthroughStream,
-        ops: std::sync::Arc<crate::ops::OperationSecurity>,
-        mode: crate::config::OperationSecurityMode,
+        config: SseTransformConfig,
     ) -> Self {
-        ProxyBody::SseStream(Box::pin(SseOpsTransformStream::new(stream, ops, mode)))
+        ProxyBody::SseStream(Box::pin(SseResponseTransformStream::new(stream, config)))
     }
 }
 
