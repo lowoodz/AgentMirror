@@ -1,56 +1,44 @@
-use std::process::{Command, Stdio};
-use std::io::Write;
+//! In-memory fixed-string search via ripgrep's grep core libraries (no `rg` CLI).
 
-use anyhow::{Context, Result};
+use grep_matcher::Matcher;
+use grep_regex::RegexMatcherBuilder;
 
+/// Return needles from `needles` that appear as substrings in `haystack`.
 pub fn find_matching_needles(haystack: &str, needles: &[String]) -> Vec<String> {
     if needles.is_empty() || haystack.is_empty() {
         return Vec::new();
     }
-    if let Ok(found) = rg_search(haystack, needles) {
-        return found;
-    }
-    needles
-        .iter()
-        .filter(|n| !n.is_empty() && haystack.contains(n.as_str()))
-        .cloned()
-        .collect()
-}
 
-fn rg_search(haystack: &str, needles: &[String]) -> Result<Vec<String>> {
-    if !rg_available() {
-        anyhow::bail!("rg not found");
-    }
+    let haystack_bytes = haystack.as_bytes();
     let mut found = Vec::new();
+
     for needle in needles {
         if needle.is_empty() {
             continue;
         }
-        let mut child = Command::new("rg")
-            .args(["--fixed-strings", "--no-line-number", "--no-filename", "--"])
-            .arg(needle)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("spawn rg")?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(haystack.as_bytes())?;
-        }
-        let output = child.wait_with_output()?;
-        if output.status.success() && !output.stdout.is_empty() {
+        if contains_fixed_string(haystack_bytes, needle) {
             found.push(needle.clone());
         }
     }
-    Ok(found)
+
+    found
 }
 
-fn rg_available() -> bool {
-    Command::new("rg")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+fn contains_fixed_string(haystack: &[u8], needle: &str) -> bool {
+    let Ok(matcher) = RegexMatcherBuilder::new()
+        .fixed_strings(true)
+        .build(needle)
+    else {
+        return haystack
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes());
+    };
+
+    matcher
+        .find(haystack)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 #[cfg(test)]
@@ -58,9 +46,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_substring_search() {
-        let needles = vec!["secret-token".into()];
+    fn finds_literal_needle_in_haystack() {
+        let needles = vec!["secret-token".to_string()];
         let hay = "user pasted secret-token here";
         assert_eq!(find_matching_needles(hay, &needles), needles);
+    }
+
+    #[test]
+    fn misses_absent_needle() {
+        let needles = vec!["missing".to_string()];
+        let hay = "nothing relevant";
+        assert!(find_matching_needles(hay, &needles).is_empty());
+    }
+
+    #[test]
+    fn handles_multiline_haystack() {
+        let needles = vec!["line-two".to_string()];
+        let hay = "line-one\nline-two\nline-three";
+        assert_eq!(find_matching_needles(hay, &needles), needles);
+    }
+
+    #[test]
+    fn handles_unicode() {
+        let needles = vec!["机密项目".to_string()];
+        let hay = "这是机密项目的内容";
+        assert_eq!(find_matching_needles(hay, &needles), needles);
+    }
+
+    #[test]
+    fn returns_multiple_matching_needles() {
+        let needles = vec![
+            "alpha".to_string(),
+            "beta".to_string(),
+            "gamma".to_string(),
+        ];
+        let hay = "has alpha and gamma";
+        assert_eq!(
+            find_matching_needles(hay, &needles),
+            vec!["alpha".to_string(), "gamma".to_string()]
+        );
     }
 }
