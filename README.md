@@ -73,6 +73,8 @@ brew install mingw-w64       # macOS（推荐）
 # 或指定主机：SMR_WINDOWS_HOST=192.168.x.x ./scripts/windows_vm_test.sh
 ```
 
+**在 macOS 上创建 Windows x86_64 测试 VM（UTM）：** 见 [scripts/vm/WINDOWS_VM.md](scripts/vm/WINDOWS_VM.md)，或运行 `./scripts/vm/setup-windows-vm.sh all`。
+
 **验证（Windows）：**
 
 ```powershell

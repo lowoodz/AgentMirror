@@ -8,12 +8,19 @@ mkdir -p icons
 SRC="${ROOT}/icons/icon.svg"
 OUT="${ROOT}/icons/icon.png"
 
+SIZE="${SMR_ICON_SIZE:-2048}"
 if command -v rsvg-convert >/dev/null 2>&1; then
-  rsvg-convert -w 1024 -h 1024 "$SRC" -o "$OUT"
-  echo "Generated $OUT from icon.svg (rsvg-convert)"
+  rsvg-convert -w "$SIZE" -h "$SIZE" "$SRC" -o "$OUT"
+  echo "Generated $OUT from icon.svg (rsvg-convert, ${SIZE}px)"
 elif command -v magick >/dev/null 2>&1; then
-  magick -background none "$SRC" -resize 1024x1024 "$OUT"
+  magick -background none -density 384 "$SRC" -resize "${SIZE}x${SIZE}" "$OUT"
   echo "Generated $OUT from icon.svg (ImageMagick)"
+elif [[ "$(uname -s)" == "Darwin" ]] && command -v qlmanage >/dev/null 2>&1; then
+  TMPDIR=$(mktemp -d)
+  qlmanage -t -s "$SIZE" -o "$TMPDIR" "$SRC" >/dev/null 2>&1
+  mv "$TMPDIR/$(basename "$SRC").png" "$OUT"
+  rmdir "$TMPDIR"
+  echo "Generated $OUT from icon.svg (qlmanage, ${SIZE}px)"
 elif [[ -f "$OUT" ]]; then
   echo "Using existing $OUT (install rsvg-convert or ImageMagick to rebuild from SVG)"
 else
@@ -22,7 +29,7 @@ else
 fi
 
 # Tauri requires RGBA PNG before icon set generation
-python3 << 'PY'
+python3 << PY
 import struct, zlib
 from pathlib import Path
 
@@ -60,8 +67,8 @@ def ensure_rgba(path: Path) -> None:
     png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(bytes(out), 9)) + chunk(b'IEND', b'')
     path.write_bytes(png)
 
-ensure_rgba(Path("'"${OUT}"'"))
-print("Ensured RGBA:", "'"${OUT}"'")
+ensure_rgba(Path("$OUT"))
+print("Ensured RGBA:", "$OUT")
 PY
 
 GUI_ROOT="$(cd "$ROOT/.." && pwd)"
@@ -70,9 +77,12 @@ if [[ -f "$GUI_ROOT/package.json" ]] && command -v npm >/dev/null 2>&1; then
   echo "Regenerated Tauri icon set via 'tauri icon'"
 fi
 
-# Web favicon for embedded admin UI
+# Web favicon for embedded admin UI (64px source for sharper browser downscale)
 FAV="${ROOT}/../../crates/smr-core/assets/favicon.png"
 if command -v sips >/dev/null 2>&1; then
-  sips -z 32 32 "$OUT" --out "$FAV" >/dev/null
-  echo "Updated $FAV"
+  sips -z 64 64 "$OUT" --out "$FAV" >/dev/null
+  echo "Updated $FAV (64x64)"
+elif command -v magick >/dev/null 2>&1; then
+  magick "$OUT" -resize 64x64 "$FAV"
+  echo "Updated $FAV (64x64)"
 fi

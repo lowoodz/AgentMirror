@@ -11,7 +11,7 @@
     body { margin:0; font-family:-apple-system,BlinkMacSystemFont,sans-serif; background:var(--bg); color:var(--text); }
     header { padding:14px 24px; border-bottom:1px solid #2a2f3d; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
     .brand { display:flex; align-items:center; gap:10px; }
-    .brand-logo { width:28px; height:28px; flex-shrink:0; border-radius:7px; }
+    .brand-logo { width:32px; height:32px; flex-shrink:0; border-radius:8px; }
   .switch { display:flex; align-items:center; gap:8px; margin-left:auto; }
     .switch input { width:42px; height:22px; }
     main { display:flex; min-height:calc(100vh - 56px); }
@@ -51,22 +51,28 @@
   <div class="brand">
   <svg class="brand-logo" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
+      <linearGradient id="lg-bg" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#4a6280"/><stop offset="1" stop-color="#2f4563"/>
+      </linearGradient>
       <linearGradient id="lg-shield" x1="256" y1="120" x2="256" y2="340" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#6b9df5"/><stop offset="1" stop-color="#4a7fd4"/>
+        <stop stop-color="#b8d4ff"/><stop offset="1" stop-color="#6ea8ff"/>
+      </linearGradient>
+      <linearGradient id="lg-route" x1="256" y1="256" x2="420" y2="160" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#8ec0ff"/><stop offset="1" stop-color="#5ee4a8"/>
       </linearGradient>
     </defs>
-    <rect width="512" height="512" rx="112" fill="#1a1d27"/>
-    <path d="M256 248 C256 248 340 200 392 168" stroke="#5b8def" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.8"/>
-    <path d="M256 264 C256 264 380 280 420 320" stroke="#5b8def" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.65"/>
-    <path d="M256 264 C256 264 132 280 92 320" stroke="#5b8def" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.65"/>
-    <path d="M256 248 C256 248 172 200 120 168" stroke="#3ecf8e" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.8"/>
-    <circle cx="392" cy="168" r="22" fill="#3ecf8e"/>
-    <circle cx="420" cy="320" r="18" fill="#5b8def"/>
-    <circle cx="92" cy="320" r="18" fill="#5b8def"/>
-    <circle cx="120" cy="168" r="22" fill="#3ecf8e"/>
+    <rect width="512" height="512" rx="112" fill="url(#lg-bg)"/>
+    <path d="M256 248 C256 248 340 200 392 168" stroke="url(#lg-route)" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path d="M256 264 C256 264 380 280 420 320" stroke="#8ec0ff" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path d="M256 264 C256 264 132 280 92 320" stroke="#8ec0ff" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path d="M256 248 C256 248 172 200 120 168" stroke="url(#lg-route)" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <circle cx="392" cy="168" r="24" fill="#5ee4a8"/>
+    <circle cx="420" cy="320" r="20" fill="#8ec0ff"/>
+    <circle cx="92" cy="320" r="20" fill="#8ec0ff"/>
+    <circle cx="120" cy="168" r="24" fill="#5ee4a8"/>
     <path d="M256 128 L336 168 V248 C336 296 256 336 256 336 C256 336 176 296 176 248 V168 Z" fill="url(#lg-shield)"/>
-    <circle cx="256" cy="248" r="28" fill="#0f1117" stroke="#5b8def" stroke-width="6"/>
-    <path d="M244 248 L252 256 L272 232" stroke="#3ecf8e" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="256" cy="248" r="30" fill="#243752" stroke="#b8d4ff" stroke-width="7"/>
+    <path d="M244 248 L252 256 L272 232" stroke="#5ee4a8" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <h1 style="margin:0;font-size:18px">SecureModelRoute</h1>
   </div>
