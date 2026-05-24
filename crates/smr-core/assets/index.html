@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SecureModelRoute</title>
+  <style>
+    :root { --bg:#0f1117; --card:#1a1d27; --text:#e6e8ef; --muted:#8b90a0; --accent:#5b8def; --ok:#3ecf8e; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:16px 24px; border-bottom:1px solid #2a2f3d; display:flex; align-items:center; gap:16px; }
+    header h1 { font-size:18px; margin:0; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); }
+    main { padding:24px; max-width:1100px; margin:0 auto; }
+    .tabs { display:flex; gap:8px; margin-bottom:16px; }
+    .tab { padding:8px 14px; border-radius:8px; background:var(--card); cursor:pointer; border:1px solid #2a2f3d; }
+    .tab.active { border-color:var(--accent); color:var(--accent); }
+    .panel { display:none; }
+    .panel.active { display:block; }
+    .card { background:var(--card); border:1px solid #2a2f3d; border-radius:12px; padding:16px; margin-bottom:16px; }
+    label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+    textarea { width:100%; padding:8px 10px; border-radius:8px; border:1px solid #343948; background:#12151d; color:var(--text); margin-bottom:10px; min-height:360px; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+    button { background:var(--accent); color:white; border:none; border-radius:8px; padding:8px 14px; cursor:pointer; margin-right:8px; }
+    button.secondary { background:#343948; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .hint { color:var(--muted); font-size:13px; line-height:1.5; }
+    .url { font-family:monospace; background:#12151d; padding:8px 10px; border-radius:8px; border:1px solid #343948; word-break:break-all; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th, td { text-align:left; padding:8px; border-bottom:1px solid #2a2f3d; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; background:#243049; color:#9ec1ff; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="dot"></div>
+    <h1>SecureModelRoute</h1>
+    <span class="hint" id="statusText">加载中...</span>
+  </header>
+  <main>
+    <div class="tabs">
+      <div class="tab active" data-tab="overview">概览</div>
+      <div class="tab" data-tab="config">配置</div>
+      <div class="tab" data-tab="logs">日志</div>
+    </div>
+    <section class="panel active" id="overview">
+      <div class="card">
+        <h3>代理地址</h3>
+        <p class="hint">将 LLM 客户端 base_url 指向下方地址。</p>
+        <div class="url" id="proxyUrl">-</div>
+        <div style="margin-top:12px"><button onclick="copyUrl()">复制地址</button></div>
+      </div>
+      <div class="card row">
+        <div><label>默认 Fallback 组</label><div id="defaultGroup">-</div></div>
+        <div><label>操作安全模式</label><div id="opMode">-</div></div>
+        <div><label>DLP</label><div id="dlpStatus">-</div></div>
+        <div><label>配置文件</label><div id="configPath" class="hint">-</div></div>
+      </div>
+    </section>
+    <section class="panel" id="config">
+      <div class="card">
+        <p class="hint">编辑 JSON 配置后保存，立即热加载生效。</p>
+        <textarea id="configEditor"></textarea>
+        <div>
+          <button onclick="saveConfig()">保存并应用</button>
+          <button class="secondary" onclick="reloadConfig()">从磁盘重新加载</button>
+        </div>
+      </div>
+    </section>
+    <section class="panel" id="logs">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">事件日志</h3>
+          <button class="secondary" onclick="loadEvents()">刷新</button>
+        </div>
+        <table><thead><tr><th>时间</th><th>类型</th><th>消息</th></tr></thead><tbody id="logBody"></tbody></table>
+      </div>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+      document.querySelectorAll('.tab,.panel').forEach(el => el.classList.remove('active'));
+      t.classList.add('active');
+      document.getElementById(t.dataset.tab).classList.add('active');
+    });
+    async function loadStatus() {
+      const s = await (await fetch('/api/status')).json();
+      document.getElementById('statusText').textContent = '运行中 · ' + s.listen;
+      document.getElementById('proxyUrl').textContent = s.proxy_url;
+      document.getElementById('defaultGroup').textContent = s.default_group;
+      document.getElementById('opMode').textContent = s.operation_mode;
+      document.getElementById('dlpStatus').textContent = s.dlp_enabled ? '已启用' : '已关闭';
+      document.getElementById('configPath').textContent = s.config_path;
+    }
+    async function loadConfig() {
+      const c = await (await fetch('/api/config')).json();
+      document.getElementById('configEditor').value = JSON.stringify(c, null, 2);
+    }
+    async function saveConfig() {
+      try {
+        const cfg = JSON.parse(document.getElementById('configEditor').value);
+        const r = await fetch('/api/config', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
+        if (!r.ok) throw new Error(await r.text());
+        alert('配置已保存并生效'); loadStatus();
+      } catch (e) { alert('保存失败: ' + e.message); }
+    }
+    async function reloadConfig() {
+      await fetch('/api/reload', { method:'PUT' });
+      await loadConfig(); await loadStatus();
+      alert('已从磁盘重新加载');
+    }
+    function copyUrl() {
+      navigator.clipboard.writeText(document.getElementById('proxyUrl').textContent);
+      alert('已复制');
+    }
+    async function loadEvents() {
+      const data = await (await fetch('/api/events?limit=80')).json();
+      const body = document.getElementById('logBody');
+      body.innerHTML = '';
+      for (const e of data.events) {
+        const tr = document.createElement('tr');
+        const kind = typeof e.kind === 'string' ? e.kind : Object.keys(e.kind||{})[0] || 'info';
+        tr.innerHTML = '<td>' + e.timestamp.replace('T',' ').slice(0,19) + '</td><td><span class="tag">' + kind + '</span></td><td>' + e.message + '</td>';
+        body.appendChild(tr);
+      }
+    }
+    loadStatus(); loadConfig(); loadEvents();
+    setInterval(loadEvents, 5000);
+  </script>
+</body>
+</html>
