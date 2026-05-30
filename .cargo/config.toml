@@ -1,4 +1,2 @@
-# Cross-compilation linker for Windows GNU target (macOS/Linux hosts).
-# package-windows.sh prefers mingw-w64; without it, uses cargo-zigbuild + Zig.
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"

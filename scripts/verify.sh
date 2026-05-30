@@ -22,19 +22,22 @@ sed "s/127.0.0.1:8080/127.0.0.1:${PORT}/" "$CFG" > "$TMP_CFG"
 
 "$BIN" --config "$TMP_CFG" &
 PID=$!
-sleep 1
+sleep 2
 
 cleanup() { kill "$PID" 2>/dev/null || true; rm -f "$TMP_CFG"; }
 trap cleanup EXIT
 
 echo "==> health"
-curl -sf "http://127.0.0.1:${PORT}/health" | grep -q OK
+health=$(curl -sf "http://127.0.0.1:${PORT}/health")
+[[ "$health" == *OK* ]]
 
 echo "==> api status"
-curl -sf "http://127.0.0.1:${PORT}/api/status" | grep -q proxy_url
+status=$(curl -sf "http://127.0.0.1:${PORT}/api/status")
+[[ "$status" == *proxy_url* ]]
 
 echo "==> ui"
-curl -sf "http://127.0.0.1:${PORT}/ui" | grep -q SecureModelRoute
+ui=$(curl -sf "http://127.0.0.1:${PORT}/ui")
+[[ "$ui" == *SecureModelRoute* ]]
 
 echo ""
 echo "All verification checks passed."

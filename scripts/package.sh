@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  exec bash "${ROOT}/scripts/package-macos.sh" "$@"
+fi
+
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${ROOT}/target"
 
@@ -34,9 +38,10 @@ cp "$BIN" "$OUT/smr"
 cp config/smr.example.yaml "$OUT/smr.example.yaml"
 cp README.md "$OUT/README.md"
 cp scripts/install.sh "$OUT/install.sh"
-chmod +x "$OUT/install.sh"
+cp scripts/verify.sh "$OUT/verify.sh"
+chmod +x "$OUT/install.sh" "$OUT/verify.sh"
 
-tar -czf "$OUT/${PKG}.tar.gz" -C "$OUT" smr smr.example.yaml README.md install.sh
+tar -czf "$OUT/${PKG}.tar.gz" -C "$OUT" smr smr.example.yaml README.md install.sh verify.sh
 
 APP_BUNDLE="$ROOT/target/release/bundle/macos/SecureModelRoute.app"
 if [[ -d "$APP_BUNDLE" ]]; then

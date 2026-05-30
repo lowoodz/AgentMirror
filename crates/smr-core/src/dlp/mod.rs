@@ -48,6 +48,11 @@ impl DlpEngine {
         self.file.is_index_ready()
     }
 
+    /// Register file-path session triggers from tool calls (call before ops may rewrite arguments).
+    pub fn register_path_triggers(&self, session_id: &str, body: &serde_json::Value) {
+        self.apply_path_triggers(session_id, body);
+    }
+
     pub fn process_request(
         &self,
         session_id: &str,

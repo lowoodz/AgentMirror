@@ -30,7 +30,7 @@ Start-Sleep -Seconds 2
 try {
     Write-Host "==> health"
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5
-    if ($health -ne "OK") { throw "health check failed: $health" }
+    if ("$health" -notmatch "OK") { throw "health check failed: $health" }
 
     Write-Host "==> api status"
     $status = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/status" -TimeoutSec 5

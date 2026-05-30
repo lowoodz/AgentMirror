@@ -1,6 +1,7 @@
 # Install SecureModelRoute on Windows x86_64.
 param(
-    [switch]$Service
+    [switch]$Service,
+    [switch]$Gui
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +15,8 @@ $ConfDir = Join-Path $Prefix "etc\securemodelroute"
 $SmrExe = Join-Path $BinDir "smr.exe"
 $Config = Join-Path $ConfDir "smr.yaml"
 $Launcher = Join-Path $BinDir "securemodelroute.cmd"
+$LogOut = Join-Path $ConfDir "smr.log"
+$LogErr = Join-Path $ConfDir "smr.err.log"
 
 $SourceExe = Join-Path $Root "smr.exe"
 if (-not (Test-Path $SourceExe)) {
@@ -41,16 +44,62 @@ if (-not (Test-Path $Config)) {
     "start `"`" `"$SmrExe`" --config `"$Config`" --open %*"
 ) | Set-Content -Path $Launcher -Encoding ASCII
 
-if ($Service) {
-    $TaskName = "SecureModelRoute"
-    $Action = New-ScheduledTaskAction -Execute $SmrExe -Argument "--config `"$Config`""
-    $Trigger = New-ScheduledTaskTrigger -AtLogOn
-    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Force | Out-Null
-    Write-Host "    Scheduled task installed: $TaskName (runs at logon)"
+if ($Gui) {
+    Write-Host "==> Building desktop app (Tauri, requires npm)"
+    $RepoRoot = if (Test-Path (Join-Path $Root "Cargo.toml")) { $Root } else { Split-Path -Parent $Root }
+    $GuiDir = Join-Path $RepoRoot "gui"
+    if ((Get-Command npm -ErrorAction SilentlyContinue) -and (Test-Path $GuiDir)) {
+        Push-Location $GuiDir
+        $env:CARGO_TARGET_DIR = Join-Path $RepoRoot "target"
+        npm ci --silent 2>$null; if ($LASTEXITCODE -ne 0) { npm install --silent }
+        npm run build --silent
+        Pop-Location
+        $AppExe = Get-ChildItem (Join-Path $RepoRoot "target\release") -Filter "SecureModelRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $AppExe) {
+            $AppExe = Get-ChildItem (Join-Path $RepoRoot "target\release") -Filter "securemodelroute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if ($AppExe) {
+            $DestDir = Join-Path $env:LOCALAPPDATA "Programs\SecureModelRoute"
+            New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+            Copy-Item $AppExe.FullName (Join-Path $DestDir "SecureModelRoute.exe") -Force
+            $StartMenu = [Environment]::GetFolderPath("Programs")
+            $Shortcut = Join-Path $StartMenu "SecureModelRoute.lnk"
+            $Wsh = New-Object -ComObject WScript.Shell
+            $Link = $Wsh.CreateShortcut($Shortcut)
+            $Link.TargetPath = Join-Path $DestDir "SecureModelRoute.exe"
+            $Link.WorkingDirectory = $DestDir
+            $Link.Description = "SecureModelRoute desktop"
+            $Link.Save()
+            Write-Host "    Desktop app: $DestDir\SecureModelRoute.exe"
+            Write-Host "    Start menu:  $Shortcut"
+        } else {
+            Write-Warning "Tauri build finished but SecureModelRoute.exe not found under target\release"
+        }
+    } else {
+        Write-Warning "npm or gui/ missing; skipped desktop app build"
+    }
 }
 
-# Add bin dir to user PATH if missing
+if ($Service) {
+    $TaskName = "SecureModelRoute"
+    $ServiceCmd = Join-Path $BinDir "smr-service.cmd"
+    @(
+        "@echo off",
+        "`"$SmrExe`" --config `"$Config`" 1>> `"$LogOut`" 2>> `"$LogErr`""
+    ) | Set-Content -Path $ServiceCmd -Encoding ASCII
+    $Action = New-ScheduledTaskAction -Execute $ServiceCmd -WorkingDirectory $ConfDir
+    $Trigger = New-ScheduledTaskTrigger -AtLogOn
+    $Settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -RestartCount 999 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit ([TimeSpan]::Zero)
+    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Force | Out-Null
+    Write-Host "    Scheduled task: $TaskName (logon, auto-restart)"
+    Write-Host "    Logs: $LogOut"
+}
+
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$BinDir*") {
     [Environment]::SetEnvironmentVariable("Path", "$userPath;$BinDir", "User")
@@ -69,3 +118,4 @@ Write-Host "Run:  securemodelroute"
 Write-Host "Or:   smr.exe --config `"$Config`" --open"
 Write-Host ""
 Write-Host "Background service: .\install.ps1 -Service"
+Write-Host "Desktop app:        .\install.ps1 -Gui"

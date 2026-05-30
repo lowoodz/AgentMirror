@@ -58,6 +58,10 @@ impl ProxyService {
             client_protocol = detect_protocol(path, headers, &json);
             let extracted = extract_texts(&json)?;
 
+            if snap.config.pipeline.dlp_active() {
+                snap.dlp.register_path_triggers(session_id, &json);
+            }
+
             if snap.config.pipeline.ops_active() {
                 let tool_only = filter_tool_related(&json, &extracted);
                 let (ops_replacements, blocks, observes) =

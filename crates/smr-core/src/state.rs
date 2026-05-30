@@ -81,7 +81,9 @@ impl SharedApp {
 
     fn replace_engines(&self, config: AppConfig) -> Result<()> {
         let sessions = self.inner.read().dlp.sessions().clone();
-        *self.inner.write() = AppEngines::from_config_with_sessions(config, sessions)?;
+        let engines = AppEngines::from_config_with_sessions(config.clone(), sessions)?;
+        engines.dlp.reload(&config)?;
+        *self.inner.write() = engines;
         Ok(())
     }
 
