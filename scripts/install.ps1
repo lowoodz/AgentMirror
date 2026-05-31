@@ -126,15 +126,20 @@ function Install-SmrDesktop {
             Write-InstallLog "    $($shortcut.Label): $LinkPath"
         }
         Write-InstallLog "    App: $AppPath"
+        return $AppPath
     }
+
+    return $null
 }
 
+$DesktopAppPath = $null
 if ($Gui -or $All) {
-    Write-InstallLog "==> Installing desktop app (Tauri)"
-    Install-SmrDesktop -SearchRoot $Root
+    Write-InstallLog "==> Installing desktop app (tray GUI, embeds server)"
+    $DesktopAppPath = Install-SmrDesktop -SearchRoot $Root
 }
 
-if ($Service -or $All) {
+# Headless service only when GUI is not installed (GUI keeps running in the system tray).
+if ($Service -and -not $Gui) {
     $TaskName = "SecureModelRoute"
     $ServiceCmd = Join-Path $BinDir "smr-service.cmd"
     @(
@@ -161,6 +166,23 @@ if ($Service -or $All) {
     }
 }
 
+if ($DesktopAppPath -and $All) {
+    $StartupFolder = [Environment]::GetFolderPath("Startup")
+    $StartupLink = Join-Path $StartupFolder "SecureModelRoute.lnk"
+    $Wsh = New-Object -ComObject WScript.Shell
+    $Link = $Wsh.CreateShortcut($StartupLink)
+    $Link.TargetPath = $DesktopAppPath
+    $Link.Arguments = "--background"
+    $Link.WorkingDirectory = Split-Path -Parent $DesktopAppPath
+    $Link.Description = "SecureModelRoute (background tray)"
+    $Link.Save()
+    Write-InstallLog "    Logon startup: $StartupLink (--background, tray only)"
+    if (-not $Quiet) {
+        Start-Process -FilePath $DesktopAppPath -ArgumentList "--background"
+        Write-InstallLog "    Tray app started"
+    }
+}
+
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$BinDir*") {
     [Environment]::SetEnvironmentVariable("Path", "$userPath;$BinDir", "User")
@@ -175,11 +197,13 @@ Write-InstallLog "  launcher: $Launcher"
 Write-InstallLog "  config:   $Config"
 Write-InstallLog "  web UI:   http://127.0.0.1:8080/ui"
 if ($All) {
-    Write-InstallLog "  mode:     full (CLI + service + desktop GUI)"
+    Write-InstallLog "  mode:     full (CLI + tray GUI; close window to hide in tray)"
+} elseif ($Gui) {
+    Write-InstallLog "  mode:     tray GUI (close window to hide in tray)"
 } else {
     Write-InstallLog ""
-    Write-InstallLog "Optional: .\install.ps1 -All   # CLI + service + GUI"
-    Write-InstallLog "          .\install.ps1 -Service"
+    Write-InstallLog "Optional: .\install.ps1 -All   # CLI + tray GUI"
+    Write-InstallLog "          .\install.ps1 -Service  # headless background only"
     Write-InstallLog "          .\install.ps1 -Gui"
 }
 Write-InstallLog ""

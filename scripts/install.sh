@@ -11,29 +11,53 @@ PREFIX="${SMR_INSTALL_PREFIX:-${HOME}/.local}"
 BINDIR="${PREFIX}/bin"
 CONFDIR="${PREFIX}/etc/securemodelroute"
 INSTALL_SERVICE=false
+INSTALL_GUI=false
+INSTALL_ALL=false
 
 for arg in "$@"; do
   case "$arg" in
     --service) INSTALL_SERVICE=true ;;
+    --gui) INSTALL_GUI=true ;;
+    --all) INSTALL_ALL=true ;;
   esac
 done
+
+if [[ "$INSTALL_ALL" == true ]]; then
+  INSTALL_GUI=true
+fi
 
 echo "==> Building release..."
 cargo build --release
 
-echo "==> Optional: build desktop GUI (requires npm)"
-if command -v npm >/dev/null && [[ "${SMR_BUILD_GUI:-0}" == "1" ]]; then
-  (cd gui/src-tauri && bash create_icon.sh)
-  (cd gui && npm install --silent && CARGO_TARGET_DIR="${ROOT}/target" npm run build)
+DESKTOP_APP=""
+if [[ "$INSTALL_GUI" == true || "$INSTALL_ALL" == true ]]; then
+  if command -v npm >/dev/null && [[ -f "$ROOT/gui/package.json" ]]; then
+    echo "==> Building desktop app (tray GUI, embeds server)"
+    (cd "$ROOT/gui/src-tauri" && bash create_icon.sh)
+    (cd "$ROOT/gui" && npm install --silent && CARGO_TARGET_DIR="${ROOT}/target" npm run build)
+    APP_BUNDLE="${ROOT}/target/release/bundle/macos/SecureModelRoute.app"
+    if [[ -d "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+      DEST="${HOME}/Applications/SecureModelRoute.app"
+      rm -rf "$DEST"
+      cp -R "$APP_BUNDLE" "$DEST"
+      DESKTOP_APP="$DEST"
+      echo "    Installed desktop app: ${DEST}"
+    else
+      echo "Warning: SecureModelRoute.app not found after build" >&2
+    fi
+  else
+    echo "Warning: npm or gui/ missing; extract *-darwin-*-app.tar.gz manually" >&2
+  fi
+elif command -v npm >/dev/null && [[ "${SMR_BUILD_GUI:-0}" == "1" ]]; then
+  echo "==> Optional: build desktop GUI (SMR_BUILD_GUI=1)"
+  (cd "$ROOT/gui/src-tauri" && bash create_icon.sh)
+  (cd "$ROOT/gui" && npm install --silent && CARGO_TARGET_DIR="${ROOT}/target" npm run build)
   APP_BUNDLE="${ROOT}/target/release/bundle/macos/SecureModelRoute.app"
-  if [[ -d "$APP_BUNDLE" ]]; then
-  echo "    GUI bundle: ${APP_BUNDLE}"
-  if [[ "$(uname -s)" == "Darwin" ]]; then
+  if [[ -d "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
     DEST="${HOME}/Applications/SecureModelRoute.app"
     rm -rf "$DEST"
     cp -R "$APP_BUNDLE" "$DEST"
     echo "    Installed desktop app: ${DEST}"
-  fi
   fi
 fi
 
@@ -53,7 +77,8 @@ exec "${BINDIR}/smr" --config "${CONFDIR}/smr.yaml" --open "\$@"
 EOF
 chmod +x "${LAUNCHER}"
 
-if [[ "$INSTALL_SERVICE" == true && "$(uname -s)" == "Darwin" ]]; then
+# Headless LaunchAgent only when GUI is not installed (GUI keeps server in menu bar tray).
+if [[ "$INSTALL_SERVICE" == true && "$INSTALL_GUI" != true && "$(uname -s)" == "Darwin" ]]; then
   PLIST="${HOME}/Library/LaunchAgents/com.securemodelroute.smr.plist"
   mkdir -p "${HOME}/Library/LaunchAgents"
   cat > "${PLIST}" << EOF
@@ -80,17 +105,51 @@ EOF
   echo "    LaunchAgent installed: ${PLIST}"
 fi
 
+if [[ -n "$DESKTOP_APP" && "$INSTALL_ALL" == true && "$(uname -s)" == "Darwin" ]]; then
+  PLIST="${HOME}/Library/LaunchAgents/com.securemodelroute.gui.plist"
+  mkdir -p "${HOME}/Library/LaunchAgents"
+  cat > "${PLIST}" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.securemodelroute.gui</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${DESKTOP_APP}/Contents/MacOS/smr-gui</string>
+    <string>--background</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><false/>
+</dict>
+</plist>
+EOF
+  launchctl unload "${PLIST}" 2>/dev/null || true
+  launchctl load "${PLIST}"
+  echo "    Logon startup: ${PLIST} (--background, menu bar tray only)"
+  open -a "$DESKTOP_APP" --args --background
+  echo "    Tray app started"
+fi
+
 echo ""
 echo "Installed:"
 echo "  binary:   ${BINDIR}/smr"
 echo "  launcher: ${LAUNCHER}"
 echo "  config:   ${CONFDIR}/smr.yaml"
-echo "  GUI:      http://127.0.0.1:8080/ui"
+echo "  web UI:   http://127.0.0.1:8080/ui"
+if [[ "$INSTALL_ALL" == true ]]; then
+  echo "  mode:     full (CLI + tray GUI; close window to hide in menu bar)"
+elif [[ "$INSTALL_GUI" == true ]]; then
+  echo "  mode:     tray GUI (close window to hide in menu bar)"
+fi
 echo ""
 echo "Run:  securemodelroute"
 echo "Or:   smr --config ${CONFDIR}/smr.yaml --open"
 echo ""
-echo "Background service (macOS): ./scripts/install.sh --service"
+echo "Options:"
+echo "  ./scripts/install.sh --all      # CLI + tray GUI + login autostart"
+echo "  ./scripts/install.sh --gui      # tray GUI only (with CLI build)"
+echo "  ./scripts/install.sh --service  # headless LaunchAgent only"
 if [[ ":${PATH}:" != *":${BINDIR}:"* ]]; then
   echo "Add to PATH:  export PATH=\"${BINDIR}:\$PATH\""
 fi
