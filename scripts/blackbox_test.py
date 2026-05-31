@@ -29,8 +29,11 @@ from test_common import (  # noqa: E402
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+ATTACH = __import__("os").environ.get("SMR_ATTACH", "").lower() in ("1", "true", "yes")
 PORT = int(__import__("os").environ.get("SMR_BLACKBOX_PORT", "18090"))
-BASE = f"http://127.0.0.1:{PORT}"
+BASE = __import__("os").environ.get(
+    "SMR_BASE", "http://127.0.0.1:8080" if ATTACH else f"http://127.0.0.1:{PORT}"
+)
 FILE_SECRET = "UNIQUE-BLACKBOX-FILE-SECRET-XYZ-998877"
 CONTENT_SECRET = "LIVE-TEST-SECRET-KEY"
 PRESET_SK = "sk-abcdefghijklmnopqrstuvwxyz1234567890AB"
@@ -61,6 +64,159 @@ class Report:
     @property
     def failed(self) -> int:
         return sum(1 for s in self.scenarios if not s.ok)
+
+
+def build_config_dict(
+    glm_key: str,
+    ds_key: str,
+    listen: str,
+    secrets_dir: Path,
+    mock_ports: dict[str, int],
+) -> dict:
+    secrets = str(secrets_dir).replace("\\", "/")
+    p = mock_ports
+    endpoint = lambda port: f"http://127.0.0.1:{port}"
+    return {
+        "server": {"listen": listen, "default_fallback_group": "high"},
+        "pipeline": {
+            "security_enabled": True,
+            "dlp_enabled": True,
+            "operation_security_mode": "enforce",
+            "builtin_credential_presets": True,
+        },
+        "logging": {"level": "info", "redact_content": True},
+        "fallback_groups": {
+            "high": [
+                {
+                    "id": "glm-primary",
+                    "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+                    "model": "glm-4-flash",
+                    "api_key": glm_key,
+                    "protocol": "openai",
+                    "timeout_secs": 90,
+                },
+                {
+                    "id": "deepseek-fallback",
+                    "base_url": "https://api.deepseek.com",
+                    "model": "deepseek-chat",
+                    "api_key": ds_key,
+                    "protocol": "openai",
+                    "timeout_secs": 90,
+                },
+            ],
+            "fallback-test": [
+                {
+                    "id": "dead-endpoint",
+                    "base_url": "http://127.0.0.1:9",
+                    "model": "fake-model",
+                    "api_key": "dead",
+                    "timeout_secs": 3,
+                },
+                {
+                    "id": "deepseek-rescue",
+                    "base_url": "https://api.deepseek.com",
+                    "model": "deepseek-chat",
+                    "api_key": ds_key,
+                    "protocol": "openai",
+                    "timeout_secs": 90,
+                },
+            ],
+            "mock-ops": [
+                {
+                    "id": "mock-dangerous",
+                    "base_url": endpoint(p["ops_json"]),
+                    "model": "mock-model",
+                    "api_key": "mock",
+                    "protocol": "openai",
+                    "timeout_secs": 10,
+                }
+            ],
+            "mock-sse-ops": [
+                {
+                    "id": "mock-sse-dangerous",
+                    "base_url": endpoint(p["ops_sse"]),
+                    "model": "mock-model",
+                    "api_key": "mock",
+                    "protocol": "openai",
+                    "timeout_secs": 10,
+                }
+            ],
+            "stream-fallback-test": [
+                {
+                    "id": "mock-empty-sse",
+                    "base_url": endpoint(p["empty_sse"]),
+                    "model": "mock-model",
+                    "api_key": "mock",
+                    "protocol": "openai",
+                    "timeout_secs": 5,
+                },
+                {
+                    "id": "deepseek-rescue",
+                    "base_url": "https://api.deepseek.com",
+                    "model": "deepseek-chat",
+                    "api_key": ds_key,
+                    "protocol": "openai",
+                    "timeout_secs": 90,
+                },
+            ],
+            "mock-anthropic": [
+                {
+                    "id": "mock-anthropic-json",
+                    "base_url": endpoint(p["anthropic_json"]),
+                    "model": "mock-model",
+                    "api_key": "mock",
+                    "protocol": "anthropic",
+                    "timeout_secs": 10,
+                }
+            ],
+            "glm-anthropic": [
+                {
+                    "id": "glm-anthropic",
+                    "base_url": "https://open.bigmodel.cn/api/anthropic",
+                    "model": "glm-4-flash",
+                    "api_key": glm_key,
+                    "protocol": "anthropic",
+                    "timeout_secs": 90,
+                }
+            ],
+        },
+        "content_rules": [
+            {
+                "id": "live-test-secret",
+                "enabled": True,
+                "match_mode": "full",
+                "category": "secret",
+                "value": CONTENT_SECRET,
+            }
+        ],
+        "operation_rules": [
+            {
+                "id": "block-rm-rf",
+                "enabled": True,
+                "operation": "command_exec",
+                "object": {"pattern": "rm -rf", "is_regex": False},
+            }
+        ],
+        "path_protection_rules": [
+            {
+                "id": "blackbox-protected-dir",
+                "enabled": True,
+                "path": secrets,
+                "level": "deny_access",
+            }
+        ],
+        "file_rules": [
+            {
+                "id": "blackbox-secrets",
+                "enabled": True,
+                "path": secrets,
+                "recursive": False,
+                "trigger_window": 2,
+                "match_mode": "full",
+                "formats": ["txt"],
+            }
+        ],
+    }
 
 
 def build_config(
@@ -293,6 +449,39 @@ def start_mock(port: int, handler: type) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+def apply_test_config(glm: str, ds: str, secrets_dir: Path, mock_ports: dict[str, int]) -> bool:
+    listen = BASE.split("://", 1)[-1]
+    cfg = build_config_dict(glm, ds, listen, secrets_dir, mock_ports)
+    if put_config(BASE, cfg) != 200:
+        return False
+    time.sleep(1.5)
+    return wait_ready(BASE)
+
+
+def run_all_scenarios(report: Report, secrets_dir: Path) -> None:
+    scenario_openai_sdk_client(report)
+    scenario_openai_python_sdk(report)
+    scenario_cursor_streaming(report)
+    scenario_multi_turn_agent(report)
+    scenario_dlp_user_message(report)
+    scenario_preset_credentials(report)
+    scenario_file_session_guard(report, secrets_dir)
+    scenario_session_window_exhaustion(report, secrets_dir)
+    scenario_request_ops_block(report)
+    scenario_path_protection(report, secrets_dir)
+    scenario_response_ops_block(report)
+    scenario_streaming_ops_block(report)
+    scenario_stream_fallback_no_token(report)
+    scenario_cross_protocol_response(report)
+    scenario_silent_fallback(report)
+    scenario_anthropic_client(report)
+    scenario_ops_observe_mode(report)
+    scenario_security_disabled(report)
+    scenario_config_reload_preserves_session(report, secrets_dir)
+    scenario_admin_dashboard(report)
+    scenario_concurrent_users(report)
 
 
 def chat_openai(
@@ -855,6 +1044,22 @@ def main() -> int:
             start_mock(mock_ports["anthropic_json"], MockAnthropicJsonHandler),
         ]
 
+        if ATTACH:
+            print(f"==> Installed-app black-box @ {BASE} (attach mode)")
+            if not wait_ready(BASE, timeout=60.0):
+                report.add("系统", "startup", False, "installed server not ready")
+                print_report(report)
+                return 1
+            report.add("系统", "startup", True, "installed server ready")
+            if not apply_test_config(glm, ds, secrets_dir, mock_ports):
+                report.add("系统", "apply_test_config", False, "PUT /api/config failed")
+                print_report(report)
+                return 1
+            report.add("系统", "apply_test_config", True, "test config loaded")
+            run_all_scenarios(report, secrets_dir)
+            print_report(report)
+            return 0 if report.failed == 0 else 1
+
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", delete=False, encoding="utf-8"
         ) as f:
@@ -870,27 +1075,7 @@ def main() -> int:
             return 1
         report.add("系统", "startup", True, "ready")
 
-        scenario_openai_sdk_client(report)
-        scenario_openai_python_sdk(report)
-        scenario_cursor_streaming(report)
-        scenario_multi_turn_agent(report)
-        scenario_dlp_user_message(report)
-        scenario_preset_credentials(report)
-        scenario_file_session_guard(report, secrets_dir)
-        scenario_session_window_exhaustion(report, secrets_dir)
-        scenario_request_ops_block(report)
-        scenario_path_protection(report, secrets_dir)
-        scenario_response_ops_block(report)
-        scenario_streaming_ops_block(report)
-        scenario_stream_fallback_no_token(report)
-        scenario_cross_protocol_response(report)
-        scenario_silent_fallback(report)
-        scenario_anthropic_client(report)
-        scenario_ops_observe_mode(report)
-        scenario_security_disabled(report)
-        scenario_config_reload_preserves_session(report, secrets_dir)
-        scenario_admin_dashboard(report)
-        scenario_concurrent_users(report)
+        run_all_scenarios(report, secrets_dir)
 
         print_report(report)
         return 0 if report.failed == 0 else 1

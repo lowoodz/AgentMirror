@@ -99,7 +99,7 @@ while (( SECONDS < DEADLINE )); do
   if grep -q "DESKTOP_BUILD_OK" "${DIST}/windows-desktop-build.log" 2>/dev/null; then
     break
   fi
-  if [[ "$BUILD_STARTED" -eq 1 ]] && grep -E '\] ERROR:' "${DIST}/windows-desktop-build.log" 2>/dev/null; then
+  if [[ "$BUILD_STARTED" -eq 1 ]] && grep -E '\] ERROR:' "${DIST}/windows-desktop-build.log" 2>/dev/null | grep -q .; then
     cat "${DIST}/windows-desktop-build.log" >&2
     exit 1
   fi

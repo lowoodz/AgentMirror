@@ -53,8 +53,12 @@ if [[ -f "$ROOT/gui/package.json" ]] && command -v npm >/dev/null 2>&1; then
   }
   APP_BUNDLE="$ROOT/target/release/bundle/macos/SecureModelRoute.app"
   if [[ -d "$APP_BUNDLE" ]]; then
-    host_arch="$(uname -m)"
-    [[ "$host_arch" == "arm64" ]] || host_arch="x86_64"
+    app_bin="$APP_BUNDLE/Contents/MacOS/smr-gui"
+    if file "$app_bin" 2>/dev/null | grep -q 'arm64'; then
+      host_arch="arm64"
+    else
+      host_arch="x86_64"
+    fi
     PKG_APP="smr-${VERSION}-darwin-${host_arch}-app"
     rm -f "${OUT}/${PKG_APP}.tar.gz"
     tar -czf "${OUT}/${PKG_APP}.tar.gz" -C "$(dirname "$APP_BUNDLE")" SecureModelRoute.app
