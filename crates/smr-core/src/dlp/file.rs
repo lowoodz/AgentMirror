@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 
 use crate::config::FileRule;
@@ -27,11 +30,16 @@ impl FileDlp {
         &self,
         session_id: &str,
         tool_text: &str,
-        activate: impl Fn(&str, &FileRule),
+        activate: impl Fn(&str, &FileRule, &[String]),
     ) {
         let rules = self.index.rules();
         for rule in filter_most_specific_rules(&rules, tool_text) {
-            activate(session_id, &rule);
+            let candidates = extract_triggered_files(tool_text, &rule);
+            let resolved = self.index.resolve_triggered_files(&rule.id, &candidates);
+            if resolved.is_empty() {
+                continue;
+            }
+            activate(session_id, &rule, &resolved);
         }
     }
 
@@ -54,8 +62,82 @@ pub fn path_trigger_match(normalized_path: &str, tool_text: &str) -> bool {
     })
 }
 
+/// Extract concrete file paths from tool text that fall under `rule.path`.
+pub fn extract_triggered_files(tool_text: &str, rule: &FileRule) -> Vec<String> {
+    let rule_base = normalize_path_str(&rule.path.to_string_lossy());
+    if rule.path.is_file() {
+        if path_trigger_match(&rule_base, tool_text) {
+            return vec![rule_base];
+        }
+        return Vec::new();
+    }
+
+    let mut out = HashSet::new();
+    for candidate in extract_absolute_path_candidates(tool_text) {
+        if !path_under_rule(&candidate, &rule_base) {
+            continue;
+        }
+        if !matches_format(Path::new(&candidate), &rule.formats) {
+            continue;
+        }
+        out.insert(normalize_existing_path(&candidate));
+    }
+    out.into_iter().collect()
+}
+
+fn extract_absolute_path_candidates(tool_text: &str) -> Vec<String> {
+    let bytes = tool_text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'/' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && is_path_char(bytes[i]) {
+                i += 1;
+            }
+            let slice = &tool_text[start..i];
+            if slice.len() > 2 && slice.contains('.') {
+                out.push(slice.to_string());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn path_under_rule(path: &str, rule_base: &str) -> bool {
+    path == rule_base || path.starts_with(&format!("{rule_base}/"))
+}
+
+fn normalize_path_str(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+fn normalize_existing_path(path: &str) -> String {
+    let p = PathBuf::from(path);
+    if p.is_file() {
+        if let Ok(canon) = std::fs::canonicalize(&p) {
+            return canon.to_string_lossy().replace('\\', "/");
+        }
+    }
+    normalize_path_str(path)
+}
+
+fn is_path_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"/._-".contains(&b)
+}
+
 fn is_path_token_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+}
+
+fn matches_format(path: &Path, formats: &[String]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| formats.iter().any(|f| f.eq_ignore_ascii_case(ext)))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -69,6 +151,44 @@ mod tests {
     fn path_trigger_avoids_prefix_false_positive() {
         assert!(!path_trigger_match("/secret", "/secrets-backup/file.txt"));
         assert!(path_trigger_match("/secret", "read /secret/file"));
+    }
+
+    #[test]
+    fn extracts_specific_file_under_rule_dir() {
+        let rule = FileRule {
+            id: "docs".into(),
+            path: PathBuf::from("/Users/testuser/Documents"),
+            enabled: true,
+            recursive: true,
+            trigger_window: 3,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["txt".into(), "py".into()],
+            index: FileIndexOptions::default(),
+        };
+        let tool = r#"read_file("/Users/testuser/Documents/AI/Tutor-Code/ml_test.py")"#;
+        let files = extract_triggered_files(tool, &rule);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("/AI/Tutor-Code/ml_test.py"));
+    }
+
+    #[test]
+    fn ignores_directory_only_mention() {
+        let rule = FileRule {
+            id: "docs".into(),
+            path: PathBuf::from("/Users/testuser/Documents"),
+            enabled: true,
+            recursive: true,
+            trigger_window: 3,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["txt".into()],
+            index: FileIndexOptions::default(),
+        };
+        let tool = r#"{"path": "/Users/testuser/Documents"}"#;
+        assert!(extract_triggered_files(tool, &rule).is_empty());
     }
 
     #[test]

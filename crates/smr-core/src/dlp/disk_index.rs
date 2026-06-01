@@ -78,6 +78,7 @@ struct RuleSnapshot {
     bloom: BloomFilter,
     db_path: PathBuf,
     literals: Arc<Vec<String>>,
+    indexed_paths: Arc<HashSet<String>>,
 }
 
 struct IndexState {
@@ -174,12 +175,39 @@ impl FileIndexManager {
         }
         let mut result = text.to_string();
         for item in active {
+            if item.triggered_files.is_empty() {
+                continue;
+            }
             let Some(snapshot) = guard.snapshots.get(&item.rule.id) else {
                 continue;
             };
-            result = scan_haystack(&result, &item.rule, snapshot);
+            let allowed: HashSet<String> = item.triggered_files.iter().cloned().collect();
+            result = scan_haystack(&result, &item.rule, snapshot, &allowed);
         }
         result
+    }
+
+    /// Keep only tool-mentioned paths that exist in this rule's index.
+    pub fn resolve_triggered_files(&self, rule_id: &str, candidates: &[String]) -> Vec<String> {
+        let guard = self.inner.read();
+        let Some(snapshot) = guard.snapshots.get(rule_id) else {
+            return Vec::new();
+        };
+        let mut out = HashSet::new();
+        for candidate in candidates {
+            let norm = normalize_index_path(&PathBuf::from(candidate));
+            if snapshot.indexed_paths.contains(&norm) {
+                out.insert(norm);
+                continue;
+            }
+            for indexed in snapshot.indexed_paths.iter() {
+                if indexed == candidate || indexed.ends_with(&format!("/{}", candidate.trim_start_matches('/')))
+                {
+                    out.insert(indexed.clone());
+                }
+            }
+        }
+        out.into_iter().collect()
     }
 
     fn spawn_watcher(&self, rules: &[FileRule]) {
@@ -297,6 +325,12 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
 
     let file_paths = collect_files(rule)?;
     let file_count = file_paths.len();
+    let indexed_paths: Arc<HashSet<String>> = Arc::new(
+        file_paths
+            .iter()
+            .map(|p| normalize_index_path(p))
+            .collect(),
+    );
     let (unchanged, to_index, new_manifest) =
         classify_file_changes(&file_paths, prev.as_ref().map(|p| &p.files))?;
     let skipped = unchanged.len();
@@ -305,7 +339,7 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
     if let Some(prev_gen) = &prev {
         let unchanged_paths: Vec<String> = unchanged
             .iter()
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .map(|p| normalize_index_path(p))
             .collect();
         let copied = copy_signatures_from_db(&db_path, &prev_gen.db_path, &unchanged_paths)?;
         tracing::debug!(
@@ -378,6 +412,7 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
         bloom,
         db_path,
         literals: Arc::new(literals),
+        indexed_paths,
     })
 }
 
@@ -638,7 +673,7 @@ fn matches_format(path: &Path, formats: &[String]) -> bool {
 fn index_one_file(path: &Path, rule: &FileRule, tx: &SyncSender<Vec<SigRow>>) -> Result<()> {
     let meta = fs::metadata(path)?;
     let size = meta.len();
-    let path_str = path.to_string_lossy().replace('\\', "/");
+    let path_str = normalize_index_path(path);
 
     if size <= rule.index.max_full_file_bytes && rule.match_mode == MatchMode::Full {
         let data = read_file_bytes(path, size)?;
@@ -804,7 +839,24 @@ fn signature_lengths(min_len: usize, chunk_len: usize) -> Vec<usize> {
     lens
 }
 
-fn scan_haystack(haystack: &str, rule: &FileRule, snapshot: &RuleSnapshot) -> String {
+fn normalize_index_path(path: &Path) -> String {
+    if path.is_file() {
+        if let Ok(canon) = fs::canonicalize(path) {
+            return canon.to_string_lossy().replace('\\', "/");
+        }
+    }
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn scan_haystack(
+    haystack: &str,
+    rule: &FileRule,
+    snapshot: &RuleSnapshot,
+    allowed_paths: &HashSet<String>,
+) -> String {
+    if allowed_paths.is_empty() {
+        return haystack.to_string();
+    }
     if haystack.is_empty() {
         return haystack.to_string();
     }
@@ -846,10 +898,17 @@ fn scan_haystack(haystack: &str, rule: &FileRule, snapshot: &RuleSnapshot) -> St
             snapshot.literals.as_ref(),
             &snapshot.bloom,
             &conn,
+            allowed_paths,
         ));
     }
 
-    byte_ranges.extend(parallel_bloom_scan(bytes, rule, snapshot, &lens));
+    byte_ranges.extend(parallel_bloom_scan(
+        bytes,
+        rule,
+        snapshot,
+        &lens,
+        allowed_paths,
+    ));
 
     if byte_ranges.is_empty() {
         return haystack.to_string();
@@ -865,6 +924,7 @@ fn rg_prefilter_ranges(
     literals: &[String],
     bloom: &BloomFilter,
     conn: &Connection,
+    allowed_paths: &HashSet<String>,
 ) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     for lit in literals {
@@ -879,7 +939,7 @@ fn rg_prefilter_ranges(
             }
             let candidate = &bytes[pos..end];
             let h = xxh64(candidate, 0);
-            if bloom.may_contain(h) && verify_candidate(conn, h, candidate) {
+            if bloom.may_contain(h) && verify_candidate(conn, h, candidate, allowed_paths) {
                 ranges.push((pos, end));
             }
         }
@@ -892,6 +952,7 @@ fn parallel_bloom_scan(
     rule: &FileRule,
     snapshot: &RuleSnapshot,
     lens: &[usize],
+    allowed_paths: &HashSet<String>,
 ) -> Vec<(usize, usize)> {
     let chunk_size = rule.index.chunk_size;
     let overlap = rule.index.chunk_overlap;
@@ -900,13 +961,21 @@ fn parallel_bloom_scan(
     let starts: Vec<usize> = (0..bytes.len()).step_by(step).collect();
 
     if bytes.len() <= chunk_size || workers == 1 || starts.len() <= 1 {
-        return scan_region_bloom(bytes, 0, lens, &snapshot.bloom, &snapshot.db_path);
+        return scan_region_bloom(
+            bytes,
+            0,
+            lens,
+            &snapshot.bloom,
+            &snapshot.db_path,
+            allowed_paths,
+        );
     }
 
     let bytes = Arc::new(bytes.to_vec());
     let db_path = snapshot.db_path.clone();
     let bloom = snapshot.bloom.clone();
     let lens = Arc::new(lens.to_vec());
+    let allowed = Arc::new(allowed_paths.clone());
     let (tx, rx) = mpsc::channel::<Vec<(usize, usize)>>();
 
     for worker_id in 0..workers {
@@ -916,6 +985,7 @@ fn parallel_bloom_scan(
         let bloom = bloom.clone();
         let lens = lens.clone();
         let starts = starts.clone();
+        let allowed = allowed.clone();
         thread::spawn(move || {
             let Ok(conn) = Connection::open_with_flags(
                 &db_path,
@@ -935,6 +1005,7 @@ fn parallel_bloom_scan(
                     &lens,
                     &bloom,
                     &conn,
+                    allowed.as_ref(),
                 ));
                 idx += workers;
             }
@@ -956,12 +1027,20 @@ fn scan_region_bloom(
     lens: &[usize],
     bloom: &BloomFilter,
     db_path: &Path,
+    allowed_paths: &HashSet<String>,
 ) -> Vec<(usize, usize)> {
     let Ok(conn) = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
         return Vec::new();
     };
-    scan_region_bloom_slice(bytes, base_offset, lens, bloom, &conn)
+    scan_region_bloom_slice(
+        bytes,
+        base_offset,
+        lens,
+        bloom,
+        &conn,
+        allowed_paths,
+    )
 }
 
 fn scan_region_bloom_slice(
@@ -970,6 +1049,7 @@ fn scan_region_bloom_slice(
     lens: &[usize],
     bloom: &BloomFilter,
     conn: &Connection,
+    allowed_paths: &HashSet<String>,
 ) -> Vec<(usize, usize)> {
     let mut byte_ranges = Vec::new();
     let mut pos = 0usize;
@@ -983,7 +1063,7 @@ fn scan_region_bloom_slice(
             if !bloom.may_contain(h) {
                 continue;
             }
-            if verify_candidate(conn, h, candidate) {
+            if verify_candidate(conn, h, candidate, allowed_paths) {
                 byte_ranges.push((base_offset + pos, base_offset + pos + len));
             }
         }
@@ -1039,7 +1119,12 @@ fn read_literal_string(path: &str, offset: u64, len: u32) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-fn verify_candidate(conn: &Connection, hash: u64, candidate: &[u8]) -> bool {
+fn verify_candidate(
+    conn: &Connection,
+    hash: u64,
+    candidate: &[u8],
+    allowed_paths: &HashSet<String>,
+) -> bool {
     let mut stmt = match conn.prepare(
         "SELECT path, byte_offset, byte_len FROM signatures WHERE sig_hash = ?1 LIMIT 16",
     ) {
@@ -1052,6 +1137,9 @@ fn verify_candidate(conn: &Connection, hash: u64, candidate: &[u8]) -> bool {
     };
     while let Ok(Some(row)) = rows.next() {
         let path: String = row.get(0).unwrap_or_default();
+        if !allowed_paths.contains(&path) {
+            continue;
+        }
         let offset: i64 = row.get(1).unwrap_or(0);
         let len: i32 = row.get(2).unwrap_or(0);
         if len <= 0 {
@@ -1200,7 +1288,8 @@ mod tests {
         let index_root = tmp.path().join("idx");
         let snapshot = build_rule_index(&index_root, &rule).unwrap();
         let hay = "user pasted TOP-SECRET-PHRASE-XYZZY here";
-        let out = scan_haystack(hay, &rule, &snapshot);
+        let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
+        let out = scan_haystack(hay, &rule, &snapshot, &allowed);
         assert!(!out.contains("TOP-SECRET-PHRASE-XYZZY"));
         assert_eq!(out.chars().count(), hay.chars().count());
     }
@@ -1260,7 +1349,8 @@ mod tests {
         assert_eq!(manifest.reindexed, 1);
 
         let hay = "leak ALPHA-SECRET-ONE-MODIFIED end";
-        let out = scan_haystack(hay, &rule, &snap3);
+        let allowed: HashSet<String> = snap3.indexed_paths.iter().cloned().collect();
+        let out = scan_haystack(hay, &rule, &snap3, &allowed);
         assert!(!out.contains("ALPHA-SECRET-ONE-MODIFIED"));
     }
 
@@ -1296,8 +1386,50 @@ mod tests {
 
         let padding = "x".repeat(20_000);
         let hay = format!("{padding} WIDE-CORPUS-LEAK-TOKEN-99 {padding}");
-        let out = scan_haystack(&hay, &rule, &snapshot);
+        let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed);
         assert!(!out.contains("WIDE-CORPUS-LEAK-TOKEN-99"));
         assert_eq!(out.chars().count(), hay.chars().count());
+    }
+
+    #[test]
+    fn scoped_scan_only_triggered_file_in_directory() {
+        let tmp = TempDir::new().unwrap();
+        let triggered = tmp.path().join("triggered.txt");
+        let other = tmp.path().join("other.txt");
+        fs::write(&triggered, "TRIGGERED-ONLY-SECRET-ABC").unwrap();
+        fs::write(&other, "OTHER-FILE-SECRET-XYZ").unwrap();
+
+        let rule = FileRule {
+            id: "dir".into(),
+            path: tmp.path().to_path_buf(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 3,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(8),
+            min_fragment_ratio: None,
+            formats: vec!["txt".into()],
+            index: FileIndexOptions {
+                bloom_megabytes: 1,
+                build_workers: 1,
+                scan_workers: 1,
+                scan_rg_prefilter: false,
+                ..Default::default()
+            },
+        };
+
+        let index_root = tmp.path().join("idx");
+        let snapshot = build_rule_index(&index_root, &rule).unwrap();
+        let triggered_path = normalize_index_path(&triggered);
+        let allowed: HashSet<String> = HashSet::from([triggered_path]);
+
+        let hay_triggered = "leak TRIGGERED-ONLY-SECRET-ABC here";
+        let out1 = scan_haystack(hay_triggered, &rule, &snapshot, &allowed);
+        assert!(!out1.contains("TRIGGERED-ONLY-SECRET-ABC"));
+
+        let hay_other = "leak OTHER-FILE-SECRET-XYZ here";
+        let out2 = scan_haystack(hay_other, &rule, &snapshot, &allowed);
+        assert!(out2.contains("OTHER-FILE-SECRET-XYZ"));
     }
 }

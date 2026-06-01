@@ -8,6 +8,8 @@ use crate::dlp::file::FileDlp;
 #[derive(Clone)]
 pub struct ActiveFileContent {
     pub rule: FileRule,
+    /// Normalized paths of files mentioned in tool calls (scan scope).
+    pub triggered_files: Vec<String>,
 }
 
 struct SessionState {
@@ -43,7 +45,16 @@ impl SessionGuard {
         }
     }
 
-    pub fn activate(&self, session_id: &str, rule: &FileRule, window: u32) {
+    pub fn activate(
+        &self,
+        session_id: &str,
+        rule: &FileRule,
+        triggered_files: &[String],
+        window: u32,
+    ) {
+        if triggered_files.is_empty() {
+            return;
+        }
         let entry = self.sessions.entry(session_id.to_string()).or_insert_with(|| {
             Mutex::new(SessionState {
                 active: Vec::new(),
@@ -52,13 +63,20 @@ impl SessionGuard {
         });
         let mut state = entry.lock().unwrap();
 
-        let already = state
+        if let Some(existing) = state
             .active
-            .iter()
-            .any(|a| a.rule.id == rule.id && a.rule.path == rule.path);
-        if !already {
+            .iter_mut()
+            .find(|a| a.rule.id == rule.id && a.rule.path == rule.path)
+        {
+            for path in triggered_files {
+                if !existing.triggered_files.iter().any(|p| p == path) {
+                    existing.triggered_files.push(path.clone());
+                }
+            }
+        } else {
             state.active.push(ActiveFileContent {
                 rule: rule.clone(),
+                triggered_files: triggered_files.to_vec(),
             });
         }
         state.remaining_calls = state.remaining_calls.max(window);

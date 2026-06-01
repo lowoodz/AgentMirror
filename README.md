@@ -58,7 +58,7 @@
 **运行时流程：**
 
 1. 后台线程为每条启用的 `file_rules` 建索引；`/api/status` 的 `file_index_ready` 为 true 后生效。
-2. tool_call / tool_result 文本命中受保护路径 → SessionGuard 激活（**不**再克隆整库文本；**仅最具体路径**匹配，父路径规则不重复触发）。
+2. tool_call / tool_result 文本命中受保护路径 **且提到具体文件** → SessionGuard 激活（**仅扫描 tool 中点名的文件**，不扫同目录其它文件；多条规则时仍取最具体路径规则）。
 3. 后续 N 次请求（`trigger_window`）对 JSON 提取字段做 haystack 扫描：Bloom → SQLite 查候选 → 读源文件字节校验 → 脱敏。
 
 **YAML 可调参数（`file_rules[].index`）：**

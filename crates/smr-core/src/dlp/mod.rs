@@ -116,8 +116,8 @@ impl DlpEngine {
             return;
         }
         self.file
-            .check_path_triggers_in_tool_text(session_id, &tool_blob, |sid, rule| {
-                self.sessions.activate(sid, rule, rule.trigger_window);
+            .check_path_triggers_in_tool_text(session_id, &tool_blob, |sid, rule, files| {
+                self.sessions.activate(sid, rule, files, rule.trigger_window);
             });
     }
 
