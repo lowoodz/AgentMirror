@@ -90,16 +90,35 @@ fn extract_absolute_path_candidates(tool_text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
-        if bytes[i] == b'/' {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && is_path_char(bytes[i]) {
-                i += 1;
+        let start = if i + 2 < bytes.len()
+            && bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1] == b':'
+            && matches!(bytes[i + 2], b'/' | b'\\')
+        {
+            Some(i)
+        } else if bytes[i] == b'/' {
+            Some(i)
+        } else {
+            None
+        };
+
+        if let Some(start) = start {
+            let mut end = start;
+            while end < bytes.len() {
+                let b = bytes[end];
+                let drive_colon =
+                    end == start + 1 && b == b':' && bytes[start].is_ascii_alphabetic();
+                if is_path_char(b) || drive_colon {
+                    end += 1;
+                } else {
+                    break;
+                }
             }
-            let slice = &tool_text[start..i];
-            if slice.len() > 2 && slice.contains('.') {
-                out.push(slice.to_string());
+            let normalized = normalize_path_str(&tool_text[start..end]);
+            if normalized.len() > 2 && normalized.contains('.') {
+                out.push(normalized);
             }
+            i = end;
         } else {
             i += 1;
         }
@@ -126,7 +145,7 @@ fn normalize_existing_path(path: &str) -> String {
 }
 
 fn is_path_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b"/._-".contains(&b)
+    b.is_ascii_alphanumeric() || b"/\\._-".contains(&b)
 }
 
 fn is_path_token_char(b: u8) -> bool {
@@ -151,6 +170,26 @@ mod tests {
     fn path_trigger_avoids_prefix_false_positive() {
         assert!(!path_trigger_match("/secret", "/secrets-backup/file.txt"));
         assert!(path_trigger_match("/secret", "read /secret/file"));
+    }
+
+    #[test]
+    fn extracts_windows_drive_file_under_rule_dir() {
+        let rule = FileRule {
+            id: "secrets".into(),
+            path: PathBuf::from(r"C:\Users\Public\smr-app-test-secrets"),
+            enabled: true,
+            recursive: false,
+            trigger_window: 2,
+            match_mode: MatchMode::Full,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["txt".into()],
+            index: FileIndexOptions::default(),
+        };
+        let tool = r#"{"path": "C:/Users/Public/smr-app-test-secrets/project.txt"}"#;
+        let files = extract_triggered_files(tool, &rule);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("/smr-app-test-secrets/project.txt"));
     }
 
     #[test]
