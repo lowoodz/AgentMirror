@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Self-contained install smoke test (starts smr, same coverage as Windows UTM 11 checks)."""
+"""Self-contained install smoke test (starts smr, same coverage as Windows UTM functional checks).
+
+Full file DLP edge cases (scoped sibling, directory-only, parent/child rules) live in
+scripts/blackbox_test.py (27 scenarios).
+"""
 
 from __future__ import annotations
 
@@ -24,6 +28,7 @@ from test_common import (  # noqa: E402
 PORT = int(os.environ.get("SMR_INSTALL_TEST_PORT", "18082"))
 BASE = f"http://127.0.0.1:{PORT}"
 CONTENT_SECRET = "LOCAL-INSTALL-TEST-SECRET"
+FILE_PROBE_SECRET = "LOCAL-INSTALL-FILE-SECRET-XYZ"
 
 
 def check(name: str, ok: bool, detail: str) -> bool:
@@ -233,6 +238,53 @@ def main() -> int:
         code, audits, _ = http("GET", f"{BASE}/api/audits?limit=3")
         n = len(json.loads(audits).get("audits", [])) if code == 200 else 0
         results.append(check("audit_log", code == 200 and n > 0, f"records={n}"))
+
+        probe_path = str(secrets / "probe.txt").replace("\\", "/")
+        http(
+            "POST",
+            f"{BASE}/v1/chat/completions",
+            body={
+                "model": "deepseek-chat",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_probe",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": json.dumps({"path": probe_path}),
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "max_tokens": 8,
+            },
+            headers={"X-SMR-Session-Id": "install-func-file-session"},
+        )
+        code, _, ms = http(
+            "POST",
+            f"{BASE}/v1/chat/completions",
+            body={
+                "model": "deepseek-chat",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"file probe secret: {FILE_PROBE_SECRET}",
+                    }
+                ],
+                "max_tokens": 16,
+            },
+            headers={"X-SMR-Session-Id": "install-func-file-session"},
+        )
+        audit = latest_audit(BASE)
+        dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
+        results.append(
+            check("file_session_dlp", code == 200 and dlp > 0, f"{ms:.0f}ms dlp={dlp}")
+        )
 
         path_str = str(secrets / "project.txt").replace("\\", "/")
         http(

@@ -24,6 +24,7 @@ function Check($name, $ok, $detail) {
 $results = @()
 $Base = "http://127.0.0.1:8080"
 $ContentSecret = "LOCAL-INSTALL-TEST-SECRET"
+$FileProbeSecret = "LOCAL-INSTALL-FILE-SECRET-XYZ"
 $WorkDir = "C:\Users\Public\smr-work"
 $SecretsDir = "C:\Users\Public\smr-secrets"
 $VaultDir = Join-Path $SecretsDir "vault"
@@ -200,6 +201,42 @@ try {
     $n = @($audits.audits).Count
     $results += Check "audit_log" ($n -gt 0) "records=$n"
 } catch { Log "ERROR audit: $($_.Exception.Message)"; $results += $false }
+
+try {
+    $probePath = (Join-Path $SecretsDir "probe.txt") -replace '\\','/'
+    $probeTrigger = @{
+        model = "deepseek-chat"
+        messages = @(
+            @{
+                role = "assistant"
+                content = $null
+                tool_calls = @(
+                    @{
+                        id = "call_probe"
+                        type = "function"
+                        function = @{
+                            name = "read_file"
+                            arguments = (@{ path = $probePath } | ConvertTo-Json -Compress)
+                        }
+                    }
+                )
+            }
+        )
+        max_tokens = 8
+    } | ConvertTo-Json -Depth 8 -Compress
+    Invoke-RestMethod -Uri "$Base/v1/chat/completions" -Method Post -Body $probeTrigger -ContentType "application/json" -Headers @{ "X-SMR-Session-Id" = "win-install-file-session" } -TimeoutSec 120 | Out-Null
+    $fileBody = @{
+        model = "deepseek-chat"
+        messages = @(@{ role = "user"; content = "file probe secret: $FileProbeSecret" })
+        max_tokens = 16
+    } | ConvertTo-Json -Depth 5 -Compress
+    $sw.Restart()
+    Invoke-RestMethod -Uri "$Base/v1/chat/completions" -Method Post -Body $fileBody -ContentType "application/json" -Headers @{ "X-SMR-Session-Id" = "win-install-file-session" } -TimeoutSec 120 | Out-Null
+    $sw.Stop()
+    $audit = Latest-Audit
+    $dlp = if ($audit) { [int]$audit.dlp_replacements } else { 0 }
+    $results += Check "file_session_dlp" ($dlp -gt 0) "$([int]$sw.ElapsedMilliseconds)ms dlp=$dlp"
+} catch { Log "ERROR file_session_dlp: $($_.Exception.Message)"; $results += $false }
 
 try {
     $pathStr = (Join-Path $SecretsDir "project.txt") -replace '\\','/'

@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Run unit tests, smoke verify, install functional, black-box, and stress tests.
+# Host matrix (macOS/Linux): verify.sh → install_functional_test.py → blackbox_test.py → live_test.py
+# Windows host: scripts/run_all_tests.ps1 (same four Python stages + verify.ps1)
+# Windows UTM: utm-run-all-tests.sh → windows-utm-full-test.ps1 + guest blackbox/stress
+# Installed-app: run_installed_app_tests.sh → macOS tray + Windows UTM attach blackbox (27 scenarios)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -127,7 +127,7 @@ mac_installed_app_test() {
   fi
   echo "Tray hide OK — process alive, server still listening"
 
-  echo "==> Black-box attach @ :8080 (24 scenarios)"
+  echo "==> Black-box attach @ :8080 (27 scenarios)"
   SMR_ATTACH=1 SMR_BASE=http://127.0.0.1:8080 python3 scripts/blackbox_test.py
 }
 

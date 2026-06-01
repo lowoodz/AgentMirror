@@ -35,6 +35,9 @@ BASE = __import__("os").environ.get(
     "SMR_BASE", "http://127.0.0.1:8080" if ATTACH else f"http://127.0.0.1:{PORT}"
 )
 FILE_SECRET = "UNIQUE-BLACKBOX-FILE-SECRET-XYZ-998877"
+OTHER_FILE_SECRET = "ORPHAN-WIDGET-QUANTUM-ZULU-776655"
+PARENT_ONLY_SECRET = "PARENT-TOP-REPORT-SECRET-ALPHA"
+CHILD_ONLY_SECRET = "CHILD-SUB-REPORT-SECRET-BETA"
 CONTENT_SECRET = "LIVE-TEST-SECRET-KEY"
 PRESET_SK = "sk-abcdefghijklmnopqrstuvwxyz1234567890AB"
 PRESET_AKIA = "AKIA1234567890ABCDEF"
@@ -214,7 +217,25 @@ def build_config_dict(
                 "trigger_window": 2,
                 "match_mode": "full",
                 "formats": ["txt"],
-            }
+            },
+            {
+                "id": "blackbox-parent",
+                "enabled": True,
+                "path": f"{secrets}/parent",
+                "recursive": True,
+                "trigger_window": 2,
+                "match_mode": "full",
+                "formats": ["txt"],
+            },
+            {
+                "id": "blackbox-child",
+                "enabled": True,
+                "path": f"{secrets}/parent/child",
+                "recursive": True,
+                "trigger_window": 2,
+                "match_mode": "full",
+                "formats": ["txt"],
+            },
         ],
     }
 
@@ -336,6 +357,20 @@ file_rules:
     enabled: true
     path: "{secrets}"
     recursive: false
+    trigger_window: 2
+    match_mode: full
+    formats: ["txt"]
+  - id: blackbox-parent
+    enabled: true
+    path: "{secrets}/parent"
+    recursive: true
+    trigger_window: 2
+    match_mode: full
+    formats: ["txt"]
+  - id: blackbox-child
+    enabled: true
+    path: "{secrets}/parent/child"
+    recursive: true
     trigger_window: 2
     match_mode: full
     formats: ["txt"]
@@ -468,6 +503,9 @@ def run_all_scenarios(report: Report, secrets_dir: Path) -> None:
     scenario_dlp_user_message(report)
     scenario_preset_credentials(report)
     scenario_file_session_guard(report, secrets_dir)
+    scenario_file_scoped_sibling_not_scrubbed(report, secrets_dir)
+    scenario_directory_only_no_file_dlp(report, secrets_dir)
+    scenario_most_specific_child_file_scoped(report, secrets_dir)
     scenario_session_window_exhaustion(report, secrets_dir)
     scenario_request_ops_block(report)
     scenario_path_protection(report, secrets_dir)
@@ -662,6 +700,163 @@ def scenario_file_session_guard(report: Report, secrets_dir: Path) -> None:
     dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
     ok = code1 == 200 and code2 == 200 and not leaked and dlp > 0
     report.add(story, "file_path_session_dlp", ok, f"dlp={dlp}, leaked={leaked}", ms1 + ms2)
+
+
+def scenario_file_scoped_sibling_not_scrubbed(report: Report, secrets_dir: Path) -> None:
+    """Trigger only project.txt; leaking other.txt secret must not scrub (file-scoped)."""
+    story = "Agent：文件路径 DLP"
+    path_str = str(secrets_dir / "project.txt").replace("\\", "/")
+    session = "blackbox-file-scoped-sibling"
+    trigger = {
+        "model": "glm-4-flash",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": path_str}),
+                        },
+                    }
+                ],
+            }
+        ],
+        "max_tokens": 8,
+    }
+    code1, _, ms1 = http(
+        "POST",
+        f"{BASE}/v1/chat/completions",
+        body=trigger,
+        headers={"X-SMR-Session-Id": session},
+    )
+    code2, t2, ms2 = chat_openai(
+        [{"role": "user", "content": f"Sibling leak: {OTHER_FILE_SECRET}"}],
+        session=session,
+        max_tokens=24,
+    )
+    leaked = OTHER_FILE_SECRET in (
+        json.loads(t2)["choices"][0]["message"]["content"] if code2 == 200 else ""
+    )
+    audit = latest_audit(BASE)
+    dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
+    ok = code2 == 200 and dlp == 0
+    report.add(
+        story,
+        "file_scoped_sibling_not_scrubbed",
+        ok,
+        f"dlp={dlp}, sibling_leaked={leaked}",
+        ms1 + ms2,
+    )
+
+
+def scenario_directory_only_no_file_dlp(report: Report, secrets_dir: Path) -> None:
+    """Directory path in tool must not activate file DLP (concrete file required)."""
+    story = "Agent：文件路径 DLP"
+    dir_str = str(secrets_dir).replace("\\", "/")
+    session = "blackbox-dir-only-session"
+    trigger = {
+        "model": "glm-4-flash",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "list_dir",
+                            "arguments": json.dumps({"path": dir_str}),
+                        },
+                    }
+                ],
+            }
+        ],
+        "max_tokens": 8,
+    }
+    code1, _, ms1 = http(
+        "POST",
+        f"{BASE}/v1/chat/completions",
+        body=trigger,
+        headers={"X-SMR-Session-Id": session},
+    )
+    code2, t2, ms2 = chat_openai(
+        [{"role": "user", "content": f"After dir trigger: {FILE_SECRET}"}],
+        session=session,
+        max_tokens=24,
+    )
+    leaked = FILE_SECRET in (
+        json.loads(t2)["choices"][0]["message"]["content"] if code2 == 200 else ""
+    )
+    audit = latest_audit(BASE)
+    dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
+    ok = code2 == 200 and dlp == 0 and leaked
+    report.add(
+        story,
+        "directory_only_no_file_dlp",
+        ok,
+        f"trigger_status={code1}, dlp={dlp}, file_secret_leaked={leaked}",
+        ms1 + ms2,
+    )
+
+
+def scenario_most_specific_child_file_scoped(report: Report, secrets_dir: Path) -> None:
+    """Child path rule + trigger child file only: scrub child secret, not parent sibling."""
+    story = "Agent：文件路径 DLP"
+    child_path = str(secrets_dir / "parent" / "child" / "report.txt").replace("\\", "/")
+    session = "blackbox-child-scope-session"
+    trigger = {
+        "model": "glm-4-flash",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": child_path}),
+                        },
+                    }
+                ],
+            }
+        ],
+        "max_tokens": 8,
+    }
+    http(
+        "POST",
+        f"{BASE}/v1/chat/completions",
+        body=trigger,
+        headers={"X-SMR-Session-Id": session},
+    )
+    chat_openai(
+        [{"role": "user", "content": f"child leak: {CHILD_ONLY_SECRET}"}],
+        session=session,
+        max_tokens=16,
+    )
+    audit_child = latest_audit(BASE)
+    dlp_child = int(audit_child.get("dlp_replacements", 0)) if audit_child else 0
+    chat_openai(
+        [{"role": "user", "content": f"parent leak: {PARENT_ONLY_SECRET}"}],
+        session=session,
+        max_tokens=16,
+    )
+    audit_parent = latest_audit(BASE)
+    dlp_parent = int(audit_parent.get("dlp_replacements", 0)) if audit_parent else 0
+    ok = dlp_child > 0 and dlp_parent == 0
+    report.add(
+        story,
+        "most_specific_child_file_scoped",
+        ok,
+        f"child_dlp={dlp_child}, parent_dlp={dlp_parent}",
+        0,
+    )
 
 
 def scenario_session_window_exhaustion(report: Report, secrets_dir: Path) -> None:
@@ -1028,6 +1223,13 @@ def main() -> int:
     mock_servers: list[ThreadingHTTPServer] = []
     secrets_dir = Path(tempfile.mkdtemp(prefix="smr-blackbox-secrets-"))
     (secrets_dir / "project.txt").write_text(FILE_SECRET, encoding="utf-8")
+    (secrets_dir / "other.txt").write_text(OTHER_FILE_SECRET, encoding="utf-8")
+    parent_dir = secrets_dir / "parent"
+    child_dir = parent_dir / "child"
+    parent_dir.mkdir()
+    child_dir.mkdir()
+    (parent_dir / "top.txt").write_text(PARENT_ONLY_SECRET, encoding="utf-8")
+    (child_dir / "report.txt").write_text(CHILD_ONLY_SECRET, encoding="utf-8")
 
     mock_ports = {
         "ops_json": 18191,

@@ -134,7 +134,7 @@ if ($gui.HasExited) {
 $health2 = Invoke-RestMethod -Uri "$Base/health" -TimeoutSec 5
 Log "Health in background mode: $health2"
 
-Log "==> blackbox_test.py (attach mode, 24 scenarios)"
+Log "==> blackbox_test.py (attach mode, 27 scenarios)"
 $env:SMR_ATTACH = "1"
 $env:SMR_BASE = $Base
 $env:SMR_KEYS_FILE = Join-Path $TestRoot "test_model_api_key.txt"

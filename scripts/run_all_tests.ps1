@@ -1,4 +1,5 @@
 # Run unit tests, smoke verify, black-box scenarios, and stress tests (Windows).
+# Same host matrix as scripts/run_all_tests.sh on macOS (verify → install functional → blackbox → stress).
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
