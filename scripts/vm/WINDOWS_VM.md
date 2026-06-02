@@ -24,22 +24,27 @@ chmod +x scripts/vm/setup-windows-vm.sh scripts/vm/download-win11-iso.py
 
 1. 打开 **UTM**，启动虚拟机 `SecureModelRoute-Win11-x64`。
 2. 按安装向导完成 Windows 11（建议语言 English，版本 Windows 11 Pro 或 Home 均可）。
-3. 创建本地用户 **`lgl`**（与 `~/.ssh/config` 里 `devserver` 的 `User` 一致）。
+3. 创建本地 Windows 用户（记下用户名，用于 `config/test.env` 里的 `SMR_WINDOWS_USER`）。
 4. 在 VM 内以**管理员**运行：
 
 ```powershell
-cd C:\Users\lgl\smr-test   # 或把仓库拷进 VM 后
+cd C:\Users\Public\smr-test   # 或把仓库拷进 VM 后
 Set-ExecutionPolicy Bypass -Scope Process -Force
 .\scripts\vm\windows-post-install.ps1
 ```
 
-5. 在 Mac 上把公钥拷到 VM（若脚本未带 `authorized_keys`）：
+5. 在 Mac 上把公钥拷到 VM：
 
 ```bash
-ssh-copy-id lgl@<VM的局域网IP>
+ssh-copy-id <windows-user>@<VM的局域网IP>
 ```
 
-6. 编辑 `~/.ssh/config`，将 `devserver` 的 `HostName` 设为 VM IP（例如 `192.168.8.40`）。
+6. 复制 `config/test.env.example` → `config/test.env`，设置：
+
+```bash
+SMR_WINDOWS_HOST=<VM IP 或 ~/.ssh/config 里的 Host 别名>
+SMR_WINDOWS_USER=<Windows 用户名>
+```
 
 7. 在 Mac 上交叉编译并远程测试：
 

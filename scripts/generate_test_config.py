@@ -3,21 +3,13 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KEYS = ROOT / "test_model_api_key.txt"
+sys.path.insert(0, str(ROOT / "scripts"))
 
-
-def parse_keys() -> tuple[str, str]:
-    text = KEYS.read_text(encoding="utf-8")
-    glm = re.search(r"GLM\s*\n.*?api-key[：:]\s*(\S+)", text, re.S | re.I)
-    ds = re.search(r"Deepseek\s*\n.*?api-key[：:]\s*(\S+)", text, re.S | re.I)
-    if not glm or not ds:
-        raise SystemExit(f"Could not parse keys from {KEYS}")
-    return glm.group(1), ds.group(1)
+from test_common import parse_keys  # noqa: E402
 
 
 def render_config(out: Path, secrets_dir: Path, listen: str = "127.0.0.1:8080") -> None:

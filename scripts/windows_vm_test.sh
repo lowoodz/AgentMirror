@@ -3,9 +3,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HOST="${SMR_WINDOWS_HOST:-devserver}"
-USER="${SMR_WINDOWS_USER:-lgl}"
+# shellcheck source=load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
+
+HOST="${SMR_WINDOWS_HOST:-}"
+USER="${SMR_WINDOWS_USER:-}"
 REMOTE_DIR="${SMR_WINDOWS_REMOTE_DIR:-/c/Users/Public/smr-test}"
+
+if [[ -z "${HOST}" || -z "${USER}" ]]; then
+  echo "Set SMR_WINDOWS_HOST and SMR_WINDOWS_USER in config/test.env (see config/test.env.example)" >&2
+  exit 1
+fi
 
 ZIP="$(ls -t "${ROOT}"/dist/smr-*-windows-x86_64.zip 2>/dev/null | head -1)"
 if [[ -z "${ZIP}" ]]; then

@@ -165,11 +165,11 @@ logging:
 
 ```bash
 cargo test && ./scripts/verify.sh
-cp test_model_api_key.example.txt test_model_api_key.txt
+cp config/test.env.example config/test.env   # gitignored；填写 SMR_GLM_API_KEY / SMR_DEEPSEEK_API_KEY
 ./scripts/run_all_tests.sh
 ```
 
-进度：[TODO.md](TODO.md)。旧版 README 备份：[docs/](docs/)。
+旧版 README 备份：[docs/](docs/)。
 
 ---
 

@@ -7,6 +7,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
 cd "$ROOT"
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${ROOT}/target"
@@ -14,8 +16,8 @@ export CARGO_TARGET_DIR="${ROOT}/target"
 echo "========== 1/5 Unit + smoke (verify.sh) =========="
 bash scripts/verify.sh
 
-if [[ ! -f test_model_api_key.txt ]]; then
-  echo "Skip live tests: copy test_model_api_key.example.txt to test_model_api_key.txt (gitignored) and add your keys"
+if ! has_test_keys; then
+  echo "Skip live tests: copy config/test.env.example to config/test.env and set SMR_GLM_API_KEY / SMR_DEEPSEEK_API_KEY"
   exit 0
 fi
 

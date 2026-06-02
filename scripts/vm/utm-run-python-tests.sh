@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
 VM_ID="${SMR_UTM_VM:-Windows}"
 UTMCTL="${UTMCTL:-/Applications/UTM.app/Contents/MacOS/utmctl}"
 SUITE_GUEST="C:/Users/Public/smr-test-suite"
@@ -15,7 +17,11 @@ echo "========== Upload Python test suite =========="
 for f in test_common.py blackbox_test.py live_test.py; do
   cat "${ROOT}/scripts/${f}" | "$UTMCTL" file push "$VM_ID" "${SUITE_GUEST}/scripts/${f}"
 done
-cat "${ROOT}/test_model_api_key.txt" | "$UTMCTL" file push "$VM_ID" "${SUITE_GUEST}/test_model_api_key.txt"
+KEYS_SRC="$(resolve_keys_file)" || {
+  echo "Missing test keys — copy config/test.env.example to config/test.env and set API keys" >&2
+  exit 1
+}
+cat "${KEYS_SRC}" | "$UTMCTL" file push "$VM_ID" "${SUITE_GUEST}/test_model_api_key.txt"
 cat "$PY_PS1" | "$UTMCTL" file push "$VM_ID" "C:/Users/Public/windows-run-python-tests.ps1"
 
 echo "========== Blackbox + stress on guest =========="

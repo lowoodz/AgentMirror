@@ -3,10 +3,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
 VM_ID="${SMR_UTM_VM:-Windows}"
 UTMCTL="${UTMCTL:-/Applications/UTM.app/Contents/MacOS/utmctl}"
 ZIP="${ROOT}/dist/smr-*-windows-x86_64.zip"
-KEYS_SRC="${ROOT}/test_model_api_key.txt"
 PS1="${ROOT}/scripts/vm/windows-utm-full-test.ps1"
 LOG_GUEST="C:/Users/Public/smr-test-result.txt"
 KEYS_GUEST="C:/Users/Public/smr-keys.env"
@@ -25,10 +26,10 @@ if [[ -z "$ZIP_FILE" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$KEYS_SRC" ]]; then
-  echo "Missing $KEYS_SRC (API keys for live tests)" >&2
+KEYS_SRC="$(resolve_keys_file)" || {
+  echo "Missing test keys — copy config/test.env.example to config/test.env and set API keys" >&2
   exit 1
-fi
+}
 
 echo "==> VM: $("$UTMCTL" list | awk '/started/ {print}' || true)"
 echo "==> Guest IP: $("$UTMCTL" ip-address "$VM_ID" 2>/dev/null | head -1 || echo unknown)"

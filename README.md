@@ -158,11 +158,11 @@ Open `http://127.0.0.1:8080/ui` — overview, routing, DLP, path rules, operatio
 
 ```bash
 cargo test && ./scripts/verify.sh
-cp test_model_api_key.example.txt test_model_api_key.txt   # gitignored; for live tests
+cp config/test.env.example config/test.env   # gitignored; set SMR_GLM_API_KEY / SMR_DEEPSEEK_API_KEY
 ./scripts/run_all_tests.sh
 ```
 
-Implementation notes: [TODO.md](TODO.md). Previous README snapshots: [docs/](docs/).
+Previous README snapshots: [docs/](docs/).
 
 ---
 

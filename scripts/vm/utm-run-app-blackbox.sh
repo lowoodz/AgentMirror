@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=../load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
 VM_ID="${SMR_UTM_VM:-Windows}"
 UTMCTL="${UTMCTL:-/Applications/UTM.app/Contents/MacOS/utmctl}"
 STAGE_GUEST="C:/Users/Public/smr-app-test-stage"
@@ -16,7 +18,10 @@ SETUP_PS1="${ROOT}/scripts/vm/windows-app-installed-test.ps1"
 
 [[ -s "$CLI" ]] || { echo "Missing dist/smr.exe" >&2; exit 1; }
 [[ -s "$GUI" ]] || { echo "Missing dist/windows-desktop/SecureModelRoute.exe" >&2; exit 1; }
-[[ -f "${ROOT}/test_model_api_key.txt" ]] || { echo "Missing test_model_api_key.txt — copy from test_model_api_key.example.txt" >&2; exit 1; }
+KEYS_SRC="$(resolve_keys_file)" || {
+  echo "Missing test keys — copy config/test.env.example to config/test.env and set API keys" >&2
+  exit 1
+}
 
 echo "==> Upload install payload to guest"
 "$UTMCTL" exec "$VM_ID" --cmd cmd.exe /c "mkdir C:\\Users\\Public\\smr-app-test-stage 2>nul & mkdir C:\\Users\\Public\\smr-test-suite\\scripts 2>nul" 2>/dev/null || true
@@ -28,7 +33,7 @@ cat "${ROOT}/scripts/install.ps1" | "$UTMCTL" file push "$VM_ID" "${STAGE_GUEST}
 for f in test_common.py blackbox_test.py generate_test_config.py; do
   cat "${ROOT}/scripts/${f}" | "$UTMCTL" file push "$VM_ID" "${TEST_ROOT_GUEST}/scripts/${f}"
 done
-cat "${ROOT}/test_model_api_key.txt" | "$UTMCTL" file push "$VM_ID" "${TEST_ROOT_GUEST}/test_model_api_key.txt"
+cat "${KEYS_SRC}" | "$UTMCTL" file push "$VM_ID" "${TEST_ROOT_GUEST}/test_model_api_key.txt"
 cat "$SETUP_PS1" | "$UTMCTL" file push "$VM_ID" "$PS1_GUEST"
 
 echo "==> Run installed-app test on guest"

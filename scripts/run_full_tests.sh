@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
 cd "$ROOT"
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${ROOT}/target"
@@ -37,8 +39,8 @@ echo "Full test run started: $(date)" | tee "$SUMMARY"
 
 run_step "1-verify" bash scripts/verify.sh
 
-if [[ ! -f test_model_api_key.txt ]]; then
-  echo ">>> SKIP live tests: copy test_model_api_key.example.txt to test_model_api_key.txt (gitignored)" | tee -a "$SUMMARY"
+if ! has_test_keys; then
+  echo ">>> SKIP live tests: copy config/test.env.example to config/test.env and set API keys" | tee -a "$SUMMARY"
   exit 1
 fi
 

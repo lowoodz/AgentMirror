@@ -13,7 +13,33 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_ENV_FILE = Path(os.environ.get("SMR_TEST_ENV", str(ROOT / "config" / "test.env")))
 KEYS_FILE = Path(os.environ.get("SMR_KEYS_FILE", str(ROOT / "test_model_api_key.txt")))
+
+
+def load_test_env(path: Path | None = None) -> None:
+    """Load KEY=VALUE pairs from config/test.env (does not override existing env)."""
+    env_path = path or TEST_ENV_FILE
+    if not env_path.is_file():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+load_test_env()
+
+
+def has_test_keys() -> bool:
+    if os.environ.get("SMR_GLM_API_KEY") and os.environ.get("SMR_DEEPSEEK_API_KEY"):
+        return True
+    return KEYS_FILE.is_file()
 
 
 def _default_smr_bin() -> Path:
@@ -35,13 +61,21 @@ def _default_smr_bin() -> Path:
 SMR_BIN = _default_smr_bin()
 
 
-def parse_keys(path: Path = KEYS_FILE) -> tuple[str, str]:
-    text = path.read_text(encoding="utf-8")
-    glm = re.search(r"GLM\s*\n.*?api-key[：:]\s*(\S+)", text, re.S | re.I)
-    ds = re.search(r"Deepseek\s*\n.*?api-key[：:]\s*(\S+)", text, re.S | re.I)
-    if not glm or not ds:
-        raise SystemExit(f"Could not parse keys from {path}")
-    return glm.group(1), ds.group(1)
+def parse_keys(path: Path | None = None) -> tuple[str, str]:
+    glm = os.environ.get("SMR_GLM_API_KEY", "").strip()
+    ds = os.environ.get("SMR_DEEPSEEK_API_KEY", "").strip()
+    if glm and ds:
+        return glm, ds
+    keys_path = path or KEYS_FILE
+    text = keys_path.read_text(encoding="utf-8")
+    glm_m = re.search(r"GLM\s*\n.*?api-key[：:]\s*(\S+)", text, re.S | re.I)
+    ds_m = re.search(r"Deepseek\s*\n.*?api-key[：:]\s*(\S+)", text, re.S | re.I)
+    if not glm_m or not ds_m:
+        raise SystemExit(
+            f"Set SMR_GLM_API_KEY and SMR_DEEPSEEK_API_KEY in config/test.env "
+            f"(copy from config/test.env.example), or provide keys in {keys_path}"
+        )
+    return glm_m.group(1), ds_m.group(1)
 
 
 def http(

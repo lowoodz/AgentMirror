@@ -16,9 +16,9 @@ Write-Host "========== 1/5 Unit + smoke (verify.ps1) =========="
 & (Join-Path $Root "scripts\verify.ps1")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$Keys = Join-Path $Root "test_model_api_key.txt"
-if (-not (Test-Path $Keys)) {
-    Write-Host "Skip live tests: copy test_model_api_key.example.txt to test_model_api_key.txt (gitignored) and add your keys"
+. (Join-Path $Root "scripts\load_test_env.ps1")
+if (-not (Test-SmrKeys)) {
+    Write-Host "Skip live tests: copy config/test.env.example to config/test.env and set SMR_GLM_API_KEY / SMR_DEEPSEEK_API_KEY"
     exit 0
 }
 

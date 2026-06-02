@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
 cd "$ROOT"
 
 export PATH="${HOME}/.cargo/bin:${PATH}"
@@ -12,8 +14,8 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 SUMMARY="${LOG_DIR}/installed-app-${STAMP}.log"
 failures=0
 
-if [[ ! -f test_model_api_key.txt ]]; then
-  echo "Missing test_model_api_key.txt — copy from test_model_api_key.example.txt (gitignored)" >&2
+if ! has_test_keys; then
+  echo "Missing test keys — copy config/test.env.example to config/test.env and set SMR_GLM_API_KEY / SMR_DEEPSEEK_API_KEY" >&2
   exit 1
 fi
 

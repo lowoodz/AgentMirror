@@ -2,7 +2,7 @@
 # Bootstrap Windows x86_64 VM on macOS (Apple Silicon) for SecureModelRoute testing.
 # - Installs UTM (free) if missing
 # - Downloads Windows 11 x64 ISO (evaluation)
-# - Creates UTM QEMU VM with bridged networking (matches windows_vm_test.sh / devserver SSH)
+# - Creates UTM QEMU VM with bridged networking (matches windows_vm_test.sh SSH settings)
 #
 # Usage:
 #   ./scripts/vm/setup-windows-vm.sh install-utm
@@ -97,10 +97,15 @@ print_ssh_hint() {
   cat <<EOF
 
 SSH (after Windows is up with OpenSSH):
-  Host devserver
-    HostName <VM-LAN-IP>    # e.g. 192.168.8.40 if reserved in router DHCP
-    User lgl
-    IdentityFile ~/.ssh/id_rsa
+  Set in config/test.env (copy from config/test.env.example):
+    SMR_WINDOWS_HOST=<VM-LAN-IP or ~/.ssh/config Host alias>
+    SMR_WINDOWS_USER=<Windows login name>
+
+  Example ~/.ssh/config:
+    Host smr-win-vm
+      HostName 192.168.1.100
+      User your-windows-user
+      IdentityFile ~/.ssh/id_rsa
 
 Test: ./scripts/windows_vm_test.sh
 
@@ -125,6 +130,9 @@ Environment:
   SMR_VM_DIR       VM files directory (default: ~/VMs/SecureModelRoute-Win11-x64)
   SMR_VM_NAME      UTM VM display name
   SMR_UTM_URL      Override UTM.dmg download URL
+
+  Windows SSH test vars live in config/test.env (see config/test.env.example):
+  SMR_WINDOWS_HOST, SMR_WINDOWS_USER, SMR_WINDOWS_REMOTE_DIR
 
 EOF
 }

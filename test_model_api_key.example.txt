@@ -1,5 +1,5 @@
-# Copy to test_model_api_key.txt (gitignored) for local live/blackbox tests.
-# Do NOT commit test_model_api_key.txt.
+# Legacy keys file format (still supported via SMR_KEYS_FILE).
+# Preferred: copy config/test.env.example → config/test.env and set SMR_GLM_API_KEY / SMR_DEEPSEEK_API_KEY.
 
 1、GLM
 api-key：your-glm-api-key-here

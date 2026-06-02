@@ -3,4 +3,11 @@
 **/*.rs.bk
 .DS_Store
 test_model_api_key.txt
+config/test.env
 config/smr.yaml
+
+# Local-only docs (not published to GitHub)
+TODO.txt
+TODO.md
+方案Prompt.txt
+SecureModelRoute方案设计.docx

@@ -3,9 +3,9 @@ Remove-Item $log -Force -ErrorAction SilentlyContinue
 function L($m) { Add-Content $log $m -Encoding UTF8 }
 
 try {
-    $gui = 'C:/Users/testuser/AppData/Local/Programs/SecureModelRoute/SecureModelRoute.exe'
+    $gui = Join-Path $env:LOCALAPPDATA 'Programs/SecureModelRoute/SecureModelRoute.exe'
     $stage = 'C:/Users/Public/smr-install-stage/SecureModelRoute.exe'
-    $cfg = 'C:/Users/testuser/.local/etc/securemodelroute/smr.yaml'
+    $cfg = Join-Path $env:USERPROFILE '.local/etc/securemodelroute/smr.yaml'
     L "stage=$(Test-Path $stage) gui_before=$(Test-Path $gui)"
     if (Test-Path $stage) {
         New-Item -ItemType Directory -Force -Path (Split-Path $gui) | Out-Null

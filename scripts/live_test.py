@@ -2,7 +2,7 @@
 """Stress / load tests against live upstreams via SecureModelRoute.
 
 Functional and black-box scenarios live in scripts/blackbox_test.py.
-Requires test_model_api_key.txt (gitignored). Copy from test_model_api_key.example.txt.
+Requires API keys in config/test.env (copy from config/test.env.example) or legacy test_model_api_key.txt.
 """
 
 from __future__ import annotations

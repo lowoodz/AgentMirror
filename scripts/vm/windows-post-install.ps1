@@ -48,7 +48,7 @@ Write-Host @"
 
 Done. From macOS:
   1. Note the VM IPv4 above (bridged LAN).
-  2. Update ~/.ssh/config Host devserver HostName <that-ip>
+  2. Set SMR_WINDOWS_HOST / SMR_WINDOWS_USER in config/test.env (see config/test.env.example)
   3. ./scripts/windows_vm_test.sh
 
 "@
