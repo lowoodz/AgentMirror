@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,13 +8,153 @@ use smr_core::{run_app, SharedApp, DEFAULT_CONFIG_YAML};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent, WindowEvent,
+    Manager, RunEvent, Url, WindowEvent,
 };
 use tracing::info;
 
 const TRAY_ID: &str = "main";
 
+struct AppState {
+    listen: String,
+}
+
+struct ServerHandle {
+    shared: Arc<SharedApp>,
+}
+
+fn ui_url(listen: &str) -> String {
+    format!("http://{listen}/ui")
+}
+
+fn parse_listen(listen: &str) -> Option<std::net::SocketAddr> {
+    listen.parse().ok()
+}
+
+fn port_in_use(listen: &str) -> bool {
+    let addr = match parse_listen(listen) {
+        Some(a) => a,
+        None => return false,
+    };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+fn health_ready(listen: &str) -> bool {
+    let addr = match parse_listen(listen) {
+        Some(a) => a,
+        None => return false,
+    };
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let req = format!("GET /health HTTP/1.1\r\nHost: {listen}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 512];
+    let Ok(n) = stream.read(&mut buf) else {
+        return false;
+    };
+    let resp = String::from_utf8_lossy(&buf[..n]);
+    resp.contains("200") && resp.contains("SecureModelRoute OK")
+}
+
+fn wait_for_server(listen: &str, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if health_ready(listen) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
+fn navigate_to_ui(window: &tauri::WebviewWindow, listen: &str) {
+    let target = ui_url(listen);
+    if let Ok(url) = Url::parse(&target) {
+        let _ = window.navigate(url);
+    }
+}
+
+fn show_boot_error(window: &tauri::WebviewWindow, listen: &str) {
+    let msg = if port_in_use(listen) {
+        format!(
+            "端口 {listen} 已被占用，但服务无响应。\\n\
+             请执行：\\n\
+             launchctl unload ~/Library/LaunchAgents/com.securemodelroute.smr.plist\\n\
+             pkill -f '/smr --config'\\n\
+             然后重新打开 SecureModelRoute。"
+        )
+    } else {
+        format!("无法启动 {listen} 上的服务。请在终端运行 smr 查看错误日志。")
+    };
+    let _ = window.eval(&format!(
+        "document.getElementById('msg').textContent='服务未能启动';\
+         document.getElementById('err').textContent='{msg}';\
+         document.getElementById('spin').style.display='none';"
+    ));
+}
+
+fn start_embedded_server(app: &tauri::AppHandle, listen: &str) {
+    if health_ready(listen) {
+        info!(listen = %listen, "reusing existing SecureModelRoute server");
+        if let Some(window) = app.get_webview_window("main") {
+            navigate_to_ui(&window, listen);
+        }
+        return;
+    }
+
+    if port_in_use(listen) {
+        info!(listen = %listen, "port in use but health check failed");
+        if let Some(window) = app.get_webview_window("main") {
+            show_boot_error(&window, listen);
+            let _ = window.show();
+        }
+        return;
+    }
+
+    let shared = app.state::<ServerHandle>().shared.clone();
+    let app_handle = app.clone();
+    let listen = listen.to_string();
+
+    std::thread::spawn(move || {
+        tauri::async_runtime::spawn(async move {
+            if let Err(err) = run_app(shared).await {
+                tracing::error!(error = %err, "server exited");
+            }
+        });
+
+        if wait_for_server(&listen, Duration::from_secs(30)) {
+            let listen = listen.clone();
+            let app_for_ui = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                if let Some(window) = app_for_ui.get_webview_window("main") {
+                    navigate_to_ui(&window, &listen);
+                }
+            });
+        } else {
+            let listen = listen.clone();
+            let app_for_ui = app_handle.clone();
+            let _ = app_handle.run_on_main_thread(move || {
+                if let Some(window) = app_for_ui.get_webview_window("main") {
+                    show_boot_error(&window, &listen);
+                    let _ = window.show();
+                }
+            });
+        }
+    });
+}
+
 fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if !health_ready(&state.listen) {
+            start_embedded_server(app, &state.listen);
+        } else if let Some(window) = app.get_webview_window("main") {
+            navigate_to_ui(&window, &state.listen);
+        }
+    }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -79,8 +221,6 @@ fn handle_run_event(app_handle: &tauri::AppHandle, event: RunEvent) {
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => show_main_window(app_handle),
         RunEvent::ExitRequested { api, code, .. } => {
-            // macOS: closing the last window can request app exit; hide instead while visible.
-            // When the window is already hidden, allow Cmd+Q / dock Quit to exit.
             if code.is_none() && main_window_visible(app_handle) {
                 api.prevent_exit();
                 hide_main_window(app_handle);
@@ -116,21 +256,27 @@ pub fn run() {
             let listen = shared.config().server.listen.clone();
             info!(config = %path.display(), listen = %listen, "starting SecureModelRoute server");
 
-            let shared = Arc::clone(&shared);
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) = run_app(shared).await {
-                    tracing::error!(error = %err, "server exited");
-                }
+            app.manage(AppState {
+                listen: listen.clone(),
+            });
+            app.manage(ServerHandle {
+                shared: Arc::clone(&shared),
             });
 
-            std::thread::sleep(Duration::from_millis(600));
+            let window = app
+                .get_webview_window("main")
+                .ok_or("missing main window")?;
 
-            if let Some(window) = app.get_webview_window("main") {
-                let ui = format!("http://{listen}/ui");
-                let _ = window.eval(&format!("window.location.replace('{ui}')"));
-                if start_in_background() {
-                    let _ = window.hide();
-                }
+            let listen_js = listen.replace('\\', "\\\\").replace('\'', "\\'");
+            let _ = window.eval(&format!("window.__SMR_LISTEN='{listen_js}';"));
+
+            // Do not block setup — start server in background; bootstrap.html polls /health.
+            start_embedded_server(app.handle(), &listen);
+
+            if start_in_background() {
+                let _ = window.hide();
+            } else {
+                let _ = window.show();
             }
 
             Ok(())

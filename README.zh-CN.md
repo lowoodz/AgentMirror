@@ -196,10 +196,10 @@ logging:
   level: info
   redact_content: true
   save_traffic_bodies: true      # 默认 false
-  traffic_max_body_bytes: 32768
+  traffic_max_body_bytes: 20971520  # 单条快照最大 20 MiB
 ```
 
-开启 `save_traffic_bodies` 后，在大小限制内保存经代理的 JSON 正文，便于排查；仅在可信环境使用，生产环境请关闭。可在高级 YAML 或配置中的 `logging` 段修改。
+开启 `save_traffic_bodies` 后，完整 JSON 正文写入 `{config_dir}/traffic/`（受 `traffic_max_body_bytes` 限制，硬上限 20 MiB）。管理界面仅显示预览并提供完整文件链接；仅在可信环境使用，生产环境请关闭。
 
 ## 开发与测试
 

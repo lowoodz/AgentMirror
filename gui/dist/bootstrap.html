@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SecureModelRoute</title>
+  <style>
+    :root { --bg:#0f1117; --text:#e6e8ef; --muted:#8b90a0; --accent:#5b8def; --err:#f87171; }
+    * { box-sizing:border-box; }
+    body {
+      margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+      background:var(--bg); color:var(--text);
+      font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+    }
+    .box { text-align:center; padding:32px; max-width:420px; }
+    .logo { font-size:28px; font-weight:600; margin-bottom:8px; }
+    .hint { color:var(--muted); font-size:14px; line-height:1.6; }
+    .spinner {
+      width:28px; height:28px; margin:20px auto 0;
+      border:3px solid #343948; border-top-color:var(--accent);
+      border-radius:50%; animation:spin 0.8s linear infinite;
+    }
+    .err { color:var(--err); margin-top:16px; white-space:pre-wrap; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="logo">SecureModelRoute</div>
+    <p class="hint" id="msg">正在启动本地服务…</p>
+    <div class="spinner" id="spin"></div>
+    <p class="err" id="err"></p>
+  </div>
+  <script>
+    const listen = window.__SMR_LISTEN || '127.0.0.1:8080';
+    const uiUrl = 'http://' + listen + '/ui';
+    const healthUrl = 'http://' + listen + '/health';
+    const msg = document.getElementById('msg');
+    const err = document.getElementById('err');
+    const spin = document.getElementById('spin');
+
+    function showError(text) {
+      msg.textContent = '服务未能启动';
+      err.textContent = text;
+      spin.style.display = 'none';
+    }
+
+    async function waitForServer() {
+      for (let i = 0; i < 80; i++) {
+        try {
+          const r = await fetch(healthUrl, { cache: 'no-store' });
+          if (r.ok) {
+            location.replace(uiUrl);
+            return;
+          }
+        } catch (_) {}
+        await new Promise(r => setTimeout(r, 250));
+      }
+      showError('无法连接 ' + listen + '。\n请确认端口未被占用，或在终端运行 smr 查看错误日志。');
+    }
+
+    waitForServer();
+  </script>
+</body>
+</html>

@@ -77,7 +77,7 @@ exec "${BINDIR}/smr" --config "${CONFDIR}/smr.yaml" --open "\$@"
 EOF
 chmod +x "${LAUNCHER}"
 
-# Headless LaunchAgent only when GUI is not installed (GUI keeps server in menu bar tray).
+# Headless LaunchAgent only when GUI is not installed (GUI embeds the server in the tray app).
 if [[ "$INSTALL_SERVICE" == true && "$INSTALL_GUI" != true && "$(uname -s)" == "Darwin" ]]; then
   PLIST="${HOME}/Library/LaunchAgents/com.securemodelroute.smr.plist"
   mkdir -p "${HOME}/Library/LaunchAgents"
@@ -105,7 +105,17 @@ EOF
   echo "    LaunchAgent installed: ${PLIST}"
 fi
 
-if [[ -n "$DESKTOP_APP" && "$INSTALL_ALL" == true && "$(uname -s)" == "Darwin" ]]; then
+if [[ -n "$DESKTOP_APP" && ("$INSTALL_ALL" == true || "$INSTALL_GUI" == true) && "$(uname -s)" == "Darwin" ]]; then
+  # GUI embeds the HTTP server — disable conflicting headless LaunchAgent if present.
+  HEADLESS_PLIST="${HOME}/Library/LaunchAgents/com.securemodelroute.smr.plist"
+  if [[ -f "$HEADLESS_PLIST" ]]; then
+    launchctl unload "$HEADLESS_PLIST" 2>/dev/null || true
+    rm -f "$HEADLESS_PLIST"
+    echo "    Removed headless LaunchAgent (conflicts with tray GUI on :8080)"
+  fi
+  pkill -f "${BINDIR}/smr --config" 2>/dev/null || true
+  sleep 1
+
   PLIST="${HOME}/Library/LaunchAgents/com.securemodelroute.gui.plist"
   mkdir -p "${HOME}/Library/LaunchAgents"
   cat > "${PLIST}" << EOF

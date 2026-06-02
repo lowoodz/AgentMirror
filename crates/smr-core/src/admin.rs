@@ -1,6 +1,6 @@
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
-use axum::response::{Html, IntoResponse, Json};
+use axum::response::{Html, IntoResponse, Json, Response};
 use axum::routing::{get, put};
 use axum::Router;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,7 @@ pub fn router() -> Router<HttpState> {
         .route("/api/events", get(api_events))
         .route("/api/audits", get(api_audits))
         .route("/api/traffic", get(api_traffic))
+        .route("/api/traffic/{id}", get(api_traffic_body))
         .route("/api/reload", put(api_reload))
 }
 
@@ -83,7 +84,48 @@ async fn api_traffic(
     Json(serde_json::json!({
         "records": s.app.traffic.list(limit),
         "enabled": s.app.config().logging.save_traffic_bodies,
+        "traffic_dir": s.app.traffic.traffic_dir().display().to_string(),
     }))
+}
+
+async fn api_traffic_body(
+    State(s): State<HttpState>,
+    Path(id): Path<String>,
+) -> Result<Response, StatusCode> {
+    let (record, data) = s
+        .app
+        .traffic
+        .read_body(&id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let mut resp = Response::new(data.into());
+    *resp.status_mut() = StatusCode::OK;
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/octet-stream"),
+    );
+    resp.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        header::HeaderValue::from_str(&format!(
+            "inline; filename=\"{}_{}.body\"",
+            sanitize_download_name(&record.phase),
+            &record.id[..8]
+        ))
+        .unwrap_or_else(|_| header::HeaderValue::from_static("inline")),
+    );
+    Ok(resp)
+}
+
+fn sanitize_download_name(phase: &str) -> String {
+    phase
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 async fn api_get_config(State(s): State<HttpState>) -> Json<AppConfig> {

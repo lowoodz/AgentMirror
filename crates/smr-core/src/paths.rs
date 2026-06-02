@@ -18,6 +18,10 @@ pub fn ensure_config_dir() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+pub fn traffic_dir() -> PathBuf {
+    config_dir().join("traffic")
+}
+
 pub fn init_default_config(example: &str) -> anyhow::Result<PathBuf> {
     ensure_config_dir()?;
     let path = default_config_path();

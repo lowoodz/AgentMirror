@@ -81,16 +81,30 @@ pub enum OperationSecurityMode {
 pub struct LoggingConfig {
     pub level: String,
     pub redact_content: bool,
-    /// When true, keep recent request/response JSON snapshots in memory for the admin UI.
+    /// When true, save recent request/response JSON snapshots to disk for the admin UI.
     #[serde(default)]
     pub save_traffic_bodies: bool,
-    /// Max bytes per stored body snapshot (truncated beyond this).
+    /// Max bytes per saved body file (truncated beyond this; hard cap 20 MiB).
     #[serde(default = "default_traffic_max_body_bytes")]
     pub traffic_max_body_bytes: usize,
 }
 
 fn default_traffic_max_body_bytes() -> usize {
-    32 * 1024
+    20 * 1024 * 1024
+}
+
+/// Previous default before full-body disk snapshots (32 KiB).
+pub const LEGACY_TRAFFIC_MAX_BODY_BYTES: usize = 32 * 1024;
+
+impl LoggingConfig {
+    /// Upgrade legacy 32 KiB limit to the current 20 MiB default.
+    pub fn normalize_traffic_limit(&mut self) {
+        if self.traffic_max_body_bytes == LEGACY_TRAFFIC_MAX_BODY_BYTES {
+            self.traffic_max_body_bytes = default_traffic_max_body_bytes();
+        }
+        self.traffic_max_body_bytes =
+            crate::traffic::clamp_body_limit(self.traffic_max_body_bytes);
+    }
 }
 
 impl Default for LoggingConfig {
@@ -370,8 +384,23 @@ pub enum PathProtectionLevel {
 impl AppConfig {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)?;
-        let config: AppConfig = serde_yaml::from_str(&text)?;
+        let mut config: AppConfig = serde_yaml::from_str(&text)?;
+        let before = config.logging.traffic_max_body_bytes;
+        config.logging.normalize_traffic_limit();
         config.validate()?;
+        if before == LEGACY_TRAFFIC_MAX_BODY_BYTES
+            && before != config.logging.traffic_max_body_bytes
+        {
+            tracing::info!(
+                old = before,
+                new = config.logging.traffic_max_body_bytes,
+                path = %path.display(),
+                "migrated traffic_max_body_bytes to 20 MiB"
+            );
+            if let Ok(yaml) = serde_yaml::to_string(&config) {
+                let _ = std::fs::write(path, yaml);
+            }
+        }
         Ok(config)
     }
 

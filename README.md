@@ -201,10 +201,10 @@ logging:
   level: info
   redact_content: true
   save_traffic_bodies: true      # default: false
-  traffic_max_body_bytes: 32768
+  traffic_max_body_bytes: 20971520  # 20 MiB per snapshot file
 ```
 
-When `save_traffic_bodies` is enabled, proxied JSON bodies (within size limits) are stored for inspection—use only on trusted machines and disable in production. Toggle from Advanced YAML or the logging section of config.
+When `save_traffic_bodies` is enabled, proxied JSON bodies are written to `{config_dir}/traffic/` (up to `traffic_max_body_bytes`, hard cap 20 MiB). The admin UI shows a preview and links to the full file—use only on trusted machines and disable in production.
 
 ## Development and testing
 

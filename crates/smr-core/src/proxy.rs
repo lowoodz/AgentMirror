@@ -294,6 +294,21 @@ impl ProxyService {
             }
         };
 
+        let proxy_body = if traffic_cfg.save_traffic_bodies {
+            match proxy_body {
+                ProxyBody::SseStream(stream) => ProxyBody::SseStream(self.app.traffic.wrap_sse_stream(
+                    stream,
+                    &audit_id,
+                    session_id,
+                    "response_out",
+                    traffic_cfg.traffic_max_body_bytes,
+                )),
+                other => other,
+            }
+        } else {
+            proxy_body
+        };
+
         let success = attempt.status.is_success();
         if success {
             events.push(
