@@ -167,7 +167,7 @@ def main() -> int:
         )
 
         code, ui, _ = http("GET", f"{BASE}/ui")
-        results.append(check("web_ui", code == 200 and "SecureModelRoute" in ui, f"bytes={len(ui)}"))
+        results.append(check("web_ui", code == 200 and "SafeRoute" in ui, f"bytes={len(ui)}"))
 
         code, text, ms = http(
             "POST",

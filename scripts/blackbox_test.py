@@ -1202,7 +1202,7 @@ def scenario_admin_dashboard(report: Report) -> None:
     ms = (time.perf_counter() - start) * 1000
     ok = (
         c1 == 200
-        and "SecureModelRoute" in ui
+        and "SafeRoute" in ui
         and c2 == 200
         and c3 == 200
         and c4 == 200
@@ -1231,7 +1231,7 @@ def scenario_concurrent_users(report: Report) -> None:
 
 def print_report(report: Report) -> None:
     print("\n" + "=" * 60)
-    print("  SecureModelRoute 黑盒测试报告")
+    print("  SafeRoute 黑盒测试报告")
     print("=" * 60)
     story = ""
     for s in report.scenarios:

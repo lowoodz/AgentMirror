@@ -104,7 +104,7 @@ mac_installed_app_test() {
   [[ "$ok" -eq 1 ]] || { echo "GUI server not ready on :8080" >&2; return 1; }
 
   echo "==> User smoke: admin UI"
-  curl -sf "http://127.0.0.1:8080/ui" | grep -q SecureModelRoute
+  curl -sf "http://127.0.0.1:8080/ui" | grep -q SafeRoute
 
   echo "==> Tray: close main window, service should stay up"
   osascript -e "tell application \"System Events\"

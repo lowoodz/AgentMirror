@@ -57,7 +57,7 @@ fn health_ready(listen: &str) -> bool {
         return false;
     };
     let resp = String::from_utf8_lossy(&buf[..n]);
-    resp.contains("200") && resp.contains("SecureModelRoute OK")
+    resp.contains("200") && resp.contains("SafeRoute OK")
 }
 
 fn wait_for_server(listen: &str, timeout: Duration) -> bool {
@@ -85,7 +85,7 @@ fn show_boot_error(window: &tauri::WebviewWindow, listen: &str) {
              请执行：\\n\
              launchctl unload ~/Library/LaunchAgents/com.securemodelroute.smr.plist\\n\
              pkill -f '/smr --config'\\n\
-             然后重新打开 SecureModelRoute。"
+             然后重新打开 SafeRoute。"
         )
     } else {
         format!("无法启动 {listen} 上的服务。请在终端运行 smr 查看错误日志。")
@@ -99,7 +99,7 @@ fn show_boot_error(window: &tauri::WebviewWindow, listen: &str) {
 
 fn start_embedded_server(app: &tauri::AppHandle, listen: &str) {
     if health_ready(listen) {
-        info!(listen = %listen, "reusing existing SecureModelRoute server");
+        info!(listen = %listen, "reusing existing SafeRoute server");
         if let Some(window) = app.get_webview_window("main") {
             navigate_to_ui(&window, listen);
         }
@@ -191,7 +191,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .menu(&menu)
-        .tooltip("SecureModelRoute — 点击打开主窗口")
+        .tooltip("SafeRoute — 点击打开主窗口")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
@@ -254,7 +254,7 @@ pub fn run() {
             let (shared, path) = SharedApp::load_or_create(&config_path, DEFAULT_CONFIG_YAML)
                 .map_err(|e| format!("config error: {e}"))?;
             let listen = shared.config().server.listen.clone();
-            info!(config = %path.display(), listen = %listen, "starting SecureModelRoute server");
+            info!(config = %path.display(), listen = %listen, "starting SafeRoute server");
 
             app.manage(AppState {
                 listen: listen.clone(),
@@ -282,7 +282,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to build SecureModelRoute GUI");
+        .expect("failed to build SafeRoute GUI");
 
     app.run(handle_run_event);
 }

@@ -1,8 +1,8 @@
 [package]
 name = "smr-gui"
 version.workspace = true
-description = "SecureModelRoute desktop GUI"
-authors = ["SecureModelRoute"]
+description = "SafeRoute desktop GUI"
+authors = ["SafeRoute"]
 edition.workspace = true
 license.workspace = true
 

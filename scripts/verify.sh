@@ -37,7 +37,7 @@ status=$(curl -sf "http://127.0.0.1:${PORT}/api/status")
 
 echo "==> ui"
 ui=$(curl -sf "http://127.0.0.1:${PORT}/ui")
-[[ "$ui" == *SecureModelRoute* ]]
+[[ "$ui" == *SafeRoute* ]]
 
 echo ""
 echo "All verification checks passed."

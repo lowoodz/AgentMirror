@@ -7,7 +7,7 @@ use smr_core::{run_app, SharedApp, DEFAULT_CONFIG_YAML};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(name = "smr", about = "SecureModelRoute - LLM security proxy", version)]
+#[command(name = "smr", about = "SafeRoute — lightweight LLM proxy with routing and guardrails", version)]
 struct Cli {
     /// Path to YAML config (default: ~/.config/securemodelroute/smr.yaml)
     #[arg(short, long)]
@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("initialize config at {}", config_path.display()))?;
 
     let listen = app.config().server.listen.clone();
-    tracing::info!(config = %path.display(), listen = %listen, "SecureModelRoute starting");
+    tracing::info!(config = %path.display(), listen = %listen, "SafeRoute starting");
 
     if cli.open {
         let ui = format!("http://{listen}/ui");
@@ -52,7 +52,7 @@ async fn run_with_shutdown(app: Arc<SharedApp>) -> anyhow::Result<()> {
     tokio::select! {
         res = run_app(app) => res,
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("SecureModelRoute shutting down");
+            tracing::info!("SafeRoute shutting down");
             Ok(())
         }
     }

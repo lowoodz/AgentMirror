@@ -334,7 +334,7 @@ async fn health_and_ui_endpoints() {
         .unwrap();
     let mut buf2 = vec![0u8; 2048];
     let n2 = stream2.read(&mut buf2).await.unwrap();
-    assert!(String::from_utf8_lossy(&buf2[..n2]).contains("SecureModelRoute"));
+    assert!(String::from_utf8_lossy(&buf2[..n2]).contains("SafeRoute"));
 
     handle.abort();
 }

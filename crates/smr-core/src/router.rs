@@ -172,7 +172,7 @@ impl Router {
 
         if let Some(last) = last_error {
             let msg = format!(
-                "SecureModelRoute: fallback group '{}' exhausted — tried {} endpoint(s): {}. Last status: {}.",
+                "SafeRoute: fallback group '{}' exhausted — tried {} endpoint(s): {}. Last status: {}.",
                 group_name,
                 chain.len(),
                 chain.join(" → "),

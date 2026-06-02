@@ -34,7 +34,7 @@ pub async fn run_app(app: Arc<SharedApp>) -> Result<()> {
     let addr: std::net::SocketAddr = listen
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid listen address: {e}"))?;
-    info!(%addr, ui = %format!("http://{addr}/ui"), "SecureModelRoute listening");
+    info!(%addr, ui = %format!("http://{addr}/ui"), "SafeRoute listening");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
@@ -42,7 +42,7 @@ pub async fn run_app(app: Arc<SharedApp>) -> Result<()> {
 }
 
 async fn health() -> impl IntoResponse {
-    (StatusCode::OK, "SecureModelRoute OK")
+    (StatusCode::OK, "SafeRoute OK")
 }
 
 async fn proxy_handler(
@@ -116,7 +116,7 @@ async fn proxy_handler(
             );
             (
                 StatusCode::BAD_GATEWAY,
-                format!("SecureModelRoute proxy error: {err}"),
+                format!("SafeRoute proxy error: {err}"),
             )
                 .into_response()
         }

@@ -1,6 +1,6 @@
 [package]
 name = "smr-core"
-description = "SecureModelRoute core: routing, DLP, operation security"
+description = "SafeRoute core: routing, DLP, operation security"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
