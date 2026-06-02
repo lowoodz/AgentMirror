@@ -23,15 +23,13 @@ type HttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes
 fn build_http_client() -> HttpClient {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .expect("install rustls crypto provider");
+        let _ = rustls::crypto::ring::default_provider().install_default();
     });
     let mut http = HttpConnector::new();
     http.enforce_http(false);
+    // Embedded Mozilla roots — reliable on Windows portable builds (native store can fail).
     let https = HttpsConnectorBuilder::new()
-        .with_native_roots()
-        .expect("load native TLS roots")
+        .with_webpki_roots()
         .https_or_http()
         .enable_http1()
         .build();

@@ -62,29 +62,33 @@ function Install-SmrDesktop {
     $AppPath = Join-Path $DestDir "SecureModelRoute.exe"
     $Installed = $false
 
-    $Setup = Get-ChildItem $SearchRoot -Filter "SecureModelRoute-*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($Setup) {
-        Write-InstallLog "    Running NSIS installer: $($Setup.Name)"
-        Start-Process -FilePath $Setup.FullName -ArgumentList "/S" -Wait
+    # Prefer the portable GUI exe shipped beside install.ps1 (IExpress / zip layout).
+    $Bundled = Get-ChildItem $SearchRoot -Filter "SecureModelRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($Bundled) {
+        New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
+        Copy-Item $Bundled.FullName $AppPath -Force
         $Installed = $true
-        foreach ($candidate in @(
-            $AppPath,
-            (Join-Path $env:LOCALAPPDATA "Programs\com.securemodelroute.desktop\SecureModelRoute.exe")
-        )) {
-            if (Test-Path $candidate) {
-                $AppPath = $candidate
-                break
-            }
-        }
+        Write-InstallLog "    Installed portable app: $AppPath"
     }
 
+    # Tauri NSIS bundle only (not our IExpress SecureModelRoute-*-x64-Setup.exe).
     if (-not $Installed) {
-        $Bundled = Get-ChildItem $SearchRoot -Filter "SecureModelRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($Bundled) {
-            New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
-            Copy-Item $Bundled.FullName $AppPath -Force
-            $Installed = $true
-            Write-InstallLog "    Installed portable app: $AppPath"
+        $Setup = Get-ChildItem $SearchRoot -Filter "*-setup.exe" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'x64-Setup\.exe$' } |
+            Select-Object -First 1
+        if ($Setup) {
+            Write-InstallLog "    Running NSIS installer: $($Setup.Name)"
+            Start-Process -FilePath $Setup.FullName -ArgumentList "/S" -Wait
+            foreach ($candidate in @(
+                $AppPath,
+                (Join-Path $env:LOCALAPPDATA "Programs\com.securemodelroute.desktop\SecureModelRoute.exe")
+            )) {
+                if (Test-Path $candidate) {
+                    $AppPath = $candidate
+                    $Installed = $true
+                    break
+                }
+            }
         }
     }
 
@@ -112,6 +116,13 @@ function Install-SmrDesktop {
     }
 
     if ($Installed -and (Test-Path $AppPath)) {
+        $GuiLauncher = Join-Path $BinDir "SecureModelRoute.cmd"
+        @(
+            "@echo off",
+            "set SMR_CONFIG=$Config",
+            "start `"`" `"$AppPath`" --background %*"
+        ) | Set-Content -Path $GuiLauncher -Encoding ASCII
+
         $Wsh = New-Object -ComObject WScript.Shell
         foreach ($shortcut in @(
             @{ Dir = [Environment]::GetFolderPath("Programs"); Label = "Start menu" },
@@ -119,13 +130,14 @@ function Install-SmrDesktop {
         )) {
             $LinkPath = Join-Path $shortcut.Dir "SecureModelRoute.lnk"
             $Link = $Wsh.CreateShortcut($LinkPath)
-            $Link.TargetPath = $AppPath
-            $Link.WorkingDirectory = Split-Path -Parent $AppPath
+            $Link.TargetPath = $GuiLauncher
+            $Link.WorkingDirectory = $BinDir
             $Link.Description = "SecureModelRoute desktop"
             $Link.Save()
             Write-InstallLog "    $($shortcut.Label): $LinkPath"
         }
         Write-InstallLog "    App: $AppPath"
+        Write-InstallLog "    Launcher: $GuiLauncher"
         return $AppPath
     }
 
@@ -136,6 +148,10 @@ $DesktopAppPath = $null
 if ($Gui -or $All) {
     Write-InstallLog "==> Installing desktop app (tray GUI, embeds server)"
     $DesktopAppPath = Install-SmrDesktop -SearchRoot $Root
+    if ($DesktopAppPath) {
+        [Environment]::SetEnvironmentVariable("SMR_CONFIG", $Config, "User")
+        $env:SMR_CONFIG = $Config
+    }
 }
 
 # Headless service only when GUI is not installed (GUI keeps running in the system tray).
@@ -169,16 +185,16 @@ if ($Service -and -not $Gui) {
 if ($DesktopAppPath -and $All) {
     $StartupFolder = [Environment]::GetFolderPath("Startup")
     $StartupLink = Join-Path $StartupFolder "SecureModelRoute.lnk"
+    $GuiLauncher = Join-Path $BinDir "SecureModelRoute.cmd"
     $Wsh = New-Object -ComObject WScript.Shell
     $Link = $Wsh.CreateShortcut($StartupLink)
-    $Link.TargetPath = $DesktopAppPath
-    $Link.Arguments = "--background"
-    $Link.WorkingDirectory = Split-Path -Parent $DesktopAppPath
+    $Link.TargetPath = $GuiLauncher
+    $Link.WorkingDirectory = $BinDir
     $Link.Description = "SecureModelRoute (background tray)"
     $Link.Save()
     Write-InstallLog "    Logon startup: $StartupLink (--background, tray only)"
     if (-not $Quiet) {
-        Start-Process -FilePath $DesktopAppPath -ArgumentList "--background"
+        Start-Process -FilePath $GuiLauncher
         Write-InstallLog "    Tray app started"
     }
 }

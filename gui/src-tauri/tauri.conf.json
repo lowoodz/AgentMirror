@@ -14,7 +14,8 @@
         "width": 1100,
         "height": 760,
         "resizable": true,
-        "url": "http://127.0.0.1:8080/ui"
+        "url": "http://127.0.0.1:8080/ui",
+        "dragDropEnabled": false
       }
     ],
     "security": {
