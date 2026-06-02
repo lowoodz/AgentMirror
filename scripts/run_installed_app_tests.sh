@@ -13,7 +13,7 @@ SUMMARY="${LOG_DIR}/installed-app-${STAMP}.log"
 failures=0
 
 if [[ ! -f test_model_api_key.txt ]]; then
-  echo "Missing test_model_api_key.txt" >&2
+  echo "Missing test_model_api_key.txt — copy from test_model_api_key.example.txt (gitignored)" >&2
   exit 1
 fi
 

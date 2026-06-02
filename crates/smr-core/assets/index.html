@@ -1,34 +1,35 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SecureModelRoute</title>
   <link rel="icon" href="/favicon.ico" type="image/png" />
   <style>
-    :root { --bg:#0f1117; --card:#1a1d27; --text:#e6e8ef; --muted:#8b90a0; --accent:#5b8def; --ok:#3ecf8e; --warn:#f0ad4e; }
+    :root { --bg:#0f1117; --card:#1a1d27; --text:#e6e8ef; --muted:#8b90a0; --accent:#5b8def; --ok:#3ecf8e; --warn:#f0ad4e; --err:#f87171; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:-apple-system,BlinkMacSystemFont,sans-serif; background:var(--bg); color:var(--text); }
-    header { padding:14px 24px; border-bottom:1px solid #2a2f3d; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+    header { padding:14px 24px; border-bottom:1px solid #2a2f3d; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
     .brand { display:flex; align-items:center; gap:10px; }
     .brand-logo { width:32px; height:32px; flex-shrink:0; border-radius:8px; }
-  .switch { display:flex; align-items:center; gap:8px; margin-left:auto; }
+    .switch { display:flex; align-items:center; gap:8px; margin-left:auto; }
     .switch input { width:42px; height:22px; }
+    #langSelect { width:auto; min-width:88px; margin-left:8px; }
     main { display:flex; min-height:calc(100vh - 56px); }
-    nav { width:200px; border-right:1px solid #2a2f3d; padding:12px; }
+    nav { width:200px; border-right:1px solid #2a2f3d; padding:12px; flex-shrink:0; }
     nav button { display:block; width:100%; text-align:left; padding:10px 12px; margin-bottom:4px; background:transparent; border:none; color:var(--text); border-radius:8px; cursor:pointer; }
     nav button.active { background:#243049; color:var(--accent); }
     .content { flex:1; padding:20px; max-width:960px; }
     .panel { display:none; } .panel.active { display:block; }
     .card { background:var(--card); border:1px solid #2a2f3d; border-radius:12px; padding:16px; margin-bottom:16px; }
-    .hint { color:var(--muted); font-size:13px; }
+    .hint { color:var(--muted); font-size:13px; line-height:1.5; }
     .url { font-family:monospace; background:#12151d; padding:8px; border-radius:8px; border:1px solid #343948; word-break:break-all; }
     button.primary { background:var(--accent); color:#fff; border:none; border-radius:8px; padding:8px 14px; cursor:pointer; }
     button.secondary { background:#343948; color:var(--text); border:none; border-radius:8px; padding:8px 14px; cursor:pointer; margin-left:8px; }
     button.btn-del { background:#343948; color:var(--text); border:none; border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px; flex-shrink:0; }
     button.btn-del:hover { background:#3d4454; }
     .group-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
-    @media(max-width:900px){ .group-grid{ grid-template-columns:1fr; } }
+    @media(max-width:900px){ .group-grid{ grid-template-columns:1fr; } nav{width:160px;} }
     .group-card { background:#12151d; border:1px solid #343948; border-radius:10px; padding:12px; min-height:180px; }
     .group-card h4 { margin:0 0 8px; display:flex; align-items:center; gap:8px; }
     .model-row { display:flex; align-items:center; gap:8px; padding:6px; margin:4px 0; background:#0f1117; border-radius:6px; cursor:grab; font-size:13px; }
@@ -50,146 +51,188 @@
     .tag .tag-remove { cursor:pointer; color:#f87171; font-weight:bold; line-height:1; }
     input, select, textarea { background:#12151d; color:var(--text); border:1px solid #343948; border-radius:6px; padding:8px; width:100%; font-size:13px; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
-    td,th { padding:8px; border-bottom:1px solid #2a2f3d; text-align:left; }
+    td,th { padding:8px; border-bottom:1px solid #2a2f3d; text-align:left; vertical-align:top; }
     .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
     textarea.yaml { min-height:280px; font-family:monospace; font-size:12px; }
+    .traffic-body { font-family:monospace; font-size:11px; white-space:pre-wrap; word-break:break-word; max-height:160px; overflow:auto; background:#0f1117; padding:8px; border-radius:6px; margin-top:4px; }
+    #toast { position:fixed; bottom:24px; right:24px; padding:12px 18px; border-radius:10px; background:#243049; border:1px solid #343948; box-shadow:0 8px 24px rgba(0,0,0,.4); opacity:0; transform:translateY(8px); transition:opacity .2s, transform .2s; pointer-events:none; z-index:999; max-width:360px; font-size:14px; }
+    #toast.show { opacity:1; transform:translateY(0); }
+    #toast.ok { border-color:var(--ok); }
+    #toast.err { border-color:var(--err); }
   </style>
 </head>
 <body>
+<div id="toast" role="status" aria-live="polite"></div>
 <header>
   <div class="brand">
   <svg class="brand-logo" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <defs>
-      <linearGradient id="lg-bg" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#4a6280"/><stop offset="1" stop-color="#2f4563"/>
-      </linearGradient>
-      <linearGradient id="lg-shield" x1="256" y1="120" x2="256" y2="340" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#b8d4ff"/><stop offset="1" stop-color="#6ea8ff"/>
-      </linearGradient>
-      <linearGradient id="lg-route" x1="256" y1="256" x2="420" y2="160" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#8ec0ff"/><stop offset="1" stop-color="#5ee4a8"/>
-      </linearGradient>
+      <linearGradient id="lg-bg" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse"><stop stop-color="#4a6280"/><stop offset="1" stop-color="#2f4563"/></linearGradient>
+      <linearGradient id="lg-shield" x1="256" y1="120" x2="256" y2="340" gradientUnits="userSpaceOnUse"><stop stop-color="#b8d4ff"/><stop offset="1" stop-color="#6ea8ff"/></linearGradient>
+      <linearGradient id="lg-route" x1="256" y1="256" x2="420" y2="160" gradientUnits="userSpaceOnUse"><stop stop-color="#8ec0ff"/><stop offset="1" stop-color="#5ee4a8"/></linearGradient>
     </defs>
     <rect width="512" height="512" rx="112" fill="url(#lg-bg)"/>
     <path d="M256 248 C256 248 340 200 392 168" stroke="url(#lg-route)" stroke-width="16" stroke-linecap="round" fill="none"/>
     <path d="M256 264 C256 264 380 280 420 320" stroke="#8ec0ff" stroke-width="16" stroke-linecap="round" fill="none"/>
     <path d="M256 264 C256 264 132 280 92 320" stroke="#8ec0ff" stroke-width="16" stroke-linecap="round" fill="none"/>
     <path d="M256 248 C256 248 172 200 120 168" stroke="url(#lg-route)" stroke-width="16" stroke-linecap="round" fill="none"/>
-    <circle cx="392" cy="168" r="24" fill="#5ee4a8"/>
-    <circle cx="420" cy="320" r="20" fill="#8ec0ff"/>
-    <circle cx="92" cy="320" r="20" fill="#8ec0ff"/>
-    <circle cx="120" cy="168" r="24" fill="#5ee4a8"/>
+    <circle cx="392" cy="168" r="24" fill="#5ee4a8"/><circle cx="420" cy="320" r="20" fill="#8ec0ff"/>
+    <circle cx="92" cy="320" r="20" fill="#8ec0ff"/><circle cx="120" cy="168" r="24" fill="#5ee4a8"/>
     <path d="M256 128 L336 168 V248 C336 296 256 336 256 336 C256 336 176 296 176 248 V168 Z" fill="url(#lg-shield)"/>
     <circle cx="256" cy="248" r="30" fill="#243752" stroke="#b8d4ff" stroke-width="7"/>
     <path d="M244 248 L252 256 L272 232" stroke="#5ee4a8" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <h1 style="margin:0;font-size:18px">SecureModelRoute</h1>
   </div>
-  <span class="hint" id="statusText">加载中...</span>
+  <span class="hint" id="statusText">…</span>
+  <select id="langSelect" onchange="setLang(this.value)" aria-label="Language">
+    <option value="en">English</option>
+    <option value="zh">中文</option>
+  </select>
   <div class="switch">
-    <label class="hint">安全防护总开关</label>
+    <label class="hint" id="securityLabel" data-i18n="securityMaster">Security master switch</label>
     <input type="checkbox" id="securityMaster" onchange="toggleSecurity()" />
   </div>
 </header>
 <main>
-<nav>
-  <button class="active" data-tab="overview" onclick="showTab('overview',this)">概览</button>
-  <button data-tab="routing" onclick="showTab('routing',this)">模型路由</button>
-  <button data-tab="dlp" onclick="showTab('dlp',this)">数据防泄露</button>
-  <button data-tab="path-protection" onclick="showTab('path-protection',this)">重要路径防护</button>
-  <button data-tab="ops" onclick="showTab('ops',this)">操作拦截</button>
-  <button data-tab="logs" onclick="showTab('logs',this)">日志</button>
-  <button data-tab="advanced" onclick="showTab('advanced',this)">高级 YAML</button>
+<nav id="mainNav">
+  <button class="active" data-tab="overview" data-i18n="nav.overview" onclick="showTab('overview',this)">Overview</button>
+  <button data-tab="routing" data-i18n="nav.routing" onclick="showTab('routing',this)">Routing</button>
+  <button data-tab="dlp" data-i18n="nav.dlp" onclick="showTab('dlp',this)">DLP</button>
+  <button data-tab="path-protection" data-i18n="nav.path" onclick="showTab('path-protection',this)">Path protection</button>
+  <button data-tab="ops" data-i18n="nav.ops" onclick="showTab('ops',this)">Operations</button>
+  <button data-tab="logs" data-i18n="nav.logs" onclick="showTab('logs',this)">Logs</button>
+  <button data-tab="advanced" data-i18n="nav.advanced" onclick="showTab('advanced',this)">Advanced YAML</button>
 </nav>
 <div class="content">
 <section class="panel active" id="overview">
-  <div class="card"><h3>代理地址</h3><p class="hint">将 LLM 客户端 base_url 指向下方地址。</p><div class="url" id="proxyUrl">-</div><button class="primary" onclick="copyUrl()">复制</button></div>
+  <div class="card"><h3 data-i18n="overview.proxyTitle">Proxy URL</h3><p class="hint" data-i18n="overview.proxyHint">Point your LLM client base_url here.</p><div class="url" id="proxyUrl">-</div><button class="primary" data-i18n="copy" onclick="copyUrl()">Copy</button></div>
   <div class="card row2">
-    <div>默认组: <strong id="defaultGroup">-</strong></div>
-    <div>DLP: <strong id="dlpStatus">-</strong></div>
-    <div>操作安全: <strong id="opMode">-</strong></div>
-    <div>文件索引: <strong id="indexStatus">-</strong></div>
+    <div><span data-i18n="overview.defaultGroup">Default group</span>: <strong id="defaultGroup">-</strong></div>
+    <div><span data-i18n="overview.dlp">DLP</span>: <strong id="dlpStatus">-</strong></div>
+    <div><span data-i18n="overview.ops">Operation security</span>: <strong id="opMode">-</strong></div>
+    <div><span data-i18n="overview.index">File index</span>: <strong id="indexStatus">-</strong></div>
   </div>
 </section>
 <section class="panel" id="routing">
-  <div class="card"><p class="hint">拖拽调整组内 fallback 顺序。🟢 OpenAI / 🔵 Anthropic 自动识别。新增或删除模型后，点击「保存路由」才会写入配置。</p><div class="group-grid" id="groupGrid"></div><button class="primary" onclick="saveRouting()">保存路由</button></div>
+  <div class="card"><p class="hint" data-i18n="routing.hint">Drag to reorder fallback within each group. Click Save routing to apply.</p><div class="group-grid" id="groupGrid"></div><button class="primary" data-i18n="routing.save" onclick="saveRouting()">Save routing</button></div>
 </section>
 <section class="panel" id="dlp">
-  <div class="card"><h3>文件保护区</h3><div class="dropzone" id="fileDrop">拖入文件或文件夹路径（也可输入后回车）</div><input id="filePathInput" placeholder="/path/to/secrets" onkeydown="if(event.key==='Enter')addFileRule()" /><button class="primary" onclick="addFileRule()">添加</button><div id="fileRulesList"></div></div>
-  <div class="card"><h3>内容保护区</h3><input id="secretInput" placeholder="输入敏感词/API Key 后回车" onkeydown="if(event.key==='Enter')addSecretTag()" /><div class="tags" id="secretTags"></div></div>
-  <p class="hint">保存后将同时应用文件保护与内容保护规则。</p>
-  <button class="primary" onclick="saveConfig()">保存 DLP</button>
+  <div class="card"><h3 data-i18n="dlp.fileTitle">File protection zones</h3><p class="hint" data-i18n="dlp.fileFormatsHint">Indexed extensions: txt, md, json, yaml, rs, py, etc. Add more in Advanced YAML (formats). Extensionless files need a content rule below.</p><div class="dropzone" id="fileDrop" data-i18n="dlp.fileDrop">Drop a file or folder path</div><input id="filePathInput" placeholder="/path/to/secrets" onkeydown="if(event.key==='Enter')addFileRule()" /><button class="primary" data-i18n="add" onclick="addFileRule()">Add</button><div id="fileRulesList"></div></div>
+  <div class="card"><h3 data-i18n="dlp.contentTitle">Content protection zones</h3><input id="secretInput" data-i18n-placeholder="dlp.secretPh" placeholder="Sensitive text / API key, press Enter" onkeydown="if(event.key==='Enter')addSecretTag()" /><div class="tags" id="secretTags"></div></div>
+  <p class="hint" data-i18n="dlp.saveHint">Saving applies both file and content rules.</p>
+  <button class="primary" data-i18n="dlp.save" onclick="saveConfig('dlp')">Save DLP</button>
 </section>
 <section class="panel" id="path-protection">
   <div class="card">
-    <h3>重要路径防护</h3>
-    <p class="hint">拦截 Agent 对重要路径的删除、修改或访问操作。目录路径自动覆盖其子路径。</p>
-    <div class="dropzone" id="pathDrop">拖入文件或文件夹路径（也可输入后添加）</div>
+    <h3 data-i18n="path.title">Important path protection</h3>
+    <p class="hint" data-i18n="path.hint">Block delete, modify, or access on protected paths. Directories cover descendants.</p>
+    <div class="dropzone" id="pathDrop" data-i18n="path.drop">Drop path here</div>
     <div style="display:flex;gap:8px;margin:8px 0">
       <input id="pathProtectInput" placeholder="/path/to/protect" onkeydown="if(event.key==='Enter')addPathRule()" />
-      <select id="pathProtectLevel" style="width:140px;flex-shrink:0">
-        <option value="deny_access">禁止访问</option>
-        <option value="deny_modify">禁止修改</option>
-        <option value="deny_delete">禁止删除</option>
-      </select>
-      <button class="primary" onclick="addPathRule()" style="flex-shrink:0">添加</button>
+      <select id="pathProtectLevel" style="width:140px;flex-shrink:0"></select>
+      <button class="primary" data-i18n="add" onclick="addPathRule()" style="flex-shrink:0">Add</button>
     </div>
-    <table><thead><tr><th>路径</th><th>防护级别</th><th></th></tr></thead><tbody id="pathProtectTable"></tbody></table>
-    <button class="primary" onclick="saveConfig()">保存路径防护</button>
+    <table><thead><tr><th data-i18n="path.colPath">Path</th><th data-i18n="path.colLevel">Level</th><th></th></tr></thead><tbody id="pathProtectTable"></tbody></table>
+    <button class="primary" data-i18n="path.save" onclick="saveConfig('path')">Save path protection</button>
   </div>
 </section>
 <section class="panel" id="ops">
-  <div class="card"><h3>操作规则</h3><p class="hint">按操作类型 + 关键字拦截危险 tool 调用（命令 / API / 网络）。</p>
-  <table><thead><tr><th>行为</th><th>关键字</th><th></th></tr></thead><tbody id="opsTable"></tbody></table>
-  <button class="primary" onclick="addOpRule()">+ 添加规则</button><button class="primary" onclick="saveConfig()">保存</button></div>
+  <div class="card"><h3 data-i18n="ops.title">Operation rules</h3><p class="hint" data-i18n="ops.hint">Match dangerous tool calls by operation type and keyword.</p>
+  <table><thead><tr><th data-i18n="ops.colAction">Action</th><th data-i18n="ops.colPattern">Pattern</th><th></th></tr></thead><tbody id="opsTable"></tbody></table>
+  <button class="primary" onclick="addOpRule()" data-i18n="ops.add">+ Add rule</button><button class="primary" data-i18n="ops.save" onclick="saveConfig('ops')">Save</button></div>
 </section>
 <section class="panel" id="logs">
-  <div class="card"><h3>请求审计</h3><table><thead><tr><th>时间</th><th>摘要</th></tr></thead><tbody id="auditBody"></tbody></table></div>
-  <div class="card"><h3>事件</h3><button class="secondary" onclick="loadEvents()">刷新</button><table><thead><tr><th>时间</th><th>类型</th><th>消息</th></tr></thead><tbody id="logBody"></tbody></table></div>
+  <div class="card">
+    <h3 data-i18n="logs.trafficTitle">Traffic snapshots</h3>
+    <p class="hint" data-i18n="logs.trafficHint">When enabled, stores recent request/response JSON before and after SMR processing (truncated).</p>
+    <label class="hint" style="display:flex;align-items:center;gap:8px;margin:8px 0"><input type="checkbox" id="trafficToggle" onchange="toggleTrafficLog()" /> <span data-i18n="logs.trafficEnable">Enable traffic snapshots</span></label>
+    <button class="secondary" data-i18n="refresh" onclick="loadTraffic()">Refresh</button>
+    <div id="trafficList" style="margin-top:12px"></div>
+  </div>
+  <div class="card"><h3 data-i18n="logs.auditTitle">Request audits</h3><table><thead><tr><th data-i18n="logs.time">Time</th><th data-i18n="logs.summary">Summary</th></tr></thead><tbody id="auditBody"></tbody></table></div>
+  <div class="card"><h3 data-i18n="logs.eventsTitle">Events</h3><button class="secondary" data-i18n="refresh" onclick="loadEvents()">Refresh</button><table><thead><tr><th data-i18n="logs.time">Time</th><th data-i18n="logs.type">Type</th><th data-i18n="logs.message">Message</th></tr></thead><tbody id="logBody"></tbody></table></div>
 </section>
 <section class="panel" id="advanced">
-  <div class="card"><textarea class="yaml" id="configEditor"></textarea><button class="primary" onclick="saveConfig()">保存并应用</button><button class="secondary" onclick="reloadConfig()">重载</button></div>
+  <div class="card"><textarea class="yaml" id="configEditor"></textarea><button class="primary" data-i18n="advanced.save" onclick="saveConfig('yaml')">Save & apply</button><button class="secondary" data-i18n="advanced.reload" onclick="reloadConfig()">Reload</button></div>
 </section>
 </div>
 </main>
 <script>
-let cfg={};
-let routingDraft=null;
-function showTab(id,btn){document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');}
+const I18N={
+en:{
+'securityMaster':'Security master switch','nav.overview':'Overview','nav.routing':'Routing','nav.dlp':'DLP','nav.path':'Path protection','nav.ops':'Operations','nav.logs':'Logs','nav.advanced':'Advanced YAML',
+'overview.proxyTitle':'Proxy URL','overview.proxyHint':'Point your LLM client base_url here.','overview.defaultGroup':'Default group','overview.dlp':'DLP','overview.ops':'Operation security','overview.index':'File index',
+'copy':'Copy','add':'Add','refresh':'Refresh',
+'routing.hint':'Drag to reorder fallback within each group. Click Save routing to apply.','routing.save':'Save routing','group.high':'High precision','group.medium':'Balanced','group.low':'Lightweight',
+'dlp.fileTitle':'File protection zones','dlp.fileFormatsHint':'Indexed extensions: txt, md, json, yaml, rs, py, etc. Add more in Advanced YAML (formats). Extensionless files need a content rule below.','dlp.fileDrop':'Drop a file or folder path','dlp.contentTitle':'Content protection zones','dlp.secretPh':'Sensitive text / API key, press Enter','dlp.saveHint':'Saving applies both file and content rules.','dlp.save':'Save DLP','file.watching':'watching','file.disabled':'disabled',
+'path.title':'Important path protection','path.hint':'Block delete, modify, or access on protected paths. Directories cover descendants.','path.drop':'Drop path here','path.colPath':'Path','path.colLevel':'Level','path.save':'Save path protection','level.deny_access':'Deny access','level.deny_modify':'Deny modify','level.deny_delete':'Deny delete',
+'ops.title':'Operation rules','ops.hint':'Match dangerous tool calls by operation type and keyword.','ops.colAction':'Action','ops.colPattern':'Pattern','ops.add':'+ Add rule','ops.save':'Save','op.command':'Command','op.api':'API','op.network':'Network',
+'logs.trafficTitle':'Traffic snapshots','logs.trafficHint':'When enabled, stores recent request/response JSON before and after SMR processing (truncated).','logs.trafficEnable':'Enable traffic snapshots','logs.auditTitle':'Request audits','logs.eventsTitle':'Events','logs.time':'Time','logs.summary':'Summary','logs.type':'Type','logs.message':'Message',
+'advanced.save':'Save & apply','advanced.reload':'Reload',
+'status.running':'Running','status.dlpOn':'Enabled','status.dlpOff':'Disabled','status.indexReady':'Ready','status.indexBuilding':'Indexing…','status.loading':'Loading…',
+'toast.saved':'Saved and applied','toast.savedRouting':'Routing saved and applied','toast.copied':'Copied to clipboard','toast.failed':'Save failed','toast.reloadOk':'Reloaded from disk','toast.completeDraft':'Finish or cancel the new model form first','toast.fillModel':'Fill Base URL, model name, and API Key','toast.unnamed':'(unnamed)',
+'model.addTitle':'Add model','model.baseUrl':'Base URL','model.name':'Model name','model.apiKey':'API Key','model.confirm':'Confirm','model.cancel':'Cancel','delete':'Delete'
+},
+zh:{
+'securityMaster':'安全防护总开关','nav.overview':'概览','nav.routing':'模型路由','nav.dlp':'数据防泄露','nav.path':'重要路径防护','nav.ops':'操作拦截','nav.logs':'日志','nav.advanced':'高级 YAML',
+'overview.proxyTitle':'代理地址','overview.proxyHint':'将 LLM 客户端 base_url 指向下方地址。','overview.defaultGroup':'默认组','overview.dlp':'DLP','overview.ops':'操作安全','overview.index':'文件索引',
+'copy':'复制','add':'添加','refresh':'刷新',
+'routing.hint':'拖拽调整组内 fallback 顺序。🟢 OpenAI / 🔵 Anthropic 自动识别。点击「保存路由」后才会写入配置。','routing.save':'保存路由','group.high':'高精度','group.medium':'平衡','group.low':'轻量',
+'dlp.fileTitle':'文件保护区','dlp.fileFormatsHint':'默认可索引后缀：txt、md、json、yaml、rs、py 等；可在高级 YAML 的 formats 中追加。无后缀文件请用下方「内容保护区」单独添加。','dlp.fileDrop':'拖入文件或文件夹路径（也可输入后回车）','dlp.contentTitle':'内容保护区','dlp.secretPh':'输入敏感词/API Key 后回车','dlp.saveHint':'保存后将同时应用文件保护与内容保护规则。','dlp.save':'保存 DLP','file.watching':'监控中','file.disabled':'已禁用',
+'path.title':'重要路径防护','path.hint':'拦截 Agent 对重要路径的删除、修改或访问。目录路径自动覆盖其子路径。','path.drop':'拖入文件或文件夹路径','path.colPath':'路径','path.colLevel':'防护级别','path.save':'保存路径防护','level.deny_access':'禁止访问','level.deny_modify':'禁止修改','level.deny_delete':'禁止删除',
+'ops.title':'操作规则','ops.hint':'按操作类型 + 关键字拦截危险 tool 调用。','ops.colAction':'行为','ops.colPattern':'关键字','ops.add':'+ 添加规则','ops.save':'保存','op.command':'命令','op.api':'API','op.network':'网络',
+'logs.trafficTitle':'流量快照','logs.trafficHint':'开启后，在内存中保留最近若干条请求/响应 JSON（处理前与处理后，超长会截断），便于核对 DLP 与拦截效果。','logs.trafficEnable':'启用流量快照','logs.auditTitle':'请求审计','logs.eventsTitle':'事件','logs.time':'时间','logs.summary':'摘要','logs.type':'类型','logs.message':'消息',
+'advanced.save':'保存并应用','advanced.reload':'重载',
+'status.running':'运行中','status.dlpOn':'已启用','status.dlpOff':'已关闭','status.indexReady':'就绪','status.indexBuilding':'索引中…','status.loading':'加载中…',
+'toast.saved':'已保存并生效','toast.savedRouting':'路由已保存并生效','toast.copied':'已复制','toast.failed':'保存失败','toast.reloadOk':'已从磁盘重载','toast.completeDraft':'请先完成或取消「新增模型」表单','toast.fillModel':'请填写 Base URL、模型名称和 API Key','toast.unnamed':'(未命名)',
+'model.addTitle':'新增模型','model.baseUrl':'Base URL','model.name':'模型名称','model.apiKey':'API Key','model.confirm':'确认添加','model.cancel':'取消','delete':'删除'
+}};
+let lang=localStorage.getItem('smr_lang')||'en';
+let cfg={};let routingDraft=null;let toastTimer=null;
+function t(k){return (I18N[lang]||I18N.en)[k]||k;}
+function setLang(l){lang=l;localStorage.setItem('smr_lang',l);document.documentElement.lang=l==='zh'?'zh-CN':'en';langSelect.value=l;applyI18n();renderGroups();renderFileRules();renderPathRules();renderOps();loadStatus();}
+function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=t(el.dataset.i18n);});document.querySelectorAll('[data-i18n-placeholder]').forEach(el=>{el.placeholder=t(el.dataset.i18nPlaceholder);});fillPathLevelSelect();}
+function fillPathLevelSelect(){const sel=pathProtectLevel;if(!sel)return;const v=sel.value||'deny_access';sel.innerHTML=`<option value="deny_access">${t('level.deny_access')}</option><option value="deny_modify">${t('level.deny_modify')}</option><option value="deny_delete">${t('level.deny_delete')}</option>`;sel.value=v;}
+function showToast(msg,ok=true){const el=document.getElementById('toast');el.textContent=msg;el.className=ok?'ok show':'err show';clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2800);}
+function showTab(id,btn){document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');if(id==='logs')loadTraffic();}
 function inferProto(url){return (url||'').includes('anthropic')?'anthropic':'openai';}
-async function loadStatus(){const s=await(await fetch('/api/status')).json();statusText.textContent='运行中 · '+s.listen;proxyUrl.textContent=s.proxy_url;defaultGroup.textContent=s.default_group;dlpStatus.textContent=s.dlp_enabled?'已启用':'已关闭';opMode.textContent=s.operation_mode;indexStatus.textContent=s.file_index_ready?'就绪':'索引中...';securityMaster.checked=s.security_enabled;}
-async function loadConfig(){cfg=await(await fetch('/api/config')).json();configEditor.value=JSON.stringify(cfg,null,2);securityMaster.checked=cfg.pipeline?.security_enabled!==false;routingDraft=null;renderGroups();renderFileRules();renderSecretTags();renderPathRules();renderOps();}
-function renderGroups(){const g=groupGrid;g.innerHTML='';const groups=cfg.fallback_groups||{};for(const name of ['high','medium','low']){const card=document.createElement('div');card.className='group-card';const title=document.createElement('h4');title.textContent=(name==='high'?'高精度':name==='medium'?'平衡':'轻量')+(name===cfg.server?.default_fallback_group?' ★':'');card.appendChild(title);const list=document.createElement('div');list.dataset.group=name;list.ondragover=e=>e.preventDefault();list.ondrop=e=>{if(e.target===list)dropModelOnList(e,name);};(groups[name]||[]).forEach((m,i)=>list.appendChild(modelRow(m,i,name)));card.appendChild(list);if(routingDraft&&routingDraft.group===name)card.appendChild(modelAddForm(name));const add=document.createElement('button');add.className='secondary';add.textContent='+ 添加模型';add.onclick=()=>startAddModel(name);card.appendChild(add);g.appendChild(card);}}
-function modelRow(m,i,group){const row=document.createElement('div');row.className='model-row';row.draggable=true;row.dataset.group=group;row.dataset.index=i;row.ondragstart=e=>{e.dataTransfer.setData('text',JSON.stringify({group,index:i}));row.classList.add('dragging');};row.ondragend=()=>row.classList.remove('dragging');row.ondragover=e=>{e.preventDefault();e.stopPropagation();};row.ondrop=e=>dropModelAt(e,group,i);const proto=inferProto(m.base_url);const info=document.createElement('div');info.className='model-row-info';const title=document.createElement('div');title.className='model-row-title';title.innerHTML=`<span class="proto ${proto}">${proto==='openai'?'🟢 OpenAI':'🔵 Anthropic'}</span><span>${i+1}. ${m.model||'(未命名模型)'}</span>`;info.appendChild(title);const url=document.createElement('div');url.className='model-row-url';url.textContent=m.base_url||'';info.appendChild(url);row.appendChild(info);const del=document.createElement('button');del.className='btn-del';del.textContent='删除';del.onclick=e=>{e.stopPropagation();removeModel(group,i);};row.appendChild(del);return row;}
-function modelAddForm(group){const form=document.createElement('div');form.className='model-add-form';form.innerHTML=`<strong style="font-size:13px">新增模型</strong><label>Base URL</label><input id="draftBaseUrl" type="url" placeholder="https://api.openai.com/v1" value="${escAttr(routingDraft.base_url||'')}"/><label>模型名称</label><input id="draftModel" placeholder="gpt-4o-mini" value="${escAttr(routingDraft.model||'')}"/><label>API Key</label><input id="draftApiKey" type="password" placeholder="sk-..." value="${escAttr(routingDraft.api_key||'')}"/><div class="form-actions"><button type="button" class="primary" onclick="confirmAddModel('${group}')">确认添加</button><button type="button" class="secondary" onclick="cancelAddModel()">取消</button></div>`;return form;}
+async function loadStatus(){const s=await(await fetch('/api/status')).json();statusText.textContent=`${t('status.running')} · ${s.listen}`;proxyUrl.textContent=s.proxy_url;defaultGroup.textContent=s.default_group;dlpStatus.textContent=s.dlp_enabled?t('status.dlpOn'):t('status.dlpOff');opMode.textContent=s.operation_mode;indexStatus.textContent=s.file_index_ready?t('status.indexReady'):t('status.indexBuilding');securityMaster.checked=s.security_enabled;if(trafficToggle)trafficToggle.checked=!!s.save_traffic_bodies;}
+async function loadConfig(){cfg=await(await fetch('/api/config')).json();configEditor.value=JSON.stringify(cfg,null,2);securityMaster.checked=cfg.pipeline?.security_enabled!==false;if(!cfg.logging)cfg.logging={};if(trafficToggle)trafficToggle.checked=!!cfg.logging.save_traffic_bodies;routingDraft=null;renderGroups();renderFileRules();renderSecretTags();renderPathRules();renderOps();}
+function groupLabel(name){return name==='high'?t('group.high'):name==='medium'?t('group.medium'):t('group.low');}
+function renderGroups(){const g=groupGrid;g.innerHTML='';const groups=cfg.fallback_groups||{};for(const name of ['high','medium','low']){const card=document.createElement('div');card.className='group-card';const title=document.createElement('h4');title.textContent=groupLabel(name)+(name===cfg.server?.default_fallback_group?' ★':'');card.appendChild(title);const list=document.createElement('div');list.dataset.group=name;list.ondragover=e=>e.preventDefault();list.ondrop=e=>{if(e.target===list)dropModelOnList(e,name);};(groups[name]||[]).forEach((m,i)=>list.appendChild(modelRow(m,i,name)));card.appendChild(list);if(routingDraft&&routingDraft.group===name)card.appendChild(modelAddForm(name));const add=document.createElement('button');add.className='secondary';add.textContent='+ '+t('model.addTitle');add.onclick=()=>startAddModel(name);card.appendChild(add);g.appendChild(card);}}
+function modelRow(m,i,group){const row=document.createElement('div');row.className='model-row';row.draggable=true;row.dataset.group=group;row.dataset.index=i;row.ondragstart=e=>{e.dataTransfer.setData('text',JSON.stringify({group,index:i}));row.classList.add('dragging');};row.ondragend=()=>row.classList.remove('dragging');row.ondragover=e=>{e.preventDefault();e.stopPropagation();};row.ondrop=e=>dropModelAt(e,group,i);const proto=inferProto(m.base_url);const info=document.createElement('div');info.className='model-row-info';const title=document.createElement('div');title.className='model-row-title';title.innerHTML=`<span class="proto ${proto}">${proto==='openai'?'🟢 OpenAI':'🔵 Anthropic'}</span><span>${i+1}. ${m.model||t('toast.unnamed')}</span>`;info.appendChild(title);const url=document.createElement('div');url.className='model-row-url';url.textContent=m.base_url||'';info.appendChild(url);row.appendChild(info);const del=document.createElement('button');del.className='btn-del';del.textContent=t('delete');del.onclick=e=>{e.stopPropagation();removeModel(group,i);};row.appendChild(del);return row;}
+function modelAddForm(group){const form=document.createElement('div');form.className='model-add-form';form.innerHTML=`<strong style="font-size:13px">${t('model.addTitle')}</strong><label>${t('model.baseUrl')}</label><input id="draftBaseUrl" type="url" placeholder="https://api.openai.com/v1" value="${escAttr(routingDraft.base_url||'')}"/><label>${t('model.name')}</label><input id="draftModel" placeholder="gpt-4o-mini" value="${escAttr(routingDraft.model||'')}"/><label>${t('model.apiKey')}</label><input id="draftApiKey" type="password" placeholder="sk-..." value="${escAttr(routingDraft.api_key||'')}"/><div class="form-actions"><button type="button" class="primary" onclick="confirmAddModel('${group}')">${t('model.confirm')}</button><button type="button" class="secondary" onclick="cancelAddModel()">${t('model.cancel')}</button></div>`;return form;}
 function escAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
-function startAddModel(group){routingDraft={group,base_url:'',model:'',api_key:''};renderGroups();const el=document.getElementById('draftBaseUrl');if(el)el.focus();}
-function confirmAddModel(group){const base_url=(document.getElementById('draftBaseUrl')?.value||'').trim();const model=(document.getElementById('draftModel')?.value||'').trim();const api_key=(document.getElementById('draftApiKey')?.value||'').trim();if(!base_url||!model||!api_key){alert('请填写 Base URL、模型名称和 API Key');return;}if(!cfg.fallback_groups[group])cfg.fallback_groups[group]=[];cfg.fallback_groups[group].push({id:'model-'+Date.now(),base_url,model,api_key,timeout_secs:120});routingDraft=null;renderGroups();}
+function startAddModel(group){routingDraft={group,base_url:'',model:'',api_key:''};renderGroups();document.getElementById('draftBaseUrl')?.focus();}
+function confirmAddModel(group){const base_url=(document.getElementById('draftBaseUrl')?.value||'').trim();const model=(document.getElementById('draftModel')?.value||'').trim();const api_key=(document.getElementById('draftApiKey')?.value||'').trim();if(!base_url||!model||!api_key){showToast(t('toast.fillModel'),false);return;}if(!cfg.fallback_groups[group])cfg.fallback_groups[group]=[];cfg.fallback_groups[group].push({id:'model-'+Date.now(),base_url,model,api_key,timeout_secs:120});routingDraft=null;renderGroups();}
 function cancelAddModel(){routingDraft=null;renderGroups();}
-function removeModel(group,i){const arr=cfg.fallback_groups?.[group];if(!arr)return;arr.splice(i,1);renderGroups();}
+function removeModel(group,i){cfg.fallback_groups?.[group]?.splice(i,1);renderGroups();}
 function moveModel(fromGroup,fromIndex,toGroup,toIndex){const src=cfg.fallback_groups?.[fromGroup];if(!src||fromIndex<0||fromIndex>=src.length)return;const[item]=src.splice(fromIndex,1);if(!cfg.fallback_groups[toGroup])cfg.fallback_groups[toGroup]=[];const dest=cfg.fallback_groups[toGroup];let insertAt=Math.max(0,Math.min(toIndex,dest.length));if(fromGroup===toGroup&&fromIndex<insertAt)insertAt--;dest.splice(insertAt,0,item);renderGroups();}
 function dropModelAt(e,toGroup,toIndex){e.preventDefault();e.stopPropagation();const raw=e.dataTransfer.getData('text');if(!raw)return;const d=JSON.parse(raw);moveModel(d.group,d.index,toGroup,toIndex);}
-function dropModelOnList(e,group){e.preventDefault();const raw=e.dataTransfer.getData('text');if(!raw)return;const d=JSON.parse(raw);const len=(cfg.fallback_groups[group]||[]).length;moveModel(d.group,d.index,group,len);}
-function renderFileRules(){fileRulesList.innerHTML='';(cfg.file_rules||[]).forEach((r,i)=>{const row=document.createElement('div');row.style.display='flex';row.style.alignItems='center';row.style.gap='8px';row.style.margin='4px 0';const d=document.createElement('span');d.className='hint';d.style.flex='1';d.textContent=`📁 ${r.path} ${r.enabled?'(监控中)':'(已禁用)'}`;row.appendChild(d);const del=document.createElement('button');del.className='btn-del';del.textContent='删除';del.onclick=()=>removeFileRule(i);row.appendChild(del);fileRulesList.appendChild(row);});}
-function removeFileRule(i){cfg.file_rules?.splice(i,1);renderFileRules();}
-function addFileRule(){const p=filePathInput.value.trim();if(!p)return;cfg.file_rules=cfg.file_rules||[];cfg.file_rules.push({id:'file-'+Date.now(),path:p,enabled:true,recursive:true,trigger_window:5,match_mode:'fragment',min_fragment_len:12});filePathInput.value='';renderFileRules();}
-function renderSecretTags(){secretTags.innerHTML='';(cfg.content_rules||[]).forEach((r,i)=>{if(!r.enabled)return;const t=document.createElement('div');t.className='tag';const text=document.createElement('span');text.className='tag-text';text.textContent=`${r.value.slice(0,20)}${r.value.length>20?'…':''}`;t.appendChild(text);const del=document.createElement('span');del.className='tag-remove';del.textContent='×';del.title='删除';del.onclick=()=>removeContentRule(i);t.appendChild(del);secretTags.appendChild(t);});}
+function dropModelOnList(e,group){e.preventDefault();const raw=e.dataTransfer.getData('text');if(!raw)return;const d=JSON.parse(raw);moveModel(d.group,d.index,group,(cfg.fallback_groups[group]||[]).length);}
+function renderFileRules(){fileRulesList.innerHTML='';(cfg.file_rules||[]).forEach((r,i)=>{const row=document.createElement('div');row.style.cssText='display:flex;align-items:center;gap:8px;margin:4px 0';const d=document.createElement('span');d.className='hint';d.style.flex='1';d.textContent=`📁 ${r.path} (${r.enabled?t('file.watching'):t('file.disabled')})`;row.appendChild(d);const del=document.createElement('button');del.className='btn-del';del.textContent=t('delete');del.onclick=()=>{cfg.file_rules.splice(i,1);renderFileRules();};row.appendChild(del);fileRulesList.appendChild(row);});}
+function addFileRule(){const p=filePathInput.value.trim();if(!p)return;cfg.file_rules=cfg.file_rules||[];cfg.file_rules.push({id:'file-'+Date.now(),path:p,enabled:true,recursive:true,trigger_window:5,match_mode:'fragment',min_fragment_len:12,formats:['txt','md','json','yaml','yml','rs','py']});filePathInput.value='';renderFileRules();}
+function renderSecretTags(){secretTags.innerHTML='';(cfg.content_rules||[]).forEach((r,i)=>{if(!r.enabled)return;const tag=document.createElement('div');tag.className='tag';const text=document.createElement('span');text.textContent=(r.value.slice(0,20))+(r.value.length>20?'…':'');tag.appendChild(text);const del=document.createElement('span');del.className='tag-remove';del.textContent='×';del.onclick=()=>{cfg.content_rules.splice(i,1);renderSecretTags();};tag.appendChild(del);secretTags.appendChild(tag);});}
 function addSecretTag(){const v=secretInput.value.trim();if(!v)return;cfg.content_rules=cfg.content_rules||[];cfg.content_rules.push({id:'secret-'+Date.now(),enabled:true,match_mode:'full',category:'secret',value:v});secretInput.value='';renderSecretTags();}
-function removeContentRule(i){cfg.content_rules?.splice(i,1);renderSecretTags();}
-function renderPathRules(){pathProtectTable.innerHTML='';(cfg.path_protection_rules||[]).forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML=`<td><input value="${escAttr(r.path||'')}" onchange="cfg.path_protection_rules[${i}].path=this.value"/></td><td><select onchange="cfg.path_protection_rules[${i}].level=this.value"><option value="deny_delete" ${r.level==='deny_delete'?'selected':''}>禁止删除</option><option value="deny_modify" ${r.level==='deny_modify'?'selected':''}>禁止修改</option><option value="deny_access" ${r.level==='deny_access'?'selected':''}>禁止访问</option></select></td><td><button class="btn-del" onclick="cfg.path_protection_rules.splice(${i},1);renderPathRules()">删除</button></td>`;pathProtectTable.appendChild(tr);});}
+function levelLabel(l){return l==='deny_delete'?t('level.deny_delete'):l==='deny_modify'?t('level.deny_modify'):t('level.deny_access');}
+function renderPathRules(){pathProtectTable.innerHTML='';(cfg.path_protection_rules||[]).forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML=`<td><input value="${escAttr(r.path||'')}" onchange="cfg.path_protection_rules[${i}].path=this.value"/></td><td><select onchange="cfg.path_protection_rules[${i}].level=this.value"><option value="deny_delete" ${r.level==='deny_delete'?'selected':''}>${t('level.deny_delete')}</option><option value="deny_modify" ${r.level==='deny_modify'?'selected':''}>${t('level.deny_modify')}</option><option value="deny_access" ${r.level==='deny_access'?'selected':''}>${t('level.deny_access')}</option></select></td><td><button class="btn-del" onclick="cfg.path_protection_rules.splice(${i},1);renderPathRules()">${t('delete')}</button></td>`;pathProtectTable.appendChild(tr);});}
 function addPathRule(){const p=(pathProtectInput.value||'').trim();if(!p)return;cfg.path_protection_rules=cfg.path_protection_rules||[];cfg.path_protection_rules.push({id:'path-'+Date.now(),enabled:true,path:p,level:pathProtectLevel.value});pathProtectInput.value='';renderPathRules();}
-function renderOps(){opsTable.innerHTML='';(cfg.operation_rules||[]).forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML=`<td><select onchange="cfg.operation_rules[${i}].operation=this.value"><option value="command_exec" ${r.operation==='command_exec'?'selected':''}>命令</option><option value="api_call" ${r.operation==='api_call'?'selected':''}>API</option><option value="network_access" ${r.operation==='network_access'?'selected':''}>网络</option></select></td><td><input value="${r.object?.pattern||''}" onchange="cfg.operation_rules[${i}].object.pattern=this.value"/></td><td><button class="secondary" onclick="cfg.operation_rules.splice(${i},1);renderOps()">删除</button></td>`;opsTable.appendChild(tr);});}
+function opLabel(o){return o==='api_call'?t('op.api'):o==='network_access'?t('op.network'):t('op.command');}
+function renderOps(){opsTable.innerHTML='';(cfg.operation_rules||[]).forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML=`<td><select onchange="cfg.operation_rules[${i}].operation=this.value"><option value="command_exec" ${r.operation==='command_exec'?'selected':''}>${t('op.command')}</option><option value="api_call" ${r.operation==='api_call'?'selected':''}>${t('op.api')}</option><option value="network_access" ${r.operation==='network_access'?'selected':''}>${t('op.network')}</option></select></td><td><input value="${escAttr(r.object?.pattern||'')}" onchange="cfg.operation_rules[${i}].object.pattern=this.value"/></td><td><button class="btn-del" onclick="cfg.operation_rules.splice(${i},1);renderOps()">${t('delete')}</button></td>`;opsTable.appendChild(tr);});}
 function addOpRule(){cfg.operation_rules=cfg.operation_rules||[];cfg.operation_rules.push({id:'op-'+Date.now(),enabled:true,operation:'command_exec',object:{pattern:'',is_regex:false}});renderOps();}
-function toggleSecurity(){cfg.pipeline=cfg.pipeline||{};cfg.pipeline.security_enabled=securityMaster.checked;saveConfig();}
-async function saveRouting(){if(routingDraft){alert('请先完成或取消「新增模型」表单');return;}await saveConfig();}
-async function saveConfig(){try{const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});if(!r.ok)throw new Error(await r.text());configEditor.value=JSON.stringify(cfg,null,2);await loadStatus();alert('已保存');}catch(e){alert('失败: '+e.message);}}
-async function reloadConfig(){await fetch('/api/reload',{method:'PUT'});await loadConfig();await loadStatus();}
-function copyUrl(){navigator.clipboard.writeText(proxyUrl.textContent);alert('已复制');}
-async function loadEvents(){const d=await(await fetch('/api/events?limit=50')).json();logBody.innerHTML='';for(const e of d.events||[]){const k=typeof e.kind==='string'?e.kind:Object.keys(e.kind||{})[0];logBody.innerHTML+=`<tr><td>${(e.timestamp||'').slice(0,19).replace('T',' ')}</td><td>${k}</td><td>${e.message}</td></tr>`;}}
+async function toggleTrafficLog(){cfg.logging=cfg.logging||{level:'info',redact_content:true};cfg.logging.save_traffic_bodies=trafficToggle.checked;await saveConfig('traffic',true);}
+function toggleSecurity(){cfg.pipeline=cfg.pipeline||{};cfg.pipeline.security_enabled=securityMaster.checked;saveConfig('security',true);}
+async function saveRouting(){if(routingDraft){showToast(t('toast.completeDraft'),false);return;}await saveConfig('routing');}
+async function saveConfig(section,quiet){try{const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});if(!r.ok)throw new Error(await r.text());configEditor.value=JSON.stringify(cfg,null,2);await loadStatus();if(!quiet){const msg=section==='routing'?t('toast.savedRouting'):t('toast.saved');showToast(msg,true);}}catch(e){showToast(t('toast.failed')+': '+e.message,false);}}
+async function reloadConfig(){await fetch('/api/reload',{method:'PUT',body:'{}'});await loadConfig();await loadStatus();showToast(t('toast.reloadOk'));}
+function copyUrl(){navigator.clipboard.writeText(proxyUrl.textContent);showToast(t('toast.copied'));}
+async function loadEvents(){const d=await(await fetch('/api/events?limit=50')).json();logBody.innerHTML='';for(const e of d.events||[]){const k=typeof e.kind==='string'?e.kind:Object.keys(e.kind||{})[0];logBody.innerHTML+=`<tr><td>${(e.timestamp||'').slice(0,19).replace('T',' ')}</td><td>${k}</td><td>${escAttr(e.message||'')}</td></tr>`;}}
 async function loadAudits(){const d=await(await fetch('/api/audits?limit=30')).json();auditBody.innerHTML='';for(const a of d.audits||[]){auditBody.innerHTML+=`<tr><td>${(a.timestamp||'').slice(0,19).replace('T',' ')}</td><td>${a.protocol} | ${(a.fallback_chain||[]).join('→')} | DLP:${a.dlp_replacements} Safety:${a.safety_blocks}</td></tr>`;}}
+async function loadTraffic(){const d=await(await fetch('/api/traffic?limit=20')).json();trafficList.innerHTML='';if(!d.records?.length){trafficList.innerHTML=`<p class="hint">${lang==='zh'?'暂无快照':'No snapshots yet'}</p>`;return;}for(const r of d.records){const div=document.createElement('div');div.style.marginBottom='12px';div.innerHTML=`<div class="hint">${(r.timestamp||'').slice(0,19).replace('T',' ')} · ${escAttr(r.phase)} · ${r.bytes} B · session ${escAttr(r.session_id?.slice(0,8)||'')}</div><div class="traffic-body">${escAttr(r.body||'')}</div>`;trafficList.appendChild(div);}}
 const fileDrop=document.getElementById('fileDrop');fileDrop.ondragover=e=>{e.preventDefault();fileDrop.classList.add('dragover');};fileDrop.ondragleave=()=>fileDrop.classList.remove('dragover');fileDrop.ondrop=e=>{e.preventDefault();fileDrop.classList.remove('dragover');const p=e.dataTransfer.getData('text/plain')||e.dataTransfer.files?.[0]?.path;if(p){filePathInput.value=p;addFileRule();}};
 const pathDrop=document.getElementById('pathDrop');pathDrop.ondragover=e=>{e.preventDefault();pathDrop.classList.add('dragover');};pathDrop.ondragleave=()=>pathDrop.classList.remove('dragover');pathDrop.ondrop=e=>{e.preventDefault();pathDrop.classList.remove('dragover');const p=e.dataTransfer.getData('text/plain')||e.dataTransfer.files?.[0]?.path;if(p){pathProtectInput.value=p;addPathRule();}};
-loadStatus();loadConfig();loadEvents();loadAudits();setInterval(()=>{loadEvents();loadAudits();},8000);
+langSelect.value=lang;document.documentElement.lang=lang==='zh'?'zh-CN':'en';applyI18n();statusText.textContent=t('status.loading');loadStatus();loadConfig();loadEvents();loadAudits();loadTraffic();setInterval(()=>{loadEvents();loadAudits();if(document.getElementById('logs').classList.contains('active'))loadTraffic();},8000);
 </script>
 </body>
 </html>

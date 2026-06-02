@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $Keys = Join-Path $Root "test_model_api_key.txt"
 if (-not (Test-Path $Keys)) {
-    Write-Host "Skip live tests: test_model_api_key.txt not found"
+    Write-Host "Skip live tests: copy test_model_api_key.example.txt to test_model_api_key.txt (gitignored) and add your keys"
     exit 0
 }
 

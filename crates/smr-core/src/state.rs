@@ -10,6 +10,7 @@ use crate::events::{EventKind, EventLog};
 use crate::ops::OperationSecurity;
 use crate::router::Router;
 use crate::storage::AuditStore;
+use crate::traffic::TrafficLog;
 
 pub struct AppEngines {
     pub config: AppConfig,
@@ -47,6 +48,7 @@ pub struct SharedApp {
     pub config_path: PathBuf,
     pub events: Arc<EventLog>,
     pub storage: Arc<AuditStore>,
+    pub traffic: Arc<TrafficLog>,
     inner: RwLock<AppEngines>,
 }
 
@@ -61,6 +63,7 @@ impl SharedApp {
             config_path,
             events,
             storage,
+            traffic: TrafficLog::new(200),
             inner: RwLock::new(AppEngines::from_config(config)?),
         }))
     }

@@ -52,6 +52,17 @@ impl ProxyService {
         let wants_stream = is_json && request_wants_stream(body);
         let mut client_protocol = ApiProtocol::OpenAi;
         let mut forward_body = body.to_vec();
+        let traffic_cfg = &snap.config.logging;
+
+        if traffic_cfg.save_traffic_bodies && is_json && !body.is_empty() {
+            self.app.traffic.record(
+                &audit_id,
+                session_id,
+                "request_in",
+                body,
+                traffic_cfg.traffic_max_body_bytes,
+            );
+        }
 
         if is_json && !body.is_empty() {
             let mut json = parse_json_body(body)?;
@@ -97,6 +108,16 @@ impl ProxyService {
         } else if is_json {
             let json = serde_json::json!({});
             client_protocol = detect_protocol(path, headers, &json);
+        }
+
+        if traffic_cfg.save_traffic_bodies && is_json && !forward_body.is_empty() {
+            self.app.traffic.record(
+                &audit_id,
+                session_id,
+                "request_out",
+                &forward_body,
+                traffic_cfg.traffic_max_body_bytes,
+            );
         }
 
         let (group_name, group) = snap.router.resolve_group(*fallback_group)?;
@@ -165,6 +186,16 @@ impl ProxyService {
                 }
             }
             RouteBody::Buffered(mut resp_body) => {
+                if traffic_cfg.save_traffic_bodies && !resp_body.is_empty() {
+                    self.app.traffic.record(
+                        &audit_id,
+                        session_id,
+                        "response_in",
+                        &resp_body,
+                        traffic_cfg.traffic_max_body_bytes,
+                    );
+                }
+
                 if client_protocol != endpoint_protocol
                     && !resp_body.is_empty()
                     && attempt.status.is_success()
@@ -247,6 +278,16 @@ impl ProxyService {
                             }
                         }
                     }
+                }
+
+                if traffic_cfg.save_traffic_bodies && !resp_body.is_empty() {
+                    self.app.traffic.record(
+                        &audit_id,
+                        session_id,
+                        "response_out",
+                        &resp_body,
+                        traffic_cfg.traffic_max_body_bytes,
+                    );
                 }
 
                 ProxyBody::Buffered(resp_body)

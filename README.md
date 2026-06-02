@@ -1,256 +1,91 @@
 # SecureModelRoute
 
-本地大模型安全路由代理：**LLM API 自动 fallback**、**数据泄露防护（DLP）**、**操作安全（请求/响应双侧）**、**重要路径防护**，内置 Web 管理界面与可选系统托盘桌面应用。
+**SecureModelRoute** is a local security proxy for LLM clients. Point your IDE or agent at `http://127.0.0.1:8080/v1` instead of a cloud API directly. The proxy adds **model routing with automatic fallback**, **data-loss prevention (DLP)**, **operation safety**, and **protected-path rules**—with a built-in Web admin UI and an optional system-tray desktop app.
 
-## 功能
+**中文文档:** [README.zh-CN.md](README.zh-CN.md)
 
-| 模块 | 说明 |
-|------|------|
-| **大模型路由** | 多组 fallback（如 high/medium/low），组内按顺序自动切换；上游错误、malformed JSON、流式未出首 token 时触发 fallback；OpenAI ↔ Anthropic 请求/响应双向协议转换 |
-| **DLP（请求侧）** | **内容保护区**：全文/片段匹配（`min_fragment_len` + `min_fragment_ratio`），Secret 类随机替换并尽量保持英文大小写；**文件保护区**：磁盘索引（SQLite 签名 + Bloom 预过滤 + mmap 校验），流式分块建索引，SessionGuard 仅保存规则元数据；`notify` 监听变更并重建 |
-| **SessionGuard** | 仅在 **tool_call / tool_result** 文本中检测受保护路径；响应侧 tool_call 也可触发；触发后按 `trigger_window` 对后续 N 次请求持续脱敏 |
-| **操作安全** | 请求侧与响应侧 **tool 相关字段** 均检查；`observe`（仅记录）/ `enforce`（拦截）；规则按 command_exec / api_call / network_access + 关键字 |
-| **路径防护** | 独立规则：`deny_delete` / `deny_modify` / `deny_access`；目录自动覆盖子路径；与操作安全共用拦截逻辑 |
-| **内置凭证预设** | `pipeline.builtin_credential_presets: true` 时匹配 `sk-`、`AKIA`、`ghp_` 等前缀模板（全文匹配，不杀片段） |
-| **Web 管理界面** | 见下节；保存即写 YAML 并热加载，SessionGuard 状态保留 |
-| **桌面应用（可选）** | Tauri 托盘应用：**内嵌** `smr` 服务；关主窗口隐藏到托盘/菜单栏，进程与服务不退出 |
-| **审计与持久化** | 结构化请求审计写入 SQLite；内存事件日志可通过 API 查询 |
-| **SSE 流式** | 流式响应中增量解析 tool_calls 并做操作安全/DLP；首个 content token 发出后锁定当前 endpoint，不再 fallback |
+## Features
 
-## 安全流水线（实现概要）
+| Area | What it does |
+|------|----------------|
+| **Model routing** | Multiple fallback groups (`high` / `medium` / `low`). Endpoints are tried in order on upstream errors, malformed JSON, or missing first stream token. OpenAI ↔ Anthropic request/response conversion. |
+| **DLP — content** | Full-text or fragment rules (`min_fragment_len`, `min_fragment_ratio`). Secrets are replaced with random tokens while preserving case where possible. Optional built-in credential presets (`sk-`, `AKIA`, `ghp_`, …). |
+| **DLP — files** | Disk-backed index (SQLite signatures + Bloom filter + byte verification) for large corpora. Streaming chunked indexing; `notify` rebuilds on file changes. |
+| **SessionGuard** | Activates when **tool_call** / **tool_result** text references protected paths/files. Redacts matching content for the next **N** requests (`trigger_window`). |
+| **Operation security** | Inspects tool-related fields on **request and response** (`observe` or `enforce`). Rules by `command_exec`, `api_call`, `network_access` + keywords. |
+| **Path protection** | `deny_delete` / `deny_modify` / `deny_access` on paths; directories cover descendants. |
+| **Web UI** | Configure routing, DLP, path rules, and ops at `/ui`. Saves YAML and hot-reloads while keeping SessionGuard state. |
+| **Desktop app (optional)** | Tauri tray app embeds the proxy; closing the window hides to tray/menu bar without stopping the service. |
+| **Audit** | Structured request audit in SQLite; live events via API. |
 
-**请求进入代理：**
+Global master switch: `pipeline.security_enabled` (also in the Web UI header). When off, DLP and operation security are disabled.
 
-1. 解析 JSON，检测客户端协议（OpenAI / Anthropic）。
-2. 若开启操作安全：仅对 tool 相关字段做危险行为匹配（含路径防护）。
-3. 若开启 DLP：注册路径触发器；对会话内已激活的 SessionGuard 做内容/文件片段脱敏。
-4. 按 fallback 组转发；必要时经 UnifiedRequest 做跨协议请求转换。
+## Quick start
 
-**响应返回客户端：**
-
-1. 非流式：检查 tool_calls（操作安全 + 响应侧 SessionGuard 触发）；按客户端协议做响应格式转换。
-2. 流式（SSE）：边转发边扫描；操作安全/DLP 在 chunk 管道中处理；首 token 前允许组内 fallback。
-
-全局总开关：`pipeline.security_enabled`（Web 界面右上角「安全防护总开关」）。关闭后 DLP 与操作安全均不生效。
-
-## 大语料文件 DLP（磁盘索引）
-
-面向 **16GB 内存 / 8 核笔记本、约 10GB 文本语料** 的可扩展方案（替代原「全量读入 RAM + Aho-Corasick」）：
-
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| **P0** | 磁盘索引：流式分块 → xxHash 签名 → SQLite；Bloom 预过滤；命中后 mmap/读文件校验；SessionGuard 仅存 `FileRule` | **已实现** |
-| **P1** | 增量索引：按文件 mtime/size 跳过未变文件；`gen/{generation}/` 世代目录 + `current.json` 原子切换 | **已实现** |
-| **P2** | 扫描优化：haystack 分块 + 多线程 Bloom；ripgrep 字面量预过滤（≥8KB haystack） | **已实现** |
-| **P3** | 超大 haystack（>2MB 单字段）流式扫描与配额 | 规划中 |
-
-**索引目录：** `~/.config/securemodelroute/file-index/{rule_id}/`
-
-| 文件 | 说明 |
-|------|------|
-| `current.json` | 当前生效世代指针 |
-| `gen/{generation}/index.db` | 签名表 `(sig_hash, path, byte_offset, byte_len)` |
-| `gen/{generation}/bloom.bin` | 签名 Bloom 过滤器（建索引后加载到内存） |
-| `gen/{generation}/files.json` | 各文件 mtime/size 指纹（增量比对用） |
-| `gen/{generation}/manifest.json` | 世代、签名数、文件数、skipped/reindexed 统计 |
-| `gen/{generation}/literals.json` | rg 预过滤用字面量样本（建索引时从签名抽取） |
-
-**运行时流程：**
-
-1. 后台线程为每条启用的 `file_rules` 建索引；`/api/status` 的 `file_index_ready` 为 true 后生效。
-2. tool_call / tool_result 文本命中受保护路径 **且提到具体文件** → SessionGuard 激活（**仅扫描 tool 中点名的文件**，不扫同目录其它文件；多条规则时仍取最具体路径规则）。
-3. 后续 N 次请求（`trigger_window`）对 JSON 提取字段做 haystack 扫描：Bloom → SQLite 查候选 → 读源文件字节校验 → 脱敏。
-
-**YAML 可调参数（`file_rules[].index`）：**
-
-```yaml
-file_rules:
-  - id: corp-docs
-    path: /data/docs
-    enabled: true
-    recursive: true
-    trigger_window: 5
-    match_mode: fragment
-    min_fragment_len: 32
-    formats: [txt, md, json, yaml, rs, py]
-    index:
-      chunk_size: 8192          # 建索引分块大小
-      chunk_overlap: 64
-      signature_stride: 128     # 块内采样步长
-      signatures_per_chunk: 16
-      max_full_file_bytes: 524288   # 小于此且 full 模式则整文件索引
-      max_haystack_bytes: 2097152   # 单字段最大扫描长度
-      bloom_megabytes: 64
-      build_workers: 8
-      scan_workers: 4              # haystack 分块并行 Bloom 扫描线程数
-      scan_rg_prefilter: true      # ≥8KB haystack 启用 ripgrep 字面量预过滤
-      scan_rg_literals_max: 2048   # 预过滤字面量样本上限
-```
-
-## Web 管理界面
-
-地址：`http://127.0.0.1:8080/ui`（端口以 `server.listen` 为准）
-
-| 页面 | 功能 |
-|------|------|
-| **概览** | 代理 URL、默认组、DLP/操作安全状态、文件索引是否就绪 |
-| **模型路由** | 三组 fallback 卡片，拖拽排序；🟢 OpenAI / 🔵 Anthropic 协议标识 |
-| **数据防泄露** | 文件保护区（拖入路径）+ 内容保护区（标签输入）；底部 **保存 DLP** 同时保存两类规则 |
-| **重要路径防护** | 路径 + 防护级别表格；独立 **保存路径防护** |
-| **操作拦截** | 行为类型 + 关键字规则表格 |
-| **日志** | 请求审计（SQLite）+ 实时事件 |
-| **高级 YAML** | 完整配置编辑、保存并应用、从磁盘重载 |
-
-## 快速安装
-
-### 方式一：源码一键安装（开发/本机）
+### Build and install (from source)
 
 ```bash
 chmod +x scripts/install.sh
 ./scripts/install.sh           # CLI → ~/.local/bin
-./scripts/install.sh --service # 额外：无 GUI 时 macOS LaunchAgent 后台服务
-./scripts/install.sh --gui     # CLI + 托盘桌面应用
-./scripts/install.sh --all     # CLI + 托盘 GUI + 登录自启（--background，仅托盘）
+./scripts/install.sh --gui     # CLI + tray desktop app
+./scripts/install.sh --all     # CLI + GUI + login autostart (tray-only)
 
-securemodelroute               # 启动 CLI 并打开浏览器
+securemodelroute               # start proxy and open admin UI
 ```
 
-### 方式二：解压发布包
-
-```bash
-# Apple Silicon
-tar -xzf dist/smr-*-darwin-arm64.tar.gz -C /tmp/smr-arm64 && cd /tmp/smr-arm64 && ./install.sh
-
-# Intel Mac
-tar -xzf dist/smr-*-darwin-x86_64.tar.gz -C /tmp/smr-x64 && cd /tmp/smr-x64 && ./install.sh
-```
-
-### 方式三：桌面应用
-
-**macOS：**
-
-```bash
-./scripts/install.sh --all
-# 或 SMR_BUILD_GUI=1 ./scripts/install.sh
-# 或解压 dist/smr-*-darwin-*-app.tar.gz → 拖入「应用程序」
-```
-
-**Windows 一键安装（推荐）：**
+**Windows (PowerShell):**
 
 ```powershell
-# dist/SecureModelRoute-*-x64-Setup.exe（IExpress，内含 CLI + 托盘 GUI）
-.\SecureModelRoute-0.1.0-x64-Setup.exe
-```
-
-构建：`./scripts/package-windows-setup.sh`（需先 `package-windows.sh` + `package-windows-desktop.sh`）
-
-**Windows 分步安装：**
-
-```powershell
-.\install.ps1 -All      # CLI + 托盘 GUI + 登录启动项（--background）；有 GUI 时不装计划任务
-.\install.ps1 -Service  # 仅无 GUI 时的登录计划任务 + 崩溃重启
-.\install.ps1 -Gui        # 仅托盘 GUI
-.\install.ps1             # 仅 CLI
-```
-
-**托盘行为（macOS / Windows 相同）：**
-
-- 桌面应用启动时 **内嵌** HTTP 服务，无需单独再跑 `smr`。
-- 关闭主窗口 → 隐藏到菜单栏/系统托盘，**服务保持运行**。
-- `--background` / `--tray-only`：启动后不显示主窗口（用于登录自启）。
-- 环境变量 `SMR_CONFIG` 可指定配置文件路径（GUI 与 CLI 均支持）。
-
-在 macOS 上交叉编译的 CLI zip 使用 **GNU**（`x86_64-pc-windows-gnu`）；Windows 本机/UTM 内 GUI 使用 **MSVC**。两者均为 x86_64，可并存。
-
-### 打包
-
-```bash
-./scripts/package-all.sh              # macOS CLI×2 + app + Windows CLI + 桌面 + Setup（UTM 运行时）
-./scripts/package-macos.sh            # 仅 macOS
-./scripts/package-windows.sh          # Windows CLI zip（GNU 交叉编译）
-./scripts/package-windows-desktop.sh  # Windows 便携 exe（UTM 内 MSVC 构建）
-./scripts/package-windows-setup.sh    # Windows Setup.exe（UTM + IExpress）
-```
-
-**`dist/` 主要产物：**
-
-| 文件 | 说明 |
-|------|------|
-| `smr-*-darwin-arm64.tar.gz` / `smr-*-darwin-x86_64.tar.gz` | macOS CLI 发布包 |
-| `smr-*-darwin-*-app.tar.gz` | macOS `SecureModelRoute.app` |
-| `target/release/bundle/dmg/*.dmg` | macOS 安装镜像（package-macos 附带产出） |
-| `smr-*-windows-x86_64.zip` | Windows CLI（GNU） |
-| `smr-*-windows-x86_64-app.zip` | Windows 便携 `SecureModelRoute.exe` |
-| `SecureModelRoute-*-x64-Setup.exe` | Windows 一键安装 |
-| `smr-*-windows-x86_64-full.zip` | 仅含 Setup.exe 的完整包 |
-
-x86_64 Windows 桌面在 macOS 上构建：`./scripts/package-windows-desktop.sh`（默认 ARM UTM 来宾交叉编译 x86_64）；Windows 本机：`.\scripts\package.ps1`。
-
-### Windows x86_64（本机构建）
-
-```powershell
-.\scripts\package.ps1
-Expand-Archive dist\smr-*-windows-x86_64.zip -DestinationPath $env:TEMP\smr -Force
-cd $env:TEMP\smr
-.\install.ps1 -All
+.\install.ps1 -All             # CLI + tray GUI + login shortcut
 securemodelroute
 ```
 
-**功能对等（macOS ↔ Windows）：**
+### Release archives
 
-| 能力 | macOS | Windows |
-|------|-------|---------|
-| CLI 代理 + DLP + 操作安全 + 路径防护 | ✓ | ✓ |
-| 内嵌 Web 管理界面 `/ui` | ✓ | ✓ |
-| 托盘桌面应用（内嵌服务） | ✓ `.app` | ✓ `SecureModelRoute.exe` |
-| 关窗隐藏到托盘 | ✓ | ✓ |
-| 登录自启 | LaunchAgent `--background` | 启动文件夹快捷方式 `--background` |
-| 无 GUI 后台服务 | LaunchAgent | 计划任务（`-Service` 且无 `-Gui`） |
-| 服务日志 | `~/.local/etc/.../smr.log` | `%USERPROFILE%\.local\etc\...\smr.log` |
-| 一键测试 | `./scripts/run_all_tests.sh` | `.\scripts\run_all_tests.ps1` |
-| UTM 全量测试 | `./scripts/run_full_tests.sh` | `./scripts/vm/utm-run-all-tests.sh` |
-| 安装后黑盒测试 | `./scripts/run_installed_app_tests.sh` | 同上（含 Windows UTM 阶段） |
+Extract a platform tarball from `dist/` and run `./install.sh` (macOS/Linux) or `.\install.ps1` (Windows). See packaging scripts under `scripts/` if you build releases yourself.
 
-**macOS 交叉编译 Windows CLI：**
+### Point your client at the proxy
 
-```bash
-brew install mingw-w64
-./scripts/package-windows.sh
-# 或无 mingw：brew install zig && cargo install cargo-zigbuild
-```
+Default listen address: `127.0.0.1:8080` (see `server.listen` in config).
 
-**UTM 来宾测试（无需 SSH）：**
-
-```bash
-./scripts/vm/utm-run-all-tests.sh       # zip 安装 + 功能 + 黑盒 + 压测
-./scripts/vm/utm-run-app-blackbox.sh    # 托盘 GUI 安装后 25 项黑盒
-```
-
-**SSH 远程测试（可选）：** `./scripts/windows_vm_test.sh` — 见 [scripts/vm/WINDOWS_VM.md](scripts/vm/WINDOWS_VM.md)
-
-## 路径说明
-
-| 路径 | 说明 |
-|------|------|
-| `~/.local/bin/smr` | 主程序（install 脚本，macOS/Linux） |
-| `%USERPROFILE%\.local\bin\smr.exe` | 主程序（Windows install） |
-| `~/.local/bin/securemodelroute` | CLI 启动器（`--open` 打开管理界面） |
-| `%USERPROFILE%\.local\bin\securemodelroute.cmd` | Windows CLI 启动器 |
-| `~/.local/etc/securemodelroute/smr.yaml` | 配置（install 脚本写入） |
-| `~/.config/securemodelroute/smr.yaml` | 配置（直接运行 `smr` / GUI 默认） |
-| `%APPDATA%\securemodelroute/smr.yaml` | Windows 直接运行时的默认配置 |
-| `~/.config/securemodelroute/data/smr.db` | 请求审计 SQLite |
-| `~/.config/securemodelroute/file-index/` | 文件 DLP 磁盘索引（按 rule_id 子目录） |
-| `http://127.0.0.1:8080/health` | 健康检查 |
-| `http://127.0.0.1:8080/ui` | Web 管理界面 |
-| `http://127.0.0.1:8080/v1` | OpenAI 兼容代理 |
+| URL | Purpose |
+|-----|---------|
+| `http://127.0.0.1:8080/v1` | OpenAI-compatible API |
 | `http://127.0.0.1:8080/v1/messages` | Anthropic Messages API |
+| `http://127.0.0.1:8080/ui` | Web admin |
+| `http://127.0.0.1:8080/health` | Health check |
 
-## 配置
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="dummy")
+```
 
-示例见 `config/smr.example.yaml`。endpoint 可用 `api_key` 或 `api_key_env`：
+Optional headers:
+
+- `X-SMR-Fallback-Group` — e.g. `high`, `medium`, `low`
+- `X-SMR-Session-Id` — ties SessionGuard and audit to a session (auto-generated if omitted)
+
+Anthropic SDK: `base_url="http://127.0.0.1:8080"`, path `/v1/messages`.
+
+### Config locations
+
+| Platform | Typical path |
+|----------|----------------|
+| macOS / Linux (install script) | `~/.local/etc/securemodelroute/smr.yaml` |
+| macOS / Linux (`smr` directly) | `~/.config/securemodelroute/smr.yaml` |
+| Windows | `%APPDATA%\securemodelroute\smr.yaml` |
+
+Override with `SMR_CONFIG=/path/to/smr.yaml`. Store upstream API keys in environment variables (`api_key_env`), not in committed files.
+
+## Configuration overview
+
+Full example: [`config/smr.example.yaml`](config/smr.example.yaml).
 
 ```yaml
+server:
+  listen: "127.0.0.1:8080"
+  default_fallback_group: high
+
 pipeline:
   security_enabled: true
   dlp_enabled: true
@@ -259,72 +94,142 @@ pipeline:
 
 fallback_groups:
   high:
-    - id: my-model
-      base_url: "https://api.example.com/v1"
+    - id: openai-primary
+      base_url: "https://api.openai.com/v1"
       model: "gpt-4o-mini"
       api_key_env: OPENAI_API_KEY
-      protocol: openai               # openai | anthropic，可省略（按 URL 推断）
+      protocol: openai              # openai | anthropic (optional; inferred from URL)
       timeout_secs: 120
+    - id: anthropic-fallback
+      base_url: "https://api.anthropic.com/v1"
+      model: "claude-sonnet-4-20250514"
+      protocol: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+
+content_rules:
+  - id: example-secret
+    enabled: true
+    match_mode: full
+    category: secret
+    value: "replace-with-placeholder"
+
+file_rules:
+  - id: corp-docs
+    path: /data/docs
+    enabled: true
+    recursive: true
+    trigger_window: 5
+    match_mode: fragment
+    min_fragment_len: 32
+    formats: [txt, md, json, yaml, rs, py]   # extend as needed
 ```
 
-环境变量示例：
+**`fallback_groups`** — Named lists of `ModelEndpoint`. The default group is `server.default_fallback_group`. Streaming locks to the current endpoint after the first content token (no further fallback).
+
+**`content_rules`** — In-memory patterns for request/response JSON fields. Use for secrets, phrases, and **extensionless** sensitive strings that file indexing cannot match by suffix alone.
+
+**`file_rules`** — Directories or files to index and protect. Important notes:
+
+- **`formats`** — File extensions **without** a leading dot (e.g. `txt`, `md`). Add any suffix your corpus uses; only matching extensions are indexed.
+- **Extensionless files** — Not selected by `formats`. Add equivalent sensitive text via **`content_rules`** instead.
+- **`trigger_window`** — After SessionGuard triggers on a tool mentioning a protected file, redaction applies for this many subsequent requests.
+- **`index`** — Tunables for chunk size, Bloom size, workers, haystack limits, ripgrep prefilter, etc. (see example in legacy doc or `config/smr.example.yaml`).
+
+**`operation_rules`** / **`path_protection_rules`** — Operation keywords and path-level deny levels.
 
 ```bash
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
-export SMR_CONFIG=/path/to/smr.yaml   # 覆盖默认配置路径
+export SMR_CONFIG=/path/to/smr.yaml
 ```
 
-## 管理 API
+## File DLP index (basics)
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/status` | 监听地址、默认组、安全开关、文件索引状态、代理 URL |
-| GET/PUT | `/api/config` | 读写完整 YAML 配置（PUT 保存并热加载） |
-| GET | `/api/events?limit=50` | 内存事件（DLP/拦截/错误等） |
-| GET | `/api/audits?limit=50` | SQLite 请求审计 |
-| PUT | `/api/reload` | 从磁盘重载配置（保留 SessionGuard） |
+Large text corpora are indexed on disk instead of loading everything into RAM.
 
-## 客户端接入
+**Index root:** `~/.config/securemodelroute/file-index/{rule_id}/` (platform config dir + `file-index`).
 
-将 LLM 客户端的 `base_url` 指向本地代理：
+| Artifact | Role |
+|----------|------|
+| `current.json` | Active generation pointer |
+| `gen/{n}/index.db` | Signature → file offset/length |
+| `gen/{n}/bloom.bin` | In-memory Bloom prefilter |
+| `gen/{n}/files.json` | Per-file mtime/size for incremental rebuild |
+| `gen/{n}/manifest.json` | Build stats |
+| `gen/{n}/literals.json` | Samples for optional ripgrep prefilter |
 
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="dummy")
+**Runtime flow:**
+
+1. Background indexing for each enabled `file_rules` entry. DLP uses the index when `/api/status` reports `file_index_ready: true`.
+2. **tool_call** / **tool_result** mentioning a protected **file** under a rule activates SessionGuard for that session.
+3. For the next `trigger_window` requests, haystack fields are scanned: Bloom → SQLite candidates → read source bytes → redact on match.
+
+SessionGuard stores rule metadata only—not full corpus text in memory.
+
+## Web admin UI
+
+Open **`http://127.0.0.1:8080/ui`** (port from `server.listen`).
+
+| Tab | Purpose |
+|-----|---------|
+| Overview | Proxy URL, default group, DLP/ops status, file index readiness |
+| Model routing | Three fallback groups; drag to reorder; save applies hot reload |
+| DLP | File zones (paths) + content tags (secrets/phrases) |
+| Path protection | Path + deny level table |
+| Operation rules | Behavior type + keyword patterns |
+| Logs | SQLite request audit + live events |
+| Advanced YAML | Full config edit, save, reload from disk |
+
+**Internationalization:** UI strings are available in **English** and **中文**; switch language from the header control.
+
+**Admin API (selected):**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/status` | Listen address, security flags, index readiness, proxy URL |
+| GET/PUT | `/api/config` | Read/write YAML; PUT saves and hot-reloads |
+| GET | `/api/events?limit=50` | Recent security/DLP events |
+| GET | `/api/audits?limit=50` | Request audit rows |
+| PUT | `/api/reload` | Reload config from disk (keeps SessionGuard) |
+
+## Traffic body snapshots (debug)
+
+To persist JSON request/response bodies for troubleshooting redaction and routing:
+
+```yaml
+logging:
+  level: info
+  redact_content: true
+  save_traffic_bodies: true      # default: false
+  traffic_max_body_bytes: 32768
 ```
 
-Anthropic SDK 示例：`base_url="http://127.0.0.1:8080"`，路径 `/v1/messages`。
+When `save_traffic_bodies` is enabled, proxied JSON bodies (within size limits) are stored for inspection—use only on trusted machines and disable in production. Toggle from Advanced YAML or the logging section of config.
 
-可选请求头：
-
-- `X-SMR-Fallback-Group`：fallback 组名（如 `high`）
-- `X-SMR-Session-Id`：会话 ID（SessionGuard 与审计关联；未传则自动生成）
-
-## 开发与验证
+## Development and testing
 
 ```bash
-export CARGO_TARGET_DIR="$PWD/target"
 cargo test
 cargo clippy -- -D warnings
-./scripts/verify.sh                         # 单元测试 + health/status/ui 冒烟
-
-# 需要 test_model_api_key.txt（gitignore，勿提交）
-python3 scripts/install_functional_test.py    # 安装级功能（11 项）
-python3 scripts/blackbox_test.py              # 黑盒（24 项；SMR_ATTACH=1 可附着已运行实例）
-python3 scripts/live_test.py                  # 压测
-./scripts/run_all_tests.sh                    # 本机全套
-./scripts/run_full_tests.sh                   # 本机 + Windows UTM（zip + 来宾运行中）
-./scripts/run_installed_app_tests.sh          # 从 dist 安装托盘应用后黑盒（macOS + 可选 Windows UTM）
-
-# 压测参数（可选）
-SMR_STRESS_TOTAL=50 SMR_STRESS_STREAM_TOTAL=20 python3 scripts/live_test.py
-SMR_STRESS_SOAK_SEC=60 python3 scripts/live_test.py
-SMR_SKIP_VM_TESTS=1 ./scripts/run_full_tests.sh   # 跳过 UTM 阶段
+./scripts/verify.sh
 ```
 
-实现进度与方案对齐见 [TODO.md](TODO.md)。
+For live and black-box tests against real upstreams, copy the example key file (gitignored):
 
-## 许可证
+```bash
+cp test_model_api_key.example.txt test_model_api_key.txt
+# Edit test_model_api_key.txt with your keys — never commit it
+```
+
+```bash
+python3 scripts/install_functional_test.py
+python3 scripts/blackbox_test.py
+./scripts/run_all_tests.sh          # macOS/Linux
+.\scripts\run_all_tests.ps1         # Windows
+```
+
+Implementation checklist: [TODO.md](TODO.md). Previous Chinese README snapshot: [docs/README.legacy.zh-CN.md](docs/README.legacy.zh-CN.md).
+
+## License
 
 MIT

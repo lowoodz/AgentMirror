@@ -18,6 +18,7 @@ struct StatusResponse {
     config_path: String,
     proxy_url: String,
     file_index_ready: bool,
+    save_traffic_bodies: bool,
 }
 
 #[derive(Deserialize)]
@@ -30,6 +31,11 @@ struct AuditsQuery {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+struct TrafficQuery {
+    limit: Option<usize>,
+}
+
 pub fn router() -> Router<HttpState> {
     Router::new()
         .route("/ui", get(ui_index))
@@ -38,6 +44,7 @@ pub fn router() -> Router<HttpState> {
         .route("/api/config", get(api_get_config).put(api_put_config))
         .route("/api/events", get(api_events))
         .route("/api/audits", get(api_audits))
+        .route("/api/traffic", get(api_traffic))
         .route("/api/reload", put(api_reload))
 }
 
@@ -64,7 +71,19 @@ async fn api_status(State(s): State<HttpState>) -> Json<StatusResponse> {
         config_path: s.app.config_path.display().to_string(),
         proxy_url: format!("http://{}/v1", cfg.server.listen),
         file_index_ready: snap.dlp.is_file_index_ready(),
+        save_traffic_bodies: cfg.logging.save_traffic_bodies,
     })
+}
+
+async fn api_traffic(
+    State(s): State<HttpState>,
+    Query(q): Query<TrafficQuery>,
+) -> Json<serde_json::Value> {
+    let limit = q.limit.unwrap_or(30).min(100);
+    Json(serde_json::json!({
+        "records": s.app.traffic.list(limit),
+        "enabled": s.app.config().logging.save_traffic_bodies,
+    }))
 }
 
 async fn api_get_config(State(s): State<HttpState>) -> Json<AppConfig> {

@@ -16,7 +16,7 @@ SETUP_PS1="${ROOT}/scripts/vm/windows-app-installed-test.ps1"
 
 [[ -s "$CLI" ]] || { echo "Missing dist/smr.exe" >&2; exit 1; }
 [[ -s "$GUI" ]] || { echo "Missing dist/windows-desktop/SecureModelRoute.exe" >&2; exit 1; }
-[[ -f "${ROOT}/test_model_api_key.txt" ]] || { echo "Missing test_model_api_key.txt" >&2; exit 1; }
+[[ -f "${ROOT}/test_model_api_key.txt" ]] || { echo "Missing test_model_api_key.txt — copy from test_model_api_key.example.txt" >&2; exit 1; }
 
 echo "==> Upload install payload to guest"
 "$UTMCTL" exec "$VM_ID" --cmd cmd.exe /c "mkdir C:\\Users\\Public\\smr-app-test-stage 2>nul & mkdir C:\\Users\\Public\\smr-test-suite\\scripts 2>nul" 2>/dev/null || true

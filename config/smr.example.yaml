@@ -11,6 +11,8 @@ pipeline:
 logging:
   level: info
   redact_content: true
+  save_traffic_bodies: false
+  traffic_max_body_bytes: 32768
 
 fallback_groups:
   high:

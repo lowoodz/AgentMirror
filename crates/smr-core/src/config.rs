@@ -81,6 +81,16 @@ pub enum OperationSecurityMode {
 pub struct LoggingConfig {
     pub level: String,
     pub redact_content: bool,
+    /// When true, keep recent request/response JSON snapshots in memory for the admin UI.
+    #[serde(default)]
+    pub save_traffic_bodies: bool,
+    /// Max bytes per stored body snapshot (truncated beyond this).
+    #[serde(default = "default_traffic_max_body_bytes")]
+    pub traffic_max_body_bytes: usize,
+}
+
+fn default_traffic_max_body_bytes() -> usize {
+    32 * 1024
 }
 
 impl Default for LoggingConfig {
@@ -88,6 +98,8 @@ impl Default for LoggingConfig {
         Self {
             level: "info".to_string(),
             redact_content: true,
+            save_traffic_bodies: false,
+            traffic_max_body_bytes: default_traffic_max_body_bytes(),
         }
     }
 }

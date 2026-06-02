@@ -238,7 +238,7 @@ mod tests {
     fn extracts_specific_file_under_rule_dir() {
         let rule = FileRule {
             id: "docs".into(),
-            path: PathBuf::from("/Users/testuser/Documents"),
+            path: PathBuf::from("/data/documents"),
             enabled: true,
             recursive: true,
             trigger_window: 3,
@@ -248,17 +248,17 @@ mod tests {
             formats: vec!["txt".into(), "py".into()],
             index: FileIndexOptions::default(),
         };
-        let tool = r#"read_file("/Users/testuser/Documents/AI/Tutor-Code/ml_test.py")"#;
+        let tool = r#"read_file("/data/documents/projects/ml_test.py")"#;
         let files = extract_triggered_files(tool, &rule);
         assert_eq!(files.len(), 1);
-        assert!(files[0].ends_with("/AI/Tutor-Code/ml_test.py"));
+        assert!(files[0].ends_with("/projects/ml_test.py"));
     }
 
     #[test]
     fn ignores_directory_only_mention() {
         let rule = FileRule {
             id: "docs".into(),
-            path: PathBuf::from("/Users/testuser/Documents"),
+            path: PathBuf::from("/data/documents"),
             enabled: true,
             recursive: true,
             trigger_window: 3,
@@ -268,7 +268,7 @@ mod tests {
             formats: vec!["txt".into()],
             index: FileIndexOptions::default(),
         };
-        let tool = r#"{"path": "/Users/testuser/Documents"}"#;
+        let tool = r#"{"path": "/data/documents"}"#;
         assert!(extract_triggered_files(tool, &rule).is_empty());
     }
 

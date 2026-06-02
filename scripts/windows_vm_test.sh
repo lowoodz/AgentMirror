@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${SMR_WINDOWS_HOST:-devserver}"
 USER="${SMR_WINDOWS_USER:-lgl}"
-REMOTE_DIR="${SMR_WINDOWS_REMOTE_DIR:-/c/Users/${USER}/smr-test}"
+REMOTE_DIR="${SMR_WINDOWS_REMOTE_DIR:-/c/Users/Public/smr-test}"
 
 ZIP="$(ls -t "${ROOT}"/dist/smr-*-windows-x86_64.zip 2>/dev/null | head -1)"
 if [[ -z "${ZIP}" ]]; then

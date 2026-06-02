@@ -1,0 +1,19 @@
+# Copy to test_model_api_key.txt (gitignored) for local live/blackbox tests.
+# Do NOT commit test_model_api_key.txt.
+
+1、GLM
+api-key：your-glm-api-key-here
+1）OpenAI协议
+base-url：https://open.bigmodel.cn/api/coding/paas/v4
+2）Anthropic协议
+base-url：https://open.bigmodel.cn/api/anthropic
+3）模型列表：glm-4-flash, glm-4
+
+
+2、Deepseek
+api-key：sk-your-deepseek-key-here
+1）OpenAI协议
+base-url：https://api.deepseek.com
+2）Anthropic协议
+base-url：https://api.deepseek.com/anthropic
+3）模型列表：deepseek-chat, deepseek-reasoner
