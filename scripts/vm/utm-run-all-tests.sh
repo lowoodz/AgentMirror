@@ -31,7 +31,7 @@ echo ""
 echo "========== Phase 3: Blackbox + stress on guest =========="
 "$UTMCTL" exec "$VM_ID" --cmd powershell.exe -NoProfile -Command "Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:/Users/Public/windows-run-python-tests.ps1' -WindowStyle Hidden" 2>/dev/null || true
 
-DEADLINE=$((SECONDS + 2400))
+DEADLINE=$((SECONDS + 3600))
 while (( SECONDS < DEADLINE )); do
   sleep 30
   "$UTMCTL" file pull "$VM_ID" "$PY_LOG" > "${ROOT}/dist/windows-utm-python-test.log" 2>/dev/null || true

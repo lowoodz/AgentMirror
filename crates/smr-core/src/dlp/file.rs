@@ -164,6 +164,14 @@ pub fn paths_equivalent(a: &str, b: &str) -> bool {
     }
 }
 
+pub fn path_basename(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
 fn normalize_path_str(path: &str) -> String {
     path.replace('\\', "/")
 }

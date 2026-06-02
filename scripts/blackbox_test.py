@@ -1303,6 +1303,12 @@ def main() -> int:
             print_report(report)
             return 1
         report.add("系统", "startup", True, "ready")
+        reload_code, _, _ = http("PUT", f"{BASE}/api/reload", timeout=120.0)
+        if reload_code == 200:
+            wait_ready(BASE, timeout=120.0)
+            report.add("系统", "index_reload", True, "file index rebuilt")
+        else:
+            report.add("系统", "index_reload", False, f"reload status={reload_code}")
 
         run_all_scenarios(report, secrets_dir)
 

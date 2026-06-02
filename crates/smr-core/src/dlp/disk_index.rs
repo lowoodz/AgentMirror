@@ -20,7 +20,7 @@ use xxhash_rust::xxh64::xxh64;
 use crate::config::{FileRule, MatchMode};
 use crate::dlp::bloom::BloomFilter;
 use crate::dlp::doc_extract;
-use crate::dlp::file::{path_trigger_match, paths_equivalent, strip_verbatim_path_prefix};
+use crate::dlp::file::{path_basename, path_trigger_match, paths_equivalent, strip_verbatim_path_prefix};
 use crate::dlp::fragment::effective_min_fragment_len;
 use crate::dlp::rg::find_literal_byte_offsets;
 use crate::dlp::sanitize::{sanitize_range, sanitize_whole};
@@ -200,10 +200,12 @@ impl FileIndexManager {
                 out.insert(norm);
                 continue;
             }
+            let cand_base = path_basename(&norm);
             for indexed in snapshot.indexed_paths.iter() {
                 if paths_equivalent(indexed, &norm)
                     || paths_equivalent(indexed, candidate)
                     || indexed.ends_with(&format!("/{}", candidate.trim_start_matches('/')))
+                    || (!cand_base.is_empty() && path_basename(indexed) == cand_base)
                 {
                     out.insert(indexed.clone());
                 }
