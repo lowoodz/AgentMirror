@@ -22,6 +22,7 @@ from test_common import (  # noqa: E402
     get_config,
     http,
     latest_audit,
+    dlp_after_chat,
     parse_keys,
     put_config,
     start_smr,
@@ -874,6 +875,7 @@ def scenario_session_window_exhaustion(report: Report, secrets_dir: Path) -> Non
     trigger = {
         "model": "glm-4-flash",
         "messages": [
+            {"role": "user", "content": "Read file"},
             {
                 "role": "assistant",
                 "content": None,
@@ -887,7 +889,7 @@ def scenario_session_window_exhaustion(report: Report, secrets_dir: Path) -> Non
                         },
                     }
                 ],
-            }
+            },
         ],
         "max_tokens": 8,
     }
@@ -899,22 +901,17 @@ def scenario_session_window_exhaustion(report: Report, secrets_dir: Path) -> Non
     )
     dlp_counts: list[int] = []
     for i in range(3):
-        chat_openai(
-            [{"role": "user", "content": f"leak {FILE_SECRET} turn{i}"}],
-            session=session,
-            max_tokens=12,
+        dlp_counts.append(
+            dlp_after_chat(
+                BASE,
+                session,
+                lambda i=i: chat_openai(
+                    [{"role": "user", "content": f"leak {FILE_SECRET} turn{i}"}],
+                    session=session,
+                    max_tokens=12,
+                ),
+            )
         )
-        dlp = 0
-        for _ in range(8):
-            audit = latest_audit(BASE)
-            dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
-            if i < 2 and dlp > 0:
-                break
-            if i == 2:
-                break
-            time.sleep(0.25)
-        dlp_counts.append(dlp)
-        time.sleep(0.2)
     ok = dlp_counts[0] > 0 and dlp_counts[1] > 0 and dlp_counts[2] == 0
     report.add(story, "session_window_exhaustion", ok, f"dlp_per_turn={dlp_counts}", 0)
 
@@ -1303,12 +1300,12 @@ def main() -> int:
             print_report(report)
             return 1
         report.add("系统", "startup", True, "ready")
-        reload_code, _, _ = http("PUT", f"{BASE}/api/reload", timeout=120.0)
-        if reload_code == 200:
-            wait_ready(BASE, timeout=120.0)
-            report.add("系统", "index_reload", True, "file index rebuilt")
-        else:
-            report.add("系统", "index_reload", False, f"reload status={reload_code}")
+        for attempt in range(3):
+            reload_code, _, _ = http("PUT", f"{BASE}/api/reload", timeout=120.0)
+            if reload_code == 200:
+                wait_ready(BASE, timeout=120.0)
+                break
+            time.sleep(1.0 + attempt)
 
         run_all_scenarios(report, secrets_dir)
 

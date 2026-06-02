@@ -153,3 +153,26 @@ def latest_audit(base: str) -> dict | None:
         return None
     audits = json.loads(text).get("audits", [])
     return audits[0] if audits else None
+
+
+def latest_audit_for_session(base: str, session_id: str) -> dict | None:
+    code, text, _ = http("GET", f"{base}/api/audits?limit=40")
+    if code != 200:
+        return None
+    for audit in json.loads(text).get("audits", []):
+        if audit.get("session_id") == session_id:
+            return audit
+    return None
+
+
+def dlp_after_chat(base: str, session_id: str, chat_fn) -> int:
+    before = latest_audit_for_session(base, session_id)
+    before_id = before.get("id") if before else None
+    chat_fn()
+    for _ in range(12):
+        audit = latest_audit_for_session(base, session_id)
+        if audit and audit.get("id") != before_id:
+            return int(audit.get("dlp_replacements", 0))
+        time.sleep(0.25)
+    audit = latest_audit_for_session(base, session_id)
+    return int(audit.get("dlp_replacements", 0)) if audit else 0
