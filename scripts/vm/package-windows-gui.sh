@@ -99,12 +99,13 @@ while (( SECONDS < DEADLINE )); do
   if grep -q "DESKTOP_BUILD_OK" "${DIST}/windows-desktop-build.log" 2>/dev/null; then
     break
   fi
-  if [[ "$BUILD_STARTED" -eq 1 ]] && grep -E '\] ERROR:' "${DIST}/windows-desktop-build.log" 2>/dev/null | grep -q .; then
+  if [[ "$BUILD_STARTED" -eq 1 ]] && grep -E '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] ERROR:' "${DIST}/windows-desktop-build.log" 2>/dev/null | grep -q .; then
     cat "${DIST}/windows-desktop-build.log" >&2
     exit 1
   fi
-  if [[ "$BUILD_STARTED" -eq 0 && "$SECONDS" -gt 300 ]]; then
-    echo "Build did not start within 5 min (no log on guest). Check UTM guest agent." >&2
+  if [[ "$BUILD_STARTED" -eq 0 && "$SECONDS" -gt 600 ]]; then
+    echo "Build did not start within 10 min (no log on guest). Check UTM guest agent." >&2
+    tail -20 "${DIST}/windows-desktop-build.log" 2>/dev/null || true
     exit 1
   fi
   echo "... desktop build running (${SECONDS}s)"
@@ -114,10 +115,12 @@ done
 
 mkdir -p "${DIST}/windows-desktop"
 for _pull in 1 2 3 4 5 6; do
-  "$UTMCTL" file pull "$VM_ID" "C:/Users/Public/smr-desktop-out/SecureModelRoute.exe" > "${DIST}/windows-desktop/SecureModelRoute.exe" 2>/dev/null || true
-  if [[ -s "${DIST}/windows-desktop/SecureModelRoute.exe" ]]; then
-    break
-  fi
+  for guest_exe in "C:/Users/Public/smr-desktop-out/SecureModelRoute.exe" "C:/Users/Public/smr-desktop-out/SafeRoute.exe" "C:/Users/Public/smr-desktop-out/smr-gui.exe"; do
+    "$UTMCTL" file pull "$VM_ID" "$guest_exe" > "${DIST}/windows-desktop/SecureModelRoute.exe" 2>/dev/null || true
+    if [[ -s "${DIST}/windows-desktop/SecureModelRoute.exe" ]]; then
+      break 2
+    fi
+  done
   sleep 10
 done
 SETUP=$("$UTMCTL" exec "$VM_ID" --cmd cmd.exe /c "dir /b C:\\Users\\Public\\smr-desktop-out\\*-setup.exe 2>nul" 2>/dev/null | head -1 || true)

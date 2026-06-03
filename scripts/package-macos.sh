@@ -51,8 +51,16 @@ if [[ -f "$ROOT/gui/package.json" ]] && command -v npm >/dev/null 2>&1; then
   (cd "$ROOT/gui" && npm ci --silent && npm run build --silent) || {
     echo "Warning: Tauri build failed or skipped."
   }
-  APP_BUNDLE="$ROOT/target/release/bundle/macos/SecureModelRoute.app"
-  if [[ -d "$APP_BUNDLE" ]]; then
+  APP_BUNDLE=""
+  APP_NAME=""
+  for name in SafeRoute.app SecureModelRoute.app; do
+    if [[ -d "$ROOT/target/release/bundle/macos/${name}" ]]; then
+      APP_BUNDLE="$ROOT/target/release/bundle/macos/${name}"
+      APP_NAME="$name"
+      break
+    fi
+  done
+  if [[ -n "$APP_BUNDLE" ]]; then
     app_bin="$APP_BUNDLE/Contents/MacOS/smr-gui"
     if file "$app_bin" 2>/dev/null | grep -q 'arm64'; then
       host_arch="arm64"
@@ -61,8 +69,8 @@ if [[ -f "$ROOT/gui/package.json" ]] && command -v npm >/dev/null 2>&1; then
     fi
     PKG_APP="smr-${VERSION}-darwin-${host_arch}-app"
     rm -f "${OUT}/${PKG_APP}.tar.gz"
-    tar -czf "${OUT}/${PKG_APP}.tar.gz" -C "$(dirname "$APP_BUNDLE")" SecureModelRoute.app
-    echo "==> Desktop app: ${OUT}/${PKG_APP}.tar.gz"
+    tar -czf "${OUT}/${PKG_APP}.tar.gz" -C "$(dirname "$APP_BUNDLE")" "$APP_NAME"
+    echo "==> Desktop app: ${OUT}/${PKG_APP}.tar.gz (${APP_NAME})"
   fi
 fi
 

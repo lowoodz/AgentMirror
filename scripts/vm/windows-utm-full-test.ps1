@@ -123,7 +123,7 @@ try {
 
 try {
     $ui = Invoke-WebRequest -Uri "$Base/ui" -TimeoutSec 10 -UseBasicParsing
-    $results += Check "web_ui" ($ui.Content -match "SecureModelRoute") "bytes=$($ui.Content.Length)"
+    $results += Check "web_ui" ($ui.Content -match "SafeRoute|SecureModelRoute") "bytes=$($ui.Content.Length)"
 } catch { Log "ERROR ui: $($_.Exception.Message)"; $results += $false }
 
 try {

@@ -6,7 +6,8 @@
 - 将 IDE、Agent 或 SDK 的 `base_url` 指向 `http://127.0.0.1:8080/v1`，即可安全、可靠地调用/访问多个大模型，例如 GPT、Claude Opus、Gemini、DeepSeek、GLM、Kimi等，
 - 无需手动切换，API 调用失败、Token额度不足、频率限制时，自动Fallback/回退，全程无中断。
 - 同时提供数据防泄漏、数据脱敏、操作拦截、文件路径防护等安全保障，
-- 满足个人用户使用LLM和Agent时，对安全、可靠的基本需求。
+- 满足个人用户使用LLM和Agent时，对安全、可靠的基本需求，
+- 支持MacOS、Windows桌面应用，一键安装。
 
 **English:** [README.md](README.md)
 

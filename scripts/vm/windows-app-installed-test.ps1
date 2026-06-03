@@ -116,7 +116,7 @@ Log "Server ready pid=$($gui.Id)"
 
 try {
     $ui = Invoke-WebRequest -Uri "$Base/ui" -TimeoutSec 15 -UseBasicParsing
-    if ($ui.Content -notmatch "SecureModelRoute") {
+    if ($ui.Content -notmatch "SafeRoute|SecureModelRoute") {
         Log "ERROR: admin UI missing marker"
         exit 1
     }

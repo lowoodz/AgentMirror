@@ -38,7 +38,7 @@ try {
 
     Write-Host "==> ui"
     $ui = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/ui" -TimeoutSec 5 -UseBasicParsing
-    if ($ui.Content -notmatch "SecureModelRoute") { throw "ui page missing title" }
+    if ($ui.Content -notmatch "SafeRoute|SecureModelRoute") { throw "ui page missing title" }
 
     Write-Host ""
     Write-Host "All verification checks passed."

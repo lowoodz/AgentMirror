@@ -35,16 +35,23 @@ if [[ "$INSTALL_GUI" == true || "$INSTALL_ALL" == true ]]; then
     echo "==> Building desktop app (tray GUI, embeds server)"
     (cd "$ROOT/gui/src-tauri" && bash create_icon.sh)
     (cd "$ROOT/gui" && npm install --silent && CARGO_TARGET_DIR="${ROOT}/target" npm run build)
-    APP_BUNDLE="${ROOT}/target/release/bundle/macos/SecureModelRoute.app"
-    if [[ -d "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-      DEST="${HOME}/Applications/SecureModelRoute.app"
-      rm -rf "$DEST"
-      cp -R "$APP_BUNDLE" "$DEST"
-      DESKTOP_APP="$DEST"
-      echo "    Installed desktop app: ${DEST}"
-    else
-      echo "Warning: SecureModelRoute.app not found after build" >&2
+  APP_BUNDLE=""
+  for name in SafeRoute.app SecureModelRoute.app; do
+    if [[ -d "$ROOT/target/release/bundle/macos/${name}" ]]; then
+      APP_BUNDLE="$ROOT/target/release/bundle/macos/${name}"
+      break
     fi
+  done
+  if [[ -n "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+    APP_NAME="$(basename "$APP_BUNDLE")"
+    DEST="${HOME}/Applications/${APP_NAME}"
+    rm -rf "$DEST" "${HOME}/Applications/SafeRoute.app" "${HOME}/Applications/SecureModelRoute.app"
+    cp -R "$APP_BUNDLE" "$DEST"
+    DESKTOP_APP="$DEST"
+    echo "    Installed desktop app: ${DEST}"
+  else
+    echo "Warning: SafeRoute.app not found after build" >&2
+  fi
   else
     echo "Warning: npm or gui/ missing; extract *-darwin-*-app.tar.gz manually" >&2
   fi
@@ -52,10 +59,17 @@ elif command -v npm >/dev/null && [[ "${SMR_BUILD_GUI:-0}" == "1" ]]; then
   echo "==> Optional: build desktop GUI (SMR_BUILD_GUI=1)"
   (cd "$ROOT/gui/src-tauri" && bash create_icon.sh)
   (cd "$ROOT/gui" && npm install --silent && CARGO_TARGET_DIR="${ROOT}/target" npm run build)
-  APP_BUNDLE="${ROOT}/target/release/bundle/macos/SecureModelRoute.app"
-  if [[ -d "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
-    DEST="${HOME}/Applications/SecureModelRoute.app"
-    rm -rf "$DEST"
+  APP_BUNDLE=""
+  for name in SafeRoute.app SecureModelRoute.app; do
+    if [[ -d "$ROOT/target/release/bundle/macos/${name}" ]]; then
+      APP_BUNDLE="$ROOT/target/release/bundle/macos/${name}"
+      break
+    fi
+  done
+  if [[ -n "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
+    APP_NAME="$(basename "$APP_BUNDLE")"
+    DEST="${HOME}/Applications/${APP_NAME}"
+    rm -rf "$DEST" "${HOME}/Applications/SafeRoute.app" "${HOME}/Applications/SecureModelRoute.app"
     cp -R "$APP_BUNDLE" "$DEST"
     echo "    Installed desktop app: ${DEST}"
   fi

@@ -41,7 +41,9 @@ run_step() {
 mac_installed_app_test() {
   local version arch app_tar cli_tar
   version="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-  if file "${ROOT}/target/release/bundle/macos/SecureModelRoute.app/Contents/MacOS/smr-gui" 2>/dev/null | grep -q arm64; then
+  if file "${ROOT}/target/release/bundle/macos/SafeRoute.app/Contents/MacOS/smr-gui" 2>/dev/null | grep -q arm64; then
+    arch="arm64"
+  elif file "${ROOT}/target/release/bundle/macos/SecureModelRoute.app/Contents/MacOS/smr-gui" 2>/dev/null | grep -q arm64; then
     arch="arm64"
   elif [[ -f "${ROOT}/dist/smr-${version}-darwin-arm64-app.tar.gz" ]]; then
     arch="arm64"
@@ -71,9 +73,15 @@ mac_installed_app_test() {
   rm -rf "$stage"
 
   tar -xzf "$app_tar" -C "$test_root"
-  app_bundle="${test_root}/SecureModelRoute.app"
+  app_bundle=""
+  for name in SafeRoute.app SecureModelRoute.app; do
+    if [[ -d "${test_root}/${name}" ]]; then
+      app_bundle="${test_root}/${name}"
+      break
+    fi
+  done
   gui_bin="${app_bundle}/Contents/MacOS/smr-gui"
-  [[ -x "$gui_bin" ]] || { echo "Missing $gui_bin" >&2; return 1; }
+  [[ -n "$app_bundle" && -x "$gui_bin" ]] || { echo "Missing GUI app in $app_tar" >&2; return 1; }
 
   echo "==> Stop conflicting listeners on :8080"
   lsof -ti :8080 | xargs kill -9 2>/dev/null || true

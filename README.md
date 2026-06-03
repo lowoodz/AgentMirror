@@ -7,6 +7,7 @@
 - No manual switching: on API failure, exhausted quota, or rate limits, fallback runs automatically with no interruption.
 - Built-in safeguards: data-leak prevention, redaction, operation blocking, and file-path protection.
 - Fullfill the basic needs of individual users for secure and reliable access to LLMs and agents.
+- Provide MacOS and Windows desktop GUI app, one-click install.
 
 **中文文档:** [README.zh-CN.md](README.zh-CN.md)
 
