@@ -6,12 +6,12 @@
 - Point your IDE, agent, or SDK `base_url` at `http://127.0.0.1:8080/v1` to call multiple models safely and reliably—GPT, Claude Opus, Gemini, DeepSeek, GLM, Kimi, and more.
 - No manual switching: on API failure, exhausted quota, or rate limits, fallback runs automatically with no interruption.
 - Built-in safeguards: data-leak prevention, redaction, operation blocking, and file-path protection.
-- Fullfill the basic needs of individual users for secure and reliable access to LLMs and agents.
-- Provide MacOS and Windows desktop GUI app, one-click install.
+- Fulfills the basic needs of individual users for secure and reliable access to LLMs and agents.
+- macOS and Windows desktop tray apps with one-click install.
 
 **中文文档:** [README.zh-CN.md](README.zh-CN.md)
 
-SafeRoute admin UI — model routing
+![SafeRoute admin UI — model routing](docs/en-route-gui.png)
 
 ---
 
@@ -56,7 +56,89 @@ client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="dummy")
 | `http://127.0.0.1:8080/health`      | Health check           |
 
 
-Optional headers: `X-SMR-Fallback-Group` (`high`  `medium`  `low`), `X-SMR-Session-Id` (SessionGuard + audit).
+Optional headers: `X-SMR-Fallback-Group` (`high` | `medium` | `low`), `X-SMR-Session-Id` (SessionGuard + audit).
+
+---
+
+## Downloads (desktop apps)
+
+Pre-built packages are on [GitHub Releases](https://github.com/lowoodz/SafeRoute/releases/latest).
+
+| Platform | Package | Install |
+|----------|---------|---------|
+| **macOS** (Apple Silicon) | `SafeRoute_*_aarch64.dmg` | Open the DMG, drag **SafeRoute.app** to Applications, launch from the menu bar tray |
+| **macOS** (Apple Silicon) | `smr-*-darwin-arm64-app.tar.gz` | Extract `SafeRoute.app` to `/Applications` |
+| **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | Extract and run `SecureModelRoute.exe` (tray GUI, embeds the server) |
+| **Windows** x86_64 | `smr-*-windows-x86_64.zip` | CLI only: extract, run `install.ps1`, then `securemodelroute` |
+
+From source on macOS: `./scripts/install.sh --all` (CLI + tray + login autostart).  
+From source on Windows: `.\install.ps1 -All`.
+
+Config after install: `~/.local/etc/securemodelroute/smr.yaml` (macOS/Linux) or `%APPDATA%\securemodelroute\smr.yaml` (Windows). Add upstream API keys in the admin UI or YAML—never commit secrets.
+
+---
+
+## OpenClaw
+
+[OpenClaw](https://docs.openclaw.ai/) is an OpenAI-compatible agent gateway. Point it at SafeRoute so OpenClaw calls your local fallback router instead of vendor APIs directly.
+
+**Prerequisites:** SafeRoute running (`securemodelroute` or the tray app) with models configured in `smr.yaml`. Real provider keys live in SafeRoute only.
+
+Edit `~/.openclaw/openclaw.json` (JSON5). Use model **ids that match** your SafeRoute `fallback_groups` entries:
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      saferoute: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        apiKey: "dummy",
+        api: "openai-completions",
+        models: [
+          {
+            id: "glm-4-flash",
+            name: "GLM 4 Flash",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "saferoute/glm-4-flash" },
+      models: {
+        "saferoute/glm-4-flash": { alias: "saferoute" },
+      },
+    },
+  },
+}
+```
+
+Steps:
+
+1. Replace `glm-4-flash` with a model id from your SafeRoute routing table (admin UI → **Routing**).
+2. Add every `saferoute/<model-id>` you use to `agents.defaults.models` (required allowlist).
+3. Restart the OpenClaw gateway: `openclaw gateway restart` (or restart the OpenClaw app).
+
+Optional: route a session to SafeRoute’s `medium` / `low` tier via provider headers (if your OpenClaw version supports custom headers):
+
+```json5
+providers: {
+  saferoute: {
+    baseUrl: "http://127.0.0.1:8080/v1",
+    headers: { "X-SMR-Fallback-Group": "high" },
+    // ...
+  },
+}
+```
+
+SafeRoute applies DLP, operation rules, and path protection to OpenClaw traffic the same as any other client.
 
 ---
 

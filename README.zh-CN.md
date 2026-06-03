@@ -7,11 +7,11 @@
 - 无需手动切换，API 调用失败、Token额度不足、频率限制时，自动Fallback/回退，全程无中断。
 - 同时提供数据防泄漏、数据脱敏、操作拦截、文件路径防护等安全保障，
 - 满足个人用户使用LLM和Agent时，对安全、可靠的基本需求，
-- 支持MacOS、Windows桌面应用，一键安装。
+- 支持 macOS、Windows 桌面托盘应用，一键安装。
 
 **English:** [README.md](README.md)
 
-SafeRoute 管理界面 — 模型路由
+![SafeRoute 管理界面 — 模型路由](docs/cn-route-gui.png)
 
 ---
 
@@ -57,6 +57,87 @@ client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="dummy")
 
 
 可选请求头：`X-SMR-Fallback-Group`（`high` / `medium` / `low`）、`X-SMR-Session-Id`（SessionGuard 与审计）。
+
+---
+
+## 下载（桌面应用）
+
+预编译包见 [GitHub Releases](https://github.com/lowoodz/SafeRoute/releases/latest)。
+
+| 平台 | 安装包 | 安装方式 |
+|------|--------|----------|
+| **macOS**（Apple Silicon） | `SafeRoute_*_aarch64.dmg` | 打开 DMG，将 **SafeRoute.app** 拖入「应用程序」，从菜单栏托盘启动 |
+| **macOS**（Apple Silicon） | `smr-*-darwin-arm64-app.tar.gz` | 解压后将 `SafeRoute.app` 放入 `/Applications` |
+| **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | 解压后运行 `SecureModelRoute.exe`（托盘 GUI，内置服务） |
+| **Windows** x86_64 | `smr-*-windows-x86_64.zip` | 仅 CLI：解压后运行 `install.ps1`，再执行 `securemodelroute` |
+
+源码安装：macOS 执行 `./scripts/install.sh --all`；Windows 执行 `.\install.ps1 -All`。
+
+安装后配置文件：`~/.local/etc/securemodelroute/smr.yaml`（macOS/Linux）或 `%APPDATA%\securemodelroute\smr.yaml`（Windows）。在管理界面或 YAML 中填写上游 API Key，切勿提交到 Git。
+
+---
+
+## OpenClaw 配置
+
+[OpenClaw](https://docs.openclaw.ai/) 是 OpenAI 兼容的 Agent 网关。将其指向本地 SafeRoute，即可由 SafeRoute 做 fallback 路由，并统一应用 DLP / 操作拦截 / 路径防护。
+
+**前提：** SafeRoute 已启动（`securemodelroute` 或托盘应用），且 `smr.yaml` 中已配置模型。真实 API Key 只放在 SafeRoute，不要写入 OpenClaw。
+
+编辑 `~/.openclaw/openclaw.json`（JSON5）。`models[].id` 必须与 SafeRoute **路由表中的 model 名称一致**：
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      saferoute: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        apiKey: "dummy",
+        api: "openai-completions",
+        models: [
+          {
+            id: "glm-4-flash",
+            name: "GLM 4 Flash",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: { primary: "saferoute/glm-4-flash" },
+      models: {
+        "saferoute/glm-4-flash": { alias: "saferoute" },
+      },
+    },
+  },
+}
+```
+
+步骤：
+
+1. 将 `glm-4-flash` 换成 SafeRoute 管理界面 **路由** 里实际配置的 model id。
+2. 在 `agents.defaults.models` 中登记每个要用的 `saferoute/<model-id>`（OpenClaw 必填 allowlist）。
+3. 重启 OpenClaw 网关：`openclaw gateway restart`（或重启 OpenClaw 应用）。
+
+可选：通过请求头指定 SafeRoute 路由组（若 OpenClaw 版本支持自定义 headers）：
+
+```json5
+providers: {
+  saferoute: {
+    baseUrl: "http://127.0.0.1:8080/v1",
+    headers: { "X-SMR-Fallback-Group": "high" },
+    // ...
+  },
+}
+```
+
+OpenClaw 经 SafeRoute 发出的请求与 IDE、SDK 一样，都会走相同的安全策略。
 
 ---
 
