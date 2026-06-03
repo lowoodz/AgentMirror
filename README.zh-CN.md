@@ -2,7 +2,11 @@
 
 **通往大模型智能的安全之路——更快、更稳、更放心。**
 
-SafeRoute 是一款轻量本地模型代理，兼容 OpenAI / Anthropic 客户端协议。将 IDE、Agent 或 SDK 的 `base_url` 指向 `http://127.0.0.1:8080/v1`，即可在访问云端模型前获得 **高性能 fallback 路由** 与 **基础安全防护**（数据、操作、路径），无需改业务代码。
+- SafeRoute 是一款轻量本地模型代理/路由，兼容 OpenAI / Anthropic 客户端协议，
+- 将 IDE、Agent 或 SDK 的 `base_url` 指向 `http://127.0.0.1:8080/v1`，即可安全、可靠地调用/访问多个大模型，例如 GPT、Claude Opus、Gemini、DeepSeek、GLM、Kimi等，
+- 无需手动切换，API 调用失败、Token额度不足、频率限制时，自动Fallback/回退，全程无中断。
+- 同时提供数据防泄漏、数据脱敏、操作拦截、文件路径防护等安全保障，
+- 满足个人用户使用LLM和Agent时，对安全、可靠的基本需求。
 
 **English:** [README.md](README.md)
 
@@ -65,6 +69,8 @@ client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="dummy")
 - 自动识别协议并做跨厂商映射
 
 ### 数据安全（DLP）
+
+在模型访问/获取敏感数据前，自动脱敏，防止数据经模型泄露出去；
 
 - **内容规则** — 全文/片段匹配密钥、短语及无后缀敏感串
 - **文件规则** — 大语料磁盘索引（Bloom + SQLite + 字节校验），变更增量重建
@@ -138,7 +144,7 @@ fallback_groups:
 ```yaml
 logging:
   save_traffic_bodies: true
-  traffic_max_body_bytes: 20971520
+  traffic_max_body_bytes: 20971520   # 20 MiB cap
 ```
 
 文件位置：`{config_dir}/traffic/*.body`
