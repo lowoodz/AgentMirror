@@ -17,3 +17,6 @@ SecureModelRoute方案设计.docx
 # Generated before Tauri NSIS build (see scripts/windows/prepare-nsis-bundle.ps1)
 /gui/bundle-extra/*
 !/gui/bundle-extra/.gitkeep
+
+# Local ad-hoc smoke script (not maintained in repo)
+scripts/windows/smoke_chat.py
