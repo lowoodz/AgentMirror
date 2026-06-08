@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="96" y1="64" x2="416" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4a6280"/>
+      <stop offset="1" stop-color="#2f4563"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="256" y1="120" x2="256" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b8d4ff"/>
+      <stop offset="1" stop-color="#6ea8ff"/>
+    </linearGradient>
+    <linearGradient id="route" x1="256" y1="256" x2="420" y2="160" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8ec0ff"/>
+      <stop offset="1" stop-color="#5ee4a8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="8" y="8" width="496" height="496" rx="104" stroke="#9ec0ff" stroke-width="6" opacity="0.22"/>
+  <!-- routing paths -->
+  <path d="M256 248 C256 248 340 200 392 168" stroke="url(#route)" stroke-width="16" stroke-linecap="round" fill="none"/>
+  <path d="M256 264 C256 264 380 280 420 320" stroke="#8ec0ff" stroke-width="16" stroke-linecap="round" fill="none"/>
+  <path d="M256 264 C256 264 132 280 92 320" stroke="#8ec0ff" stroke-width="16" stroke-linecap="round" fill="none"/>
+  <path d="M256 248 C256 248 172 200 120 168" stroke="url(#route)" stroke-width="16" stroke-linecap="round" fill="none"/>
+  <!-- route nodes -->
+  <circle cx="392" cy="168" r="24" fill="#5ee4a8"/>
+  <circle cx="420" cy="320" r="20" fill="#8ec0ff"/>
+  <circle cx="92" cy="320" r="20" fill="#8ec0ff"/>
+  <circle cx="120" cy="168" r="24" fill="#5ee4a8"/>
+  <!-- shield -->
+  <path d="M256 128 L336 168 V248 C336 296 256 336 256 336 C256 336 176 296 176 248 V168 Z" fill="url(#shield)"/>
+  <path d="M256 128 L336 168 V248 C336 296 256 336 256 336 C256 336 176 296 176 248 V168 Z" stroke="#e8f2ff" stroke-width="5" fill="none" opacity="0.55"/>
+  <!-- hub -->
+  <circle cx="256" cy="248" r="30" fill="#243752" stroke="#b8d4ff" stroke-width="7"/>
+  <!-- security check -->
+  <path d="M244 248 L252 256 L272 232" stroke="#5ee4a8" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,33 @@
+[package]
+name = "smr-gui"
+version.workspace = true
+description = "SafeRoute desktop GUI"
+authors = ["SafeRoute"]
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "smr_gui_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "smr-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+smr-core = { path = "../../crates/smr-core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", features = ["NSColor", "NSWindow", "objc2-core-foundation"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging"] }

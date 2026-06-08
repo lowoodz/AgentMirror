@@ -1,0 +1,99 @@
+server:
+  listen: "127.0.0.1:8080"
+  default_fallback_group: high
+  # Universal API (recommended): one base URL for OpenAI + Anthropic clients
+  #   base_url: http://127.0.0.1:8080/v1
+  #   OpenAI SDK → POST /chat/completions (or /v1/chat/completions)
+  #   Anthropic SDK → POST /messages (or /v1/messages); set base_url to .../v1 when supported
+  #   models: saferoute-high | saferoute-medium | saferoute-lite  (GET /models or /v1/models)
+  # Protocol is auto-detected from headers/body; upstream OpenAI/Anthropic endpoints convert as needed.
+  # Legacy tier path prefixes (/high/messages, /medium/chat/completions) still select a fallback group.
+
+pipeline:
+  security_enabled: true
+  dlp_enabled: true
+  dlp_reversible: true  # tokenize secrets for upstream models; restore in tool-call args to client
+  operation_security_mode: observe  # observe | enforce
+  builtin_credential_presets: true
+
+logging:
+  level: info
+  redact_content: true
+  save_traffic_bodies: false
+  traffic_request_capture: after_dlp  # after_dlp (default) | before_dlp (raw, may contain secrets)
+  traffic_max_body_bytes: 20971520  # 20 MiB per snapshot file
+
+fallback_groups:
+  high:
+    - id: openai-primary
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o-mini"
+      api_key_env: OPENAI_API_KEY
+      timeout_secs: 120
+    - id: anthropic-fallback
+      base_url: "https://api.anthropic.com/v1"
+      model: "claude-sonnet-4-20250514"
+      protocol: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+      timeout_secs: 120
+  medium:
+    - id: openai-mini
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4o-mini"
+      api_key_env: OPENAI_API_KEY
+  low:
+    - id: deepseek
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-chat"
+      api_key_env: DEEPSEEK_API_KEY
+
+content_rules:
+  - id: example-secret
+    enabled: true
+    match_mode: full
+    category: secret
+    value: "sk-replace-with-your-key"
+  - id: example-phrase
+    enabled: true
+    match_mode: fragment
+    min_fragment_len: 8
+    category: normal
+    value: "公司内部机密项目"
+
+file_rules:
+  - id: example-secrets-dir
+    enabled: false
+    path: "./secrets"
+    recursive: true
+    trigger_window: 5
+    match_mode: fragment
+    min_fragment_len: 65
+    min_fragment_ratio: 0.5
+
+operation_rules:
+  - id: block-rm-rf
+    enabled: true
+    operation: command_exec
+    object:
+      pattern: "rm -rf"
+      is_regex: false
+  - id: block-prod-api
+    enabled: true
+    operation: api_call
+    object:
+      pattern: "https://prod.example.com"
+      is_regex: false
+
+path_protection_rules:
+  - id: protect-etc-passwd
+    enabled: true
+    path: "/etc/passwd"
+    level: deny_access
+  - id: protect-var-log
+    enabled: true
+    path: "/var/log"
+    level: deny_modify
+  - id: protect-backups
+    enabled: true
+    path: "/data/backups"
+    level: deny_delete

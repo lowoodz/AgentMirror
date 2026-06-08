@@ -1,0 +1,59 @@
+name: Windows NSIS
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'crates/**'
+      - 'gui/**'
+      - 'config/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/package.ps1'
+      - 'scripts/windows/**'
+      - '.github/workflows/windows-nsis.yml'
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'gui/**'
+      - 'config/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/package.ps1'
+      - 'scripts/windows/**'
+      - '.github/workflows/windows-nsis.yml'
+  workflow_dispatch:
+
+jobs:
+  build-nsis:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Build Windows release (CLI + NSIS)
+        shell: pwsh
+        env:
+          CI: true
+        run: |
+          .\scripts\package.ps1
+
+      - name: Verify NSIS artifact
+        shell: pwsh
+        run: |
+          .\scripts\windows\verify-package.ps1 -RequireSetup
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-nsis-${{ github.sha }}
+          path: |
+            dist/SafeRoute_*_x64-setup.exe
+            dist/smr-*-windows-x86_64.zip
+            dist/smr-*-windows-x86_64-app.zip

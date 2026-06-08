@@ -1,0 +1,19 @@
+/target
+/dist
+**/*.rs.bk
+.DS_Store
+test_model_api_key.txt
+config/test.env
+config/smr.yaml
+dist/.test-keys-from-env.txt
+
+# Local-only docs (not published to GitHub)
+TODO.txt
+TODO.md
+方案Prompt.txt
+SecureModelRoute方案设计.docx
+.cursor/session-handoff.md
+
+# Generated before Tauri NSIS build (see scripts/windows/prepare-nsis-bundle.ps1)
+/gui/bundle-extra/*
+!/gui/bundle-extra/.gitkeep

@@ -1,0 +1,65 @@
+---
+description: Windows UTM VM — SSH via SMR_WINDOWS_USER; NEVER modify OpenSSH from automation
+globs:
+  - scripts/vm/**
+  - scripts/windows_vm_test.sh
+  - scripts/clean-vm.sh
+  - config/test.env*
+alwaysApply: true
+---
+
+# Windows UTM VM (macOS host)
+
+## 唯一入口：VM SSH
+
+编译、打包、安装、测试 **全部** 通过 `${SMR_WINDOWS_USER}@${SMR_WINDOWS_HOST}`（`scripts/vm/vm-ssh.sh`）。
+
+**禁止** utmctl、SYSTEM、或非 `SMR_WINDOWS_USER` 账户跑 VM 脚本。Rust/Node/VS 工具链装在 **来宾配置账户** 下。
+
+```bash
+ssh windows-vm                    # 先确认连通（Host 别名见 ~/.ssh/config）
+./scripts/vm/package-windows-gui.sh
+./scripts/windows_vm_test.sh
+./scripts/clean-vm.sh
+```
+
+Mac `~/.ssh/config` 示例（`HostName` 填实际 LAN IP，勿提交到仓库）：
+
+```
+Host windows-vm
+  HostName <VM-LAN-IP>
+  User windows-user
+  Port 22
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+`config/test.env`：`SMR_WINDOWS_HOST=windows-vm`，`SMR_WINDOWS_USER=windows-user`（见 `config/test.env.example`）。
+
+`vm-ssh.sh` 使用 **ControlMaster** 复用单连接 — 勿在脚本里循环发起多次独立 `ssh` 握手。
+
+## 绝对禁止（Agent / 自动化）
+
+**Never** modify OpenSSH on the VM from scripts or agents:
+
+- 禁止 `icacls` / 重写 / 删除：`sshd_config`、`administrators_authorized_keys`、来宾 `\.ssh\**`
+- 禁止 `Restart-Service sshd`、重装 OpenSSH
+- 禁止添加自动化「SSH 修复」脚本或逻辑
+
+SSH 坏了：**只在 UTM 控制台手动修**。Agent 只报告 `ssh windows-vm` 失败。
+
+## Administrators 组账户
+
+OpenSSH 读 `C:\ProgramData\ssh\administrators_authorized_keys`，**不是** `~/.ssh/authorized_keys`。勿动来宾 `.ssh` 目录。
+
+新 VM 一次性手动配置见 `scripts/vm/WINDOWS_VM.md` § SSH 手动配置。
+
+## 调试
+
+| 用途 | 命令 |
+|------|------|
+| Windows NSIS 打包 | `./scripts/vm/package-windows-gui.sh` |
+| zip 安装测试 | `./scripts/windows_vm_test.sh` |
+| 安装后黑盒 | `./scripts/vm/utm-run-app-blackbox.sh` |
+| VM 清理 | `./scripts/clean-vm.sh` |
+
+Python（可选）：`%SMR_GUEST_STAGING%\python312\python.exe` 或 `C:\Users\Public\python312\python.exe`

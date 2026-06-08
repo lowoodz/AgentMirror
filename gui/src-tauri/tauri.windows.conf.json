@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "useLocalToolsDir": true,
+    "copyright": "Copyright © SafeRoute contributors",
+    "shortDescription": "Secure AI model routing proxy with DLP",
+    "resources": {
+      "../bundle-extra/smr.exe": "cli/smr.exe",
+      "../bundle-extra/smr.example.yaml": "cli/smr.example.yaml",
+      "nsis/post-install-cli.ps1": "cli/post-install-cli.ps1",
+      "nsis/post-uninstall-cli.ps1": "cli/post-uninstall-cli.ps1"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico",
+        "startMenuFolder": "SafeRoute",
+        "installerHooks": "nsis/installer-hooks.nsh"
+      }
+    }
+  }
+}

@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>LLM-SafeRoute</title>
+  <link rel="icon" href="/favicon.ico" type="image/png" />
+  <style>
+    :root {
+      --bg:#2e323a; --bg-subtle:#2e323a; --surface:#353a44; --surface-2:#3a404b; --surface-inset:#2a2e36;
+      --text:#eef1f6; --muted:#b8beca; --muted-2:#9098a8;
+      --accent:#7dd3fc; --accent-strong:#0ea5e9; --accent-hover:#0284c7; --accent-soft:rgba(14,165,233,.14);
+      --ok:#34d399; --warn:#fbbf24; --err:#f87171;
+      --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.14);
+      --high:#38bdf8; --medium:#a78bfa; --lite:#2dd4bf;
+      --radius:6px; --radius-lg:8px;
+      --gap:10px; --gap-lg:14px;
+    }
+    * { box-sizing:border-box; }
+    html { color-scheme:dark; background:var(--bg); }
+    body {
+      margin:0;
+      font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      background:var(--bg);
+      color:var(--text);
+      -webkit-font-smoothing:antialiased;
+    }
+    header {
+      padding:10px 18px;
+      border-bottom:1px solid var(--border);
+      display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+      background:var(--bg-subtle);
+      position:sticky; top:0; z-index:20;
+      min-height:48px;
+    }
+    .brand { display:flex; align-items:center; gap:8px; }
+    .brand h1 { margin:0; font-size:14px; font-weight:600; letter-spacing:-.01em; line-height:1.2; }
+    #statusText {
+      display:inline-flex; align-items:center;
+      padding:4px 10px; border-radius:999px;
+      background:var(--surface); border:1px solid var(--border);
+      font-size:12px; color:var(--muted);
+    }
+    .switch { display:flex; align-items:center; gap:8px; margin-left:auto; margin-right:2em; }
+    .switch input { width:38px; height:20px; accent-color:var(--accent-strong); }
+    #langSelect { width:auto; min-width:88px; min-height:32px; padding:0 28px 0 10px; font-size:12px; }
+    main { display:flex; min-height:calc(100vh - 43px); }
+    nav {
+      width:208px; border-right:1px solid var(--border);
+      padding:14px 10px; flex-shrink:0; background:var(--bg-subtle);
+    }
+    nav button {
+      display:block; width:100%; text-align:left;
+      padding:9px 12px; margin-bottom:2px;
+      background:transparent; border:none; border-left:2px solid transparent;
+      color:var(--muted); border-radius:0 8px 8px 0;
+      font-size:13px; font-weight:500; cursor:pointer;
+      transition:color .15s,background .15s,border-color .15s;
+    }
+    nav button:hover { color:var(--text); background:rgba(255,255,255,.06); }
+    nav button.active {
+      color:var(--text); background:var(--accent-soft);
+      border-left-color:var(--accent-strong);
+    }
+    .content { flex:1; padding:20px 24px 28px; max-width:960px; }
+    .panel { display:none; animation:fadeIn .2s ease; }
+    .panel.active { display:block; }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px 22px; margin-bottom:16px; }
+    .hint { color:var(--muted); font-size:13px; line-height:1.6; }
+    .badge { display:inline-flex; align-items:center; padding:3px 9px; border-radius:6px; font-size:11px; font-weight:600; letter-spacing:.02em; line-height:1.3; border:1px solid transparent; }
+    .badge-accent { background:var(--accent-soft); color:#bae6fd; border-color:rgba(14,165,233,.28); }
+    .badge-ok { background:rgba(52,211,153,.14); color:#6ee7b7; border-color:rgba(52,211,153,.24); }
+    .badge-warn { background:rgba(251,191,36,.14); color:#fde68a; border-color:rgba(251,191,36,.24); }
+    .badge-muted { background:rgba(255,255,255,.06); color:var(--muted); border-color:var(--border); }
+    .page-header { margin-bottom:var(--gap-lg); }
+    .page-header-row { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--gap-lg); flex-wrap:wrap; }
+    .page-title { margin:0 0 4px; font-size:18px; font-weight:650; letter-spacing:-.02em; line-height:1.3; }
+    .page-desc { margin:0; max-width:560px; color:var(--muted); font-size:12px; line-height:1.5; word-break:keep-all; }
+    .section-label { font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--muted-2); margin:0 0 8px; }
+    .overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 200px; gap:var(--gap-lg); align-items:start; }
+    @media(max-width:860px){ .overview-layout{ grid-template-columns:1fr; } }
+    .connect-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; display:flex; flex-direction:column; gap:var(--gap-lg); }
+    .connect-brand { display:flex; align-items:center; gap:12px; min-width:0; }
+    .connect-icon { width:36px; height:36px; border-radius:var(--radius); background:var(--accent-soft); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; flex-shrink:0; color:var(--accent-strong); font-size:15px; font-weight:600; }
+    .connect-name { font-size:16px; font-weight:650; letter-spacing:-.02em; line-height:1.25; }
+    .connect-meta { margin-top:3px; font-size:12px; color:var(--muted); line-height:1.4; }
+    .connect-meta code { font-size:11px; padding:1px 6px; border-radius:5px; background:var(--surface-inset); border:1px solid var(--border); color:#bae6fd; }
+    .field-block { display:flex; flex-direction:column; gap:8px; min-width:0; }
+    .field-row { display:flex; align-items:center; gap:8px; min-width:0; }
+    .field-value { flex:1; min-width:0; display:block; padding:8px 11px; border-radius:var(--radius); background:var(--surface-inset); border:1px solid var(--border); font:500 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; color:#dbeafe; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .field-row .secondary { flex-shrink:0; min-width:60px; }
+    .model-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap); }
+    @media(max-width:640px){ .model-grid{ grid-template-columns:1fr; } }
+    .model-tile { padding:11px 12px; border-radius:var(--radius); border:1px solid var(--border); background:var(--surface-inset); display:flex; flex-direction:column; gap:5px; min-height:68px; }
+    .model-tile-label { font-size:11px; color:var(--muted-2); font-weight:500; letter-spacing:.01em; }
+    .model-tile-id { font:600 12px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; color:#e0f2fe; word-break:break-all; }
+    .model-tile .secondary { align-self:flex-start; margin-top:2px; min-height:28px; padding:0 8px; font-size:11px; }
+    .config-details { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface-inset); overflow:hidden; }
+    .config-details summary { cursor:pointer; list-style:none; padding:9px 12px; font-size:12px; font-weight:500; color:var(--muted); user-select:none; display:flex; align-items:center; gap:6px; }
+    .config-details summary::-webkit-details-marker { display:none; }
+    .config-details summary::before { content:'▸'; font-size:10px; color:var(--muted-2); }
+    .config-details[open] summary::before { content:'▾'; }
+    .config-details[open] summary { color:var(--text); border-bottom:1px solid var(--border); }
+    .config-details-body { padding:10px 12px 12px; display:flex; flex-direction:column; gap:var(--gap); }
+    .config-snippet { margin:0; padding:10px 11px; border-radius:var(--radius); background:var(--bg); border:1px solid var(--border); font:500 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; color:var(--muted); max-height:200px; overflow:auto; }
+    .status-panel { display:flex; flex-direction:column; gap:var(--gap); }
+    .status-item { padding:10px 12px; border-radius:var(--radius); background:var(--surface); border:1px solid var(--border); display:flex; flex-direction:column; gap:6px; min-height:52px; justify-content:center; }
+    .status-item-label { font-size:11px; color:var(--muted-2); font-weight:500; }
+    .routing-head-top { display:flex; align-items:center; justify-content:space-between; gap:var(--gap-lg); margin-bottom:4px; }
+    .routing-head .page-desc { max-width:none; }
+    .routing-head .primary { flex-shrink:0; min-height:32px; }
+    button { font-family:inherit; }
+    button.primary { background:var(--accent-strong); color:#fff; border:1px solid var(--accent-strong); border-radius:var(--radius); padding:0 14px; min-height:32px; font-size:13px; font-weight:600; cursor:pointer; transition:background .15s,border-color .15s; white-space:nowrap; }
+    button.primary:hover { background:var(--accent-hover); }
+    button.secondary { background:var(--surface-inset); color:var(--text); border:1px solid var(--border-strong); border-radius:var(--radius); padding:0 12px; min-height:32px; font-size:12px; font-weight:500; cursor:pointer; margin-left:0; transition:background .15s,border-color .15s,color .15s; white-space:nowrap; }
+    button.secondary:hover { background:var(--surface-2); color:var(--text); border-color:var(--border-strong); }
+    button.btn-sm { min-height:28px; padding:0 9px; font-size:11px; }
+    button.btn-del { background:transparent; color:var(--muted); border:1px solid transparent; border-radius:var(--radius); padding:4px 8px; cursor:pointer; font-size:11px; flex-shrink:0; min-height:28px; }
+    button.btn-del:hover { color:var(--err); background:rgba(248,113,113,.1); border-color:rgba(248,113,113,.2); }
+    .group-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--gap-lg); align-items:stretch; }
+    @media(max-width:900px){ .group-grid{ grid-template-columns:1fr; } nav{width:176px;} .content{padding:18px 14px 28px;} }
+    .group-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; display:flex; flex-direction:column; min-height:200px; }
+    .group-card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:13px 14px; border-bottom:1px solid var(--border); background:var(--surface); min-height:52px; }
+    .group-card-meta { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; }
+    .group-card-title { font-size:13px; font-weight:650; letter-spacing:-.01em; }
+    .group-card-id { font:500 11px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .model-list { display:flex; flex-direction:column; padding:8px; flex:1; min-height:64px; gap:2px; }
+    .empty-models { padding:28px 14px; text-align:center; color:var(--muted-2); font-size:12px; line-height:1.5; }
+    .model-row { display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:8px; align-items:center; padding:8px 8px; min-height:46px; border-radius:8px; font-size:13px; border:1px solid transparent; transition:background .12s,border-color .12s; }
+    .model-row:hover { background:rgba(255,255,255,.05); }
+    .model-row.dragging { opacity:.45; }
+    .model-row.drag-over { background:var(--accent-soft); border-color:rgba(14,165,233,.32); }
+    .drag-handle { cursor:grab; color:var(--muted-2); font-size:14px; line-height:1; padding:0 2px; user-select:none; flex-shrink:0; touch-action:none; opacity:.7; }
+    .drag-handle:hover { opacity:1; color:var(--muted); }
+    .drag-handle:active { cursor:grabbing; }
+    .model-row-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+    .model-row-title { display:flex; align-items:center; gap:8px; min-width:0; }
+    .model-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:550; font-size:13px; letter-spacing:-.01em; }
+    .model-row-url { font-size:11px; color:var(--muted-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .group-card-footer { padding:8px 10px 10px; border-top:1px solid var(--border); margin-top:auto; }
+    .btn-add-model { width:100%; min-height:34px; border-style:dashed; color:var(--muted); font-size:12px; }
+    .btn-add-model:hover { color:var(--text); border-color:rgba(14,165,233,.4); background:var(--accent-soft); }
+    .model-add-form { background:var(--surface-inset); border:1px solid var(--border); border-radius:10px; padding:14px; margin:4px 8px 8px; }
+    .model-add-form label { display:block; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted-2); margin:10px 0 6px; }
+    .model-add-form label:first-of-type { margin-top:0; }
+    .model-add-form .form-actions { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+    .proto { font-size:10px; padding:2px 6px; border-radius:5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase; flex-shrink:0; }
+    .proto.openai { background:rgba(52,211,153,.14); color:#6ee7b7; }
+    .proto.anthropic { background:rgba(14,165,233,.16); color:#bae6fd; }
+    textarea.yaml { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+    .card h3 { margin:0 0 10px; font-size:15px; font-weight:650; letter-spacing:-.01em; }
+    .card > .hint { margin:0 0 14px; }
+    .settings-section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:14px 16px; margin-bottom:var(--gap); }
+    .settings-section-head { margin-bottom:var(--gap-lg); }
+    .settings-section-head h3 { margin:0 0 4px; font-size:13px; font-weight:650; letter-spacing:-.01em; }
+    .settings-section-head .hint { margin:0; font-size:12px; line-height:1.5; }
+    .settings-section .data-table-wrap { margin:0; }
+    .input-row { display:flex; align-items:center; gap:var(--gap); flex-wrap:wrap; margin-bottom:var(--gap); }
+    .input-row:last-child { margin-bottom:0; }
+    .input-row > input { flex:1; min-width:160px; margin:0; }
+    .input-row > select { width:auto; min-width:120px; max-width:160px; flex-shrink:0; margin:0; }
+    .input-row > .primary, .input-row > .secondary { flex-shrink:0; margin:0; }
+    .check-row { display:flex; align-items:flex-start; gap:8px; font-size:12px; color:var(--muted); line-height:1.45; margin:0 0 var(--gap); cursor:pointer; }
+    .check-row input { margin-top:2px; }
+    .rules-list { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+    .rule-item { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:var(--gap); align-items:center; padding:9px 11px; min-height:40px; border-bottom:1px solid var(--border); background:var(--surface-inset); }
+    .rule-item:last-child { border-bottom:none; }
+    .rule-item-path { flex:1; min-width:0; font:500 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .rule-item-meta { font-size:11px; color:var(--muted-2); white-space:nowrap; flex-shrink:0; }
+    .empty-state { padding:24px 12px; text-align:center; color:var(--muted-2); font-size:12px; border:1px dashed var(--border); border-radius:var(--radius); background:var(--surface-inset); }
+    .rules-list .empty-state { border:none; background:transparent; padding:20px 12px; }
+    .page-footer { display:flex; align-items:center; justify-content:space-between; gap:var(--gap-lg); flex-wrap:wrap; padding-top:var(--gap); margin-top:var(--gap); border-top:1px solid var(--border); }
+    .page-footer .hint { margin:0; font-size:12px; flex:1; min-width:140px; }
+    .page-footer .primary { flex-shrink:0; }
+    .data-table-wrap { border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+    .data-table { width:100%; border-collapse:collapse; font-size:12px; margin:0; }
+    .data-table thead { background:var(--surface-inset); }
+    .data-table th { padding:8px 11px; font-size:10px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted-2); border-bottom:1px solid var(--border); text-align:left; }
+    .data-table td { padding:7px 11px; border-bottom:1px solid var(--border); vertical-align:middle; background:var(--surface); }
+    .data-table tr:last-child td { border-bottom:none; }
+    .data-table td input, .data-table td select { min-height:30px; font-size:12px; }
+    .data-table .col-actions { width:64px; text-align:right; white-space:nowrap; }
+    .data-table-empty td { padding:24px 12px; text-align:center; color:var(--muted-2); font-size:12px; background:var(--surface-inset); }
+    .toolbar-flat { border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; display:flex; flex-direction:column; gap:var(--gap); background:var(--surface-inset); margin-bottom:var(--gap-lg); }
+    .toolbar-row { display:flex; align-items:center; gap:var(--gap); flex-wrap:wrap; min-height:32px; }
+    .toolbar-row .spacer { flex:1; min-width:8px; }
+    .log-list { display:flex; flex-direction:column; gap:var(--gap); }
+    .log-entry { border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; background:var(--surface-inset); }
+    .log-entry-meta { font-size:11px; color:var(--muted-2); margin-bottom:6px; line-height:1.4; }
+    .section-actions { display:flex; align-items:center; justify-content:space-between; gap:var(--gap); margin-bottom:var(--gap); }
+    .section-actions h3 { margin:0; font-size:13px; font-weight:650; letter-spacing:-.01em; }
+    .input-row-actions { margin-top:var(--gap); margin-bottom:0; }
+    .yaml-panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; }
+    .yaml-panel-head { padding:14px 18px; border-bottom:1px solid var(--border); }
+    .yaml-panel-head h3 { margin:0 0 4px; font-size:14px; font-weight:650; }
+    .yaml-panel-head .hint { margin:0; font-size:12px; }
+    .yaml-panel-body { padding:0; }
+    .yaml-panel-body textarea.yaml { border:none; border-radius:0; min-height:420px; resize:vertical; background:var(--surface-inset); }
+    .yaml-panel-foot { display:flex; gap:8px; padding:12px 18px; border-top:1px solid var(--border); background:var(--surface); }
+    .dropzone { border:1px dashed var(--border-strong); border-radius:var(--radius); padding:16px; text-align:center; color:var(--muted); margin:0 0 12px; font-size:12px; background:var(--surface-inset); }
+    .dropzone.dragover { border-color:var(--accent-strong); color:var(--accent); background:var(--accent-soft); }
+    .tags { display:flex; flex-wrap:wrap; gap:6px; min-height:32px; }
+    .tag { background:var(--surface-inset); padding:5px 10px; border-radius:var(--radius); font-size:12px; display:inline-flex; gap:6px; align-items:center; color:var(--text); border:1px solid var(--border); }
+    .tag .tag-remove { cursor:pointer; color:var(--err); font-weight:600; line-height:1; padding:0 2px; }
+    input, select, textarea { background:var(--surface-inset); color:var(--text); border:1px solid var(--border-strong); border-radius:var(--radius); padding:0 10px; width:100%; font-size:13px; min-height:32px; }
+    textarea, textarea.yaml { min-height:280px; padding:10px 11px; line-height:1.45; }
+    input[type="checkbox"], input[type="radio"] { width:auto; min-height:auto; flex-shrink:0; padding:0; margin:0; accent-color:var(--accent-strong); }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    td,th { padding:10px 8px; border-bottom:1px solid var(--border); text-align:left; vertical-align:middle; }
+    .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .log-list .empty-state { margin:0; }
+    .traffic-body { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; white-space:pre-wrap; word-break:break-word; max-height:200px; overflow:auto; background:var(--bg); padding:8px 10px; border-radius:var(--radius); margin-top:6px; border:1px solid var(--border); }
+    .traffic-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:4px; }
+    .traffic-toolbar { display:flex; flex-direction:column; gap:var(--gap); padding:10px 12px; background:var(--surface-inset); border:1px solid var(--border); border-radius:var(--radius); margin:0 0 var(--gap-lg); }
+    .traffic-toolbar-row { display:flex; align-items:center; gap:var(--gap); flex-wrap:wrap; min-height:32px; }
+    .traffic-enable { display:inline-flex; align-items:center; gap:8px; font-size:13px; cursor:pointer; white-space:nowrap; }
+    .traffic-toolbar .traffic-spacer { flex:1; min-width:8px; }
+    .traffic-toolbar button.secondary { margin-left:0; }
+    .traffic-timing { gap:8px; }
+    .traffic-timing-label { color:var(--muted); font-size:12px; white-space:nowrap; }
+    .segmented { display:inline-flex; border:1px solid var(--border-strong); border-radius:var(--radius); overflow:hidden; background:var(--bg); }
+    .segmented-item { display:inline-flex; align-items:center; justify-content:center; min-height:30px; padding:0 12px; font-size:12px; cursor:pointer; white-space:nowrap; border:none; border-right:1px solid var(--border-strong); background:transparent; font-family:inherit; color:var(--muted); transition:background .15s,color .15s; }
+    .segmented-item:last-child { border-right:none; }
+    .segmented-item.active { background:var(--accent-soft); color:#7dd3fc; }
+    .segmented-item:disabled { opacity:0.45; cursor:not-allowed; }
+    #trafficCaptureRow.traffic-off { display:none; }
+    #toast { position:fixed; bottom:24px; right:24px; padding:10px 14px; border-radius:var(--radius); background:var(--surface); border:1px solid var(--border-strong); opacity:0; transition:opacity .2s; pointer-events:none; z-index:999; max-width:360px; font-size:13px; }
+    #toast.show { opacity:1; }
+    #toast.ok { border-color:var(--ok); }
+    #toast.err { border-color:var(--err); }
+    .json-modal { position:fixed; inset:0; z-index:1000; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(0,0,0,.55); }
+    .json-modal.open { display:flex; }
+    .json-modal-panel { width:min(920px,100%); max-height:min(86vh,900px); display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius-lg); overflow:hidden; }
+    .json-modal-head { display:flex; align-items:center; gap:var(--gap); padding:10px 14px; border-bottom:1px solid var(--border); background:var(--surface); }
+    .json-modal-head h4 { margin:0; flex:1; font-size:14px; font-weight:650; }
+    .json-modal-meta { padding:8px 16px; font-size:12px; color:var(--muted); border-bottom:1px solid var(--border); }
+    .json-modal-body { flex:1; overflow:auto; padding:12px 16px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.5; background:var(--surface-inset); }
+    .json-tree { list-style:none; margin:0; padding-left:0; }
+    .json-tree ul { list-style:none; margin:0; padding-left:18px; border-left:1px dashed rgba(255,255,255,.08); }
+    .json-node { margin:1px 0; }
+    .json-line { display:flex; align-items:flex-start; gap:4px; flex-wrap:wrap; }
+    .json-toggle { width:14px; flex-shrink:0; cursor:pointer; user-select:none; color:var(--muted-2); text-align:center; }
+    .json-toggle.empty { visibility:hidden; }
+    .json-key { color:#93c5fd; }
+    .json-key.root { color:var(--text); font-weight:600; }
+    .json-sep { color:var(--muted-2); }
+    .json-str { color:#86efac; white-space:pre-wrap; word-break:break-word; }
+    .json-num { color:#fcd34d; }
+    .json-bool { color:#f472b6; }
+    .json-null { color:var(--muted-2); font-style:italic; }
+    .json-bracket { color:var(--muted); }
+    .json-preview { color:var(--muted-2); font-style:italic; }
+    .json-raw { white-space:pre-wrap; word-break:break-word; color:var(--text); }
+  </style>
+</head>
+<body>
+<div id="toast" role="status" aria-live="polite"></div>
+<header>
+  <div class="brand">
+  <h1>LLM-SafeRoute</h1>
+  </div>
+  <span class="hint" id="statusText">…</span>
+  <select id="langSelect" onchange="setLang(this.value)" aria-label="Language">
+    <option value="en">English</option>
+    <option value="zh">中文</option>
+  </select>
+  <div class="switch">
+    <label class="hint" id="securityLabel" data-i18n="securityMaster">Security master switch</label>
+    <input type="checkbox" id="securityMaster" onchange="toggleSecurity()" />
+  </div>
+</header>
+<main>
+<nav id="mainNav">
+  <button class="active" data-tab="overview" data-i18n="nav.overview" onclick="showTab('overview',this)">Overview</button>
+  <button data-tab="routing" data-i18n="nav.routing" onclick="showTab('routing',this)">Routing</button>
+  <button data-tab="dlp" data-i18n="nav.dlp" onclick="showTab('dlp',this)">DLP</button>
+  <button data-tab="path-protection" data-i18n="nav.path" onclick="showTab('path-protection',this)">Path protection</button>
+  <button data-tab="ops" data-i18n="nav.ops" onclick="showTab('ops',this)">Operations</button>
+  <button data-tab="logs" data-i18n="nav.logs" onclick="showTab('logs',this)">Logs</button>
+  <button data-tab="advanced" data-i18n="nav.advanced" onclick="showTab('advanced',this)">Advanced Configs</button>
+</nav>
+<div class="content">
+<section class="panel active" id="overview">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.overview">Overview</h2>
+    <p class="page-desc" data-i18n="overview.proxyHint">One base URL for OpenAI and Anthropic clients. SafeRoute detects the protocol and converts to each upstream model in the fallback group.</p>
+  </div>
+  <div class="overview-layout">
+    <div class="connect-card">
+      <div class="connect-brand">
+        <div class="connect-icon" aria-hidden="true">↗</div>
+        <div class="connect-meta-wrap">
+          <div class="connect-name" id="providerName">LLM-SafeRoute</div>
+          <div class="connect-meta"><span data-i18n="overview.providerSub">OpenAI-compatible provider</span><span id="providerId" hidden>saferoute</span></div>
+        </div>
+      </div>
+      <div class="field-block">
+        <div class="section-label" data-i18n="overview.baseUrl">Base URL</div>
+        <div class="field-row">
+          <code class="field-value" id="providerUrl">-</code>
+          <button type="button" class="secondary btn-sm" data-i18n="copy" onclick="copyProviderUrl()">Copy</button>
+        </div>
+      </div>
+      <div class="field-block">
+        <div class="section-label" data-i18n="overview.modelsTitle">Models</div>
+        <div class="model-grid" id="providerModels"></div>
+      </div>
+      <details class="config-details">
+        <summary data-i18n="overview.openclawConfig">OpenClaw configuration</summary>
+        <div class="config-details-body">
+          <pre class="config-snippet" id="providerSnippet"></pre>
+          <button type="button" class="secondary btn-sm" data-i18n="copy" onclick="copyOpenClawSnippet()">Copy</button>
+        </div>
+      </details>
+    </div>
+    <aside class="status-panel" aria-label="Status">
+      <div class="status-item"><span class="status-item-label" data-i18n="overview.defaultGroup">Default group</span><span class="badge badge-accent" id="defaultGroup">-</span></div>
+      <div class="status-item"><span class="status-item-label" data-i18n="overview.dlp">DLP</span><span class="badge badge-muted" id="dlpStatus">-</span></div>
+      <div class="status-item"><span class="status-item-label" data-i18n="overview.ops">Operation security</span><span class="badge badge-muted" id="opMode">-</span></div>
+      <div class="status-item"><span class="status-item-label" data-i18n="overview.index">File index</span><span class="badge badge-muted" id="indexStatus">-</span></div>
+    </aside>
+  </div>
+</section>
+<section class="panel" id="routing">
+  <div class="page-header routing-head">
+    <div class="routing-head-top">
+      <h2 class="page-title" data-i18n="nav.routing">Routing</h2>
+      <button type="button" class="primary" data-i18n="routing.save" onclick="saveRouting()">Save routing</button>
+    </div>
+    <p class="page-desc" data-i18n="routing.hint">Drag to reorder fallback within each tier. Clients select a tier via model id on the shared base URL.</p>
+  </div>
+  <div class="group-grid" id="groupGrid"></div>
+</section>
+<section class="panel" id="dlp">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.dlp">DLP</h2>
+    <p class="page-desc" data-i18n="dlp.pageHint">Protect sensitive files and content before they reach the LLM.</p>
+  </div>
+  <div class="settings-section">
+    <div class="settings-section-head">
+      <h3 data-i18n="dlp.fileTitle">File protection zones</h3>
+      <p class="hint" data-i18n="dlp.fileFormatsHint">Indexed extensions: txt, md, json, yaml, rs, py, etc. Add more in Advanced Configs (formats). Extensionless files need a content rule below.</p>
+    </div>
+    <div class="dropzone" id="fileDrop" data-i18n="dlp.fileDrop">Drop a file or folder path</div>
+    <div class="input-row">
+      <input id="filePathInput" placeholder="/path/to/secrets" onkeydown="if(event.key==='Enter')addFileRule()" />
+      <button type="button" class="primary" data-i18n="add" onclick="addFileRule()">Add</button>
+    </div>
+    <label class="check-row"><input type="checkbox" id="fileRulePathProtect" /> <span data-i18n="dlp.pathProtectSync">Also block Agent read/write (Path protection — optional)</span></label>
+    <div class="rules-list" id="fileRulesList"></div>
+  </div>
+  <div class="settings-section">
+    <div class="settings-section-head">
+      <h3 data-i18n="dlp.contentTitle">Content protection zones</h3>
+      <p class="hint" data-i18n="dlp.contentHint">Sensitive keywords or API keys — matched and redacted before sending to the model.</p>
+    </div>
+    <div class="input-row">
+      <input id="secretInput" data-i18n-placeholder="dlp.secretPh" placeholder="Sensitive text / API key, press Enter" onkeydown="if(event.key==='Enter')addSecretTag()" />
+    </div>
+    <div class="tags" id="secretTags"></div>
+  </div>
+  <div class="page-footer">
+    <span class="hint" data-i18n="dlp.saveHint">Saving applies both file and content rules.</span>
+    <button type="button" class="primary" data-i18n="dlp.save" onclick="saveConfig('dlp')">Save DLP</button>
+  </div>
+</section>
+<section class="panel" id="path-protection">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.path">Path protection</h2>
+    <p class="page-desc" data-i18n="path.pageHint">Block Agent delete, modify, or access on protected paths. Directories cover descendants.</p>
+  </div>
+  <div class="settings-section">
+    <div class="dropzone" id="pathDrop" data-i18n="path.drop">Drop path here</div>
+    <div class="input-row">
+      <input id="pathProtectInput" placeholder="/path/to/protect" onkeydown="if(event.key==='Enter')addPathRule()" />
+      <select id="pathProtectLevel"></select>
+      <button type="button" class="primary" data-i18n="add" onclick="addPathRule()">Add</button>
+    </div>
+    <div class="data-table-wrap">
+      <table class="data-table">
+        <thead><tr><th data-i18n="path.colPath">Path</th><th data-i18n="path.colLevel">Level</th><th class="col-actions"></th></tr></thead>
+        <tbody id="pathProtectTable"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="page-footer">
+    <span class="hint" data-i18n="path.hint">Optional: use DLP file zones if you allow local read but want LLM-side redaction only.</span>
+    <button type="button" class="primary" data-i18n="path.save" onclick="saveConfig('path')">Save path protection</button>
+  </div>
+</section>
+<section class="panel" id="ops">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.ops">Operations</h2>
+    <p class="page-desc" data-i18n="ops.pageHint">Match dangerous tool calls by operation type and keyword pattern.</p>
+  </div>
+  <div class="settings-section">
+    <div class="data-table-wrap">
+      <table class="data-table">
+        <thead><tr><th data-i18n="ops.colAction">Action</th><th data-i18n="ops.colPattern">Pattern</th><th class="col-actions"></th></tr></thead>
+        <tbody id="opsTable"></tbody>
+      </table>
+    </div>
+    <div class="input-row input-row-actions">
+      <button type="button" class="secondary" onclick="addOpRule()" data-i18n="ops.add">+ Add rule</button>
+    </div>
+  </div>
+  <div class="page-footer">
+    <span class="hint" data-i18n="ops.hint">Rules apply to intercepted tool / command invocations.</span>
+    <button type="button" class="primary" data-i18n="ops.save" onclick="saveConfig('ops')">Save</button>
+  </div>
+</section>
+<section class="panel" id="logs">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.logs">Logs</h2>
+    <p class="page-desc" data-i18n="logs.pageHint">Traffic snapshots, request audits, and system events.</p>
+  </div>
+  <div class="settings-section">
+    <div class="settings-section-head">
+      <h3 data-i18n="logs.trafficTitle">Traffic snapshots</h3>
+      <p class="hint" data-i18n="logs.trafficHint">When enabled, saves full request/response JSON to disk (up to 20 MiB per snapshot). The list shows a preview only.</p>
+    </div>
+    <div class="traffic-toolbar">
+      <div class="traffic-toolbar-row">
+        <label class="traffic-enable"><input type="checkbox" id="trafficToggle" onchange="toggleTrafficLog()" /> <span data-i18n="logs.trafficEnable">Enable traffic snapshots</span></label>
+        <span class="traffic-spacer"></span>
+        <button type="button" class="secondary btn-sm" data-i18n="refresh" onclick="loadTraffic()">Refresh</button>
+      </div>
+      <div id="trafficCaptureRow" class="traffic-toolbar-row traffic-timing">
+        <span class="traffic-timing-label" data-i18n="logs.trafficCaptureLabel">Timing</span>
+        <div class="segmented" role="radiogroup" aria-label="Traffic capture timing">
+          <button type="button" class="segmented-item" id="segAfter" role="radio" aria-checked="true" onclick="setTrafficCapture('after_dlp')"><span data-i18n="logs.trafficCaptureAfterShort">After DLP</span></button>
+          <button type="button" class="segmented-item" id="segBefore" role="radio" aria-checked="false" onclick="setTrafficCapture('before_dlp')"><span data-i18n="logs.trafficCaptureBeforeShort">Before DLP</span></button>
+        </div>
+      </div>
+    </div>
+    <div id="trafficList" class="log-list"></div>
+  </div>
+  <div class="settings-section">
+    <div class="section-actions">
+      <h3 data-i18n="logs.auditTitle">Request audits</h3>
+    </div>
+    <div class="data-table-wrap">
+      <table class="data-table"><thead><tr><th data-i18n="logs.time">Time</th><th data-i18n="logs.summary">Summary</th></tr></thead><tbody id="auditBody"></tbody></table>
+    </div>
+  </div>
+  <div class="settings-section">
+    <div class="section-actions">
+      <h3 data-i18n="logs.eventsTitle">Events</h3>
+      <button type="button" class="secondary btn-sm" data-i18n="refresh" onclick="loadEvents()">Refresh</button>
+    </div>
+    <div class="data-table-wrap">
+      <table class="data-table"><thead><tr><th data-i18n="logs.time">Time</th><th data-i18n="logs.type">Type</th><th data-i18n="logs.message">Message</th></tr></thead><tbody id="logBody"></tbody></table>
+    </div>
+  </div>
+</section>
+<section class="panel" id="advanced">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.advanced">Advanced Configs</h2>
+    <p class="page-desc" data-i18n="advanced.pageHint">Edit the full configuration as JSON. Invalid syntax will reject the save.</p>
+  </div>
+  <div class="yaml-panel">
+    <div class="yaml-panel-head">
+      <h3 data-i18n="advanced.editorTitle">Configuration</h3>
+      <p class="hint" data-i18n="advanced.editorHint">Changes take effect immediately after save. Use Reload to discard unsaved edits.</p>
+    </div>
+    <div class="yaml-panel-body">
+      <textarea class="yaml" id="configEditor" spellcheck="false"></textarea>
+    </div>
+    <div class="yaml-panel-foot">
+      <button type="button" class="primary" data-i18n="advanced.save" onclick="saveConfig('yaml')">Save & apply</button>
+      <button type="button" class="secondary" data-i18n="advanced.reload" onclick="reloadConfig()">Reload</button>
+    </div>
+  </div>
+</section>
+</div>
+</main>
+<div id="jsonModal" class="json-modal" onclick="if(event.target===this)closeTrafficViewer()">
+  <div class="json-modal-panel" role="dialog" aria-modal="true" aria-labelledby="jsonModalTitle">
+    <div class="json-modal-head">
+      <h4 id="jsonModalTitle"></h4>
+      <button type="button" class="secondary btn-sm" data-i18n="logs.trafficCopyRaw" onclick="copyTrafficRaw()">Copy raw</button>
+      <button type="button" class="secondary btn-sm" onclick="closeTrafficViewer()">×</button>
+    </div>
+    <div id="jsonModalMeta" class="json-modal-meta"></div>
+    <div id="jsonModalBody" class="json-modal-body"></div>
+  </div>
+</div>
+<script>
+const I18N={
+en:{
+'securityMaster':'Security master switch','nav.overview':'Overview','nav.routing':'Routing','nav.dlp':'DLP','nav.path':'Path protection','nav.ops':'Operations','nav.logs':'Logs','nav.advanced':'Advanced Configs',
+'overview.baseUrl':'Base URL','overview.providerSub':'OpenAI-compatible provider','overview.modelsTitle':'Models','overview.openclawConfig':'OpenClaw configuration','overview.openclawSnippet':'# OpenClaw — one provider, three tier models','overview.proxyHint':'One base URL for OpenAI and Anthropic clients. SafeRoute detects the protocol and converts to each upstream model in the fallback group.','overview.defaultGroup':'Default group','overview.dlp':'DLP','overview.ops':'Operation security','overview.index':'File index','overview.copyModel':'Copy id',
+'copy':'Copy','add':'Add','refresh':'Refresh',
+'routing.hint':'Drag to reorder fallback within each tier. Clients select a tier via model id on the shared base URL. Click Save routing to apply.','routing.save':'Save routing','group.high':'High precision','group.medium':'Balanced','group.low':'Lightweight',
+'dlp.fileTitle':'File protection zones','dlp.pageHint':'Protect sensitive files and content before they reach the LLM.','dlp.fileFormatsHint':'Allow local read; index listed extensions (incl. pdf/docx/pptx) and scrub matching content before it is sent to the LLM. Does not block read_file — use optional Path protection below for that.','dlp.fileDrop':'Drop a file or folder path','dlp.pathProtectSync':'Also block Agent read/write (Path protection — optional)','dlp.contentTitle':'Content protection zones','dlp.contentHint':'Sensitive keywords or API keys — matched and redacted before sending to the model.','dlp.secretPh':'Sensitive text / API key, press Enter','dlp.saveHint':'Saving applies both file and content rules.','dlp.save':'Save DLP','file.watching':'watching','file.disabled':'disabled',
+'path.title':'Important path protection','path.pageHint':'Block Agent delete, modify, or access on protected paths. Directories cover descendants.','path.hint':'Optional: use DLP file zones if you allow local read but want LLM-side redaction only.','path.drop':'Drop path here','path.colPath':'Path','path.colLevel':'Level','path.save':'Save path protection','level.deny_access':'Deny access','level.deny_modify':'Deny modify','level.deny_delete':'Deny delete',
+'ops.title':'Operation rules','ops.pageHint':'Match dangerous tool calls by operation type and keyword pattern.','ops.hint':'Rules apply to intercepted tool / command invocations.','ops.colAction':'Action','ops.colPattern':'Pattern','ops.add':'+ Add rule','ops.save':'Save','op.command':'Command','op.api':'API','op.network':'Network',
+'logs.trafficTitle':'Traffic snapshots','logs.pageHint':'Traffic snapshots, request audits, and system events.','logs.trafficHint':'When enabled, saves full request/response JSON to disk (up to 20 MiB per snapshot). The list shows a preview only.','logs.trafficEnable':'Enable traffic snapshots','logs.trafficCaptureLabel':'Timing','logs.trafficCaptureAfterShort':'After DLP','logs.trafficCaptureBeforeShort':'Before DLP','logs.trafficCaptureAfter':'After DLP (recommended, no secrets on disk)','logs.trafficCaptureBefore':'Before DLP (raw client body, may contain secrets)','logs.trafficViewFull':'View JSON','logs.trafficViewFullHint':'Open structured JSON viewer (expand/collapse fields)','logs.trafficCopyRaw':'Copy raw','logs.trafficViewerTitle':'Traffic body','logs.trafficNotJson':'Not valid JSON — showing raw text','logs.trafficSaved':'saved','logs.trafficTruncated':'truncated at limit','drop.pathFailed':'Could not read dropped path — type or paste it manually','logs.auditTitle':'Request audits','logs.eventsTitle':'Events','logs.time':'Time','logs.summary':'Summary','logs.type':'Type','logs.message':'Message',
+'advanced.save':'Save & apply','advanced.reload':'Reload','advanced.pageHint':'Edit the full configuration as JSON. Invalid syntax will reject the save.','advanced.editorTitle':'Configuration','advanced.editorHint':'Changes take effect immediately after save. Use Reload to discard unsaved edits.',
+'status.running':'Running','status.dlpOn':'Enabled','status.dlpOff':'Disabled','status.indexReady':'Ready','status.indexBuilding':'Indexing…','status.loading':'Loading…',
+'toast.saved':'Saved and applied','toast.savedRouting':'Routing saved and applied','toast.saving':'Saving…','toast.copied':'Copied to clipboard','toast.failed':'Save failed','toast.reloadOk':'Reloaded from disk','toast.completeDraft':'Finish or cancel the new model form first','toast.fillModel':'Fill Base URL, model name, and API Key','toast.unnamed':'(unnamed)',
+'model.addTitle':'Add model','model.baseUrl':'Base URL','model.name':'Model name','model.apiKey':'API Key','model.confirm':'Confirm','model.cancel':'Cancel','delete':'Delete'
+},
+zh:{
+'securityMaster':'安全防护总开关','nav.overview':'概览','nav.routing':'模型路由','nav.dlp':'数据防泄露','nav.path':'重要路径防护','nav.ops':'操作拦截','nav.logs':'日志','nav.advanced':'高级配置',
+'overview.baseUrl':'接口地址','overview.providerSub':'OpenAI 兼容 Provider','overview.modelsTitle':'模型','overview.openclawConfig':'OpenClaw 配置示例','overview.openclawSnippet':'# OpenClaw — 一个 Provider，三个档位模型','overview.proxyHint':'同一 base URL 兼容 OpenAI 与 Anthropic 客户端；按请求自动识别协议，并在 fallback 组内转换为对应上游 API。','overview.defaultGroup':'默认组','overview.dlp':'DLP','overview.ops':'操作安全','overview.index':'文件索引','overview.copyModel':'复制 ID',
+'copy':'复制','add':'添加','refresh':'刷新',
+'routing.hint':'按住 ⠿ 拖拽调整组内 fallback 顺序。客户端在同一 base URL 下用 model id 选档。点击「保存路由」后生效。','routing.save':'保存路由','group.high':'高精度','group.medium':'平衡','group.low':'轻量',
+'dlp.fileTitle':'文件保护区','dlp.pageHint':'在内容发往 LLM 前，对敏感文件与关键词进行脱敏保护。','dlp.fileFormatsHint':'允许本机读取；索引所列后缀（含 pdf/docx/pptx），匹配内容在发往 LLM 前脱敏，不会拦截 read_file。若要禁止读取，请勾选下方可选项或到「路径防护」单独配置。','dlp.fileDrop':'拖入文件或文件夹路径（也可输入后回车）','dlp.pathProtectSync':'同时禁止 Agent 读写（可选，路径防护）','dlp.contentTitle':'内容保护区','dlp.contentHint':'敏感词或 API Key，匹配后在发往模型前脱敏。','dlp.secretPh':'输入敏感词/API Key 后回车','dlp.saveHint':'保存后将同时应用文件保护与内容保护规则。','dlp.save':'保存 DLP','file.watching':'监控中','file.disabled':'已禁用',
+'path.title':'重要路径防护','path.pageHint':'拦截 Agent 对路径的删除、修改或访问，目录规则覆盖子路径。','path.hint':'可选：若需允许本机读、仅禁止内容发往 LLM，请用「数据防泄露」文件保护区。','path.drop':'拖入文件或文件夹路径','path.colPath':'路径','path.colLevel':'防护级别','path.save':'保存路径防护','level.deny_access':'禁止访问','level.deny_modify':'禁止修改','level.deny_delete':'禁止删除',
+'ops.title':'操作规则','ops.pageHint':'按操作类型与关键字模式拦截危险的 tool 调用。','ops.hint':'规则作用于被拦截的工具 / 命令调用。','ops.colAction':'行为','ops.colPattern':'关键字','ops.add':'+ 添加规则','ops.save':'保存','op.command':'命令','op.api':'API','op.network':'网络',
+'logs.trafficTitle':'流量快照','logs.pageHint':'流量快照、请求审计与系统事件。','logs.trafficHint':'开启后，将完整请求/响应 JSON 写入磁盘（单条最大 20 MiB），列表仅显示预览。','logs.trafficEnable':'启用流量快照','logs.trafficCaptureLabel':'时机','logs.trafficCaptureAfterShort':'DLP 后','logs.trafficCaptureBeforeShort':'DLP 前','logs.trafficCaptureAfter':'DLP 之后（推荐，磁盘不含明文）','logs.trafficCaptureBefore':'DLP 之前（原始请求，可能含密钥/敏感内容）','logs.trafficViewFull':'查看 JSON','logs.trafficViewFullHint':'打开结构化 JSON 查看器，可展开/折叠字段','logs.trafficCopyRaw':'复制原文','logs.trafficViewerTitle':'流量正文','logs.trafficNotJson':'非合法 JSON，显示原始文本','logs.trafficSaved':'已保存','logs.trafficTruncated':'已达上限截断','drop.pathFailed':'无法识别拖入路径，请手动输入或粘贴','logs.auditTitle':'请求审计','logs.eventsTitle':'事件','logs.time':'时间','logs.summary':'摘要','logs.type':'类型','logs.message':'消息',
+'advanced.save':'保存并应用','advanced.reload':'重载','advanced.pageHint':'以 JSON 编辑完整配置，语法错误将无法保存。','advanced.editorTitle':'配置','advanced.editorHint':'保存后立即生效；点「重载」可放弃未保存的修改。',
+'status.running':'运行中','status.dlpOn':'已启用','status.dlpOff':'已关闭','status.indexReady':'就绪','status.indexBuilding':'索引中…','status.loading':'加载中…',
+'toast.saved':'已保存并生效','toast.savedRouting':'路由已保存并生效','toast.saving':'保存中…','toast.copied':'已复制','toast.failed':'保存失败','toast.reloadOk':'已从磁盘重载','toast.completeDraft':'请先完成或取消「新增模型」表单','toast.fillModel':'请填写 Base URL、模型名称和 API Key','toast.unnamed':'(未命名)',
+'model.addTitle':'新增模型','model.baseUrl':'Base URL','model.name':'模型名称','model.apiKey':'API Key','model.confirm':'确认添加','model.cancel':'取消','delete':'删除'
+}};
+let lang=localStorage.getItem('smr_lang')||'en';
+const ROUTING_DRAFT_KEY='smr_routing_draft';
+let cfg={};let routingDraft=null;let toastTimer=null;let dragPayload=null;let listenHost='';
+const DEFAULT_FILE_FORMATS=['txt','md','json','yaml','yml','rs','py','js','ts','tsx','jsx','html','css','xml','csv','docx','pptx','pdf'];
+function pathRuleCovers(path,rules){const p=String(path||'').replace(/\\/g,'/').replace(/\/+$/,'');return(rules||[]).some(r=>{if(!r.enabled)return false;const b=String(r.path||'').replace(/\\/g,'/').replace(/\/+$/,'');return p===b||p.startsWith(b+'/')||b.startsWith(p+'/');});}
+function ensurePathProtectionForDir(path){cfg.path_protection_rules=cfg.path_protection_rules||[];if(pathRuleCovers(path,cfg.path_protection_rules))return;cfg.path_protection_rules.push({id:'path-'+Date.now(),enabled:true,path,level:'deny_access'});renderPathRules();}
+function syncDraftFromForm(){if(!routingDraft)return;const b=document.getElementById('draftBaseUrl');if(b)routingDraft.base_url=b.value||'';const m=document.getElementById('draftModel');if(m)routingDraft.model=m.value||'';const k=document.getElementById('draftApiKey');if(k)routingDraft.api_key=k.value||'';}
+function saveRoutingDraft(){if(!routingDraft){sessionStorage.removeItem(ROUTING_DRAFT_KEY);return;}sessionStorage.setItem(ROUTING_DRAFT_KEY,JSON.stringify(routingDraft));}
+function restoreRoutingDraft(){try{const raw=sessionStorage.getItem(ROUTING_DRAFT_KEY);if(!raw)return;const d=JSON.parse(raw);if(d&&d.group)routingDraft=d;}catch{}}
+function clearRoutingDraft(){routingDraft=null;sessionStorage.removeItem(ROUTING_DRAFT_KEY);}
+function wireDraftForm(form){const onInput=()=>{syncDraftFromForm();saveRoutingDraft();};form.querySelectorAll('input').forEach(el=>el.addEventListener('input',onInput));}
+function t(k){return (I18N[lang]||I18N.en)[k]||k;}
+function setLang(l){lang=l;localStorage.setItem('smr_lang',l);document.documentElement.lang=l==='zh'?'zh-CN':'en';langSelect.value=l;applyI18n();renderGroups();renderFileRules();renderPathRules();renderOps();loadStatus();}
+function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=t(el.dataset.i18n);});document.querySelectorAll('[data-i18n-placeholder]').forEach(el=>{el.placeholder=t(el.dataset.i18nPlaceholder);});fillPathLevelSelect();}
+function fillPathLevelSelect(){const sel=pathProtectLevel;if(!sel)return;const v=sel.value||'deny_access';sel.innerHTML=`<option value="deny_access">${t('level.deny_access')}</option><option value="deny_modify">${t('level.deny_modify')}</option><option value="deny_delete">${t('level.deny_delete')}</option>`;sel.value=v;}
+function showToast(msg,ok=true){const el=document.getElementById('toast');if(!el)return;el.textContent=msg;el.classList.remove('ok','err','show');el.classList.add(ok?'ok':'err','show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2800);}
+function showTab(id,btn){document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');if(id==='logs')loadTraffic();}
+function inferProto(url){return (url||'').includes('anthropic')?'anthropic':'openai';}
+function trafficCaptureMode(){return cfg.logging?.traffic_request_capture==='before_dlp'?'before_dlp':'after_dlp';}
+function syncTrafficCaptureUi(){const on=!!trafficToggle?.checked;const row=document.getElementById('trafficCaptureRow');if(row)row.classList.toggle('traffic-off',!on);const mode=trafficCaptureMode();const segAfter=document.getElementById('segAfter');const segBefore=document.getElementById('segBefore');if(segAfter){const active=mode!=='before_dlp';segAfter.classList.toggle('active',active);segAfter.disabled=!on;segAfter.setAttribute('aria-checked',active?'true':'false');}if(segBefore){const active=mode==='before_dlp';segBefore.classList.toggle('active',active);segBefore.disabled=!on;segBefore.setAttribute('aria-checked',active?'true':'false');}}
+function applyTrafficCaptureFromCfg(){if(!cfg.logging)cfg.logging={};if(cfg.logging.traffic_request_capture!=='before_dlp'&&cfg.logging.traffic_request_capture!=='after_dlp')cfg.logging.traffic_request_capture='after_dlp';syncTrafficCaptureUi();}
+function setStatBadge(el,text,tone){if(!el)return;el.textContent=text;el.className='badge badge-'+(tone||'muted');}
+async function loadStatus(){const s=await(await fetch('/api/status')).json();listenHost=s.listen;statusText.textContent=`${t('status.running')} · ${s.listen}`;if(providerUrl)providerUrl.textContent=s.provider_url||s.proxy_url||'';if(providerId)providerId.textContent=s.provider_id||'saferoute';if(providerName)providerName.textContent=s.provider_name||'LLM-SafeRoute';renderProviderModels(s.models||[]);setStatBadge(defaultGroup,s.default_group,'accent');setStatBadge(dlpStatus,s.dlp_enabled?t('status.dlpOn'):t('status.dlpOff'),s.dlp_enabled?'ok':'muted');setStatBadge(opMode,s.operation_mode,s.operation_mode==='enforce'?'ok':'warn');setStatBadge(indexStatus,s.file_index_ready?t('status.indexReady'):t('status.indexBuilding'),s.file_index_ready?'ok':'warn');securityMaster.checked=s.security_enabled;if(!cfg.logging)cfg.logging={};if(trafficToggle)trafficToggle.checked=!!s.save_traffic_bodies;cfg.logging.save_traffic_bodies=!!s.save_traffic_bodies;cfg.logging.traffic_request_capture=s.traffic_request_capture==='before_dlp'?'before_dlp':'after_dlp';syncTrafficCaptureUi();renderGroups();}
+function renderProviderModels(models){const host=document.getElementById('providerModels');const snippet=document.getElementById('providerSnippet');if(!host)return;host.innerHTML='';const tierClass={high:'tier-high',medium:'tier-medium',low:'tier-lite'};for(const m of models){const tile=document.createElement('div');tile.className='model-tile '+(tierClass[m.group]||'');const label=document.createElement('div');label.className='model-tile-label';label.textContent=groupLabel(m.group);tile.appendChild(label);const id=document.createElement('div');id.className='model-tile-id';id.textContent=m.id;tile.appendChild(id);const btn=document.createElement('button');btn.type='button';btn.className='secondary btn-sm';btn.textContent=t('overview.copyModel');btn.onclick=()=>copyText(m.id);tile.appendChild(btn);host.appendChild(tile);}if(snippet){const base=(document.getElementById('providerUrl')?.textContent||'http://127.0.0.1:8080/v1').trim();const pid=document.getElementById('providerId')?.textContent||'saferoute';const lines=[t('overview.openclawSnippet'),'providers:',`  ${pid}:`,'    base_url: '+base,'    api_key: dummy','    models:'];for(const m of models)lines.push('      - '+m.id);snippet.textContent=lines.join('\n');}}
+function copyText(text){navigator.clipboard.writeText(text);showToast(t('toast.copied'));}
+function copyProviderUrl(){const el=document.getElementById('providerUrl');if(el)copyText(el.textContent.trim());}
+function copyOpenClawSnippet(){const el=document.getElementById('providerSnippet');if(el)copyText(el.textContent);}
+async function loadConfig(){cfg=await(await fetch('/api/config')).json();configEditor.value=JSON.stringify(cfg,null,2);securityMaster.checked=cfg.pipeline?.security_enabled!==false;if(!cfg.logging)cfg.logging={};if(trafficToggle)trafficToggle.checked=!!cfg.logging.save_traffic_bodies;applyTrafficCaptureFromCfg();restoreRoutingDraft();renderGroups();renderFileRules();renderSecretTags();renderPathRules();renderOps();}
+function groupLabel(name){return name==='high'?t('group.high'):name==='medium'?t('group.medium'):t('group.low');}
+function publicModelId(group){return group==='high'?'saferoute-high':group==='medium'?'saferoute-medium':'saferoute-lite';}
+function renderGroups(){syncDraftFromForm();const g=groupGrid;g.innerHTML='';const groups=cfg.fallback_groups||{};const tierClass={high:'group-high',medium:'group-medium',low:'group-low'};for(const name of ['high','medium','low']){const card=document.createElement('div');card.className='group-card '+(tierClass[name]||'');const head=document.createElement('div');head.className='group-card-head';const meta=document.createElement('div');meta.className='group-card-meta';const title=document.createElement('div');title.className='group-card-title';title.textContent=groupLabel(name);meta.appendChild(title);const sub=document.createElement('div');sub.className='group-card-id';sub.textContent=publicModelId(name);meta.appendChild(sub);head.appendChild(meta);if(name===cfg.server?.default_fallback_group){const badge=document.createElement('span');badge.className='badge badge-accent';badge.textContent=lang==='zh'?'默认组':'Default';head.appendChild(badge);}card.appendChild(head);const list=document.createElement('div');list.className='model-list';list.dataset.group=name;list.ondragover=e=>{e.preventDefault();e.dataTransfer.dropEffect='move';};list.ondrop=e=>{if(e.target===list)dropModelOnList(e,name);};const models=groups[name]||[];if(!models.length){const empty=document.createElement('div');empty.className='empty-models';empty.textContent=lang==='zh'?'暂无模型':'No models yet';list.appendChild(empty);}else models.forEach((m,i)=>list.appendChild(modelRow(m,i,name)));card.appendChild(list);if(routingDraft&&routingDraft.group===name)card.appendChild(modelAddForm(name));const footer=document.createElement('div');footer.className='group-card-footer';const add=document.createElement('button');add.type='button';add.className='btn-add-model secondary';add.textContent='+ '+t('model.addTitle');add.onclick=()=>startAddModel(name);footer.appendChild(add);card.appendChild(footer);g.appendChild(card);}}
+function readDragPayload(e){if(dragPayload)return dragPayload;const raw=e.dataTransfer.getData('text/plain')||e.dataTransfer.getData('text');if(!raw)return null;try{return JSON.parse(raw);}catch{return null;}}
+function startModelDrag(e,group,index,row){dragPayload={group,index};e.dataTransfer.setData('text/plain',JSON.stringify(dragPayload));e.dataTransfer.effectAllowed='move';row.classList.add('dragging');}
+function endModelDrag(row){row.classList.remove('dragging');document.querySelectorAll('.model-row.drag-over').forEach(el=>el.classList.remove('drag-over'));dragPayload=null;}
+function modelRow(m,i,group){const row=document.createElement('div');row.className='model-row';row.dataset.group=group;row.dataset.index=String(i);const handle=document.createElement('span');handle.className='drag-handle';handle.textContent='⠿';handle.draggable=true;handle.title=lang==='zh'?'拖拽排序':'Drag to reorder';handle.ondragstart=e=>{startModelDrag(e,group,i,row);e.stopPropagation();};handle.ondragend=()=>endModelDrag(row);row.ondragover=e=>{e.preventDefault();e.dataTransfer.dropEffect='move';row.classList.add('drag-over');};row.ondragleave=e=>{if(!row.contains(e.relatedTarget))row.classList.remove('drag-over');};row.ondrop=e=>dropModelAt(e,group,i);const proto=inferProto(m.base_url);const info=document.createElement('div');info.className='model-row-info';const title=document.createElement('div');title.className='model-row-title';title.innerHTML=`<span class="proto ${proto}">${proto==='openai'?'OpenAI':'Anthropic'}</span><span class="model-name">${escAttr(m.model||t('toast.unnamed'))}</span>`;info.appendChild(title);const url=document.createElement('div');url.className='model-row-url';url.textContent=m.base_url||'';info.appendChild(url);row.appendChild(handle);row.appendChild(info);const del=document.createElement('button');del.type='button';del.className='btn-del';del.draggable=false;del.textContent=t('delete');del.onclick=e=>{e.stopPropagation();removeModel(group,i);};row.appendChild(del);return row;}
+function modelAddForm(group){const form=document.createElement('div');form.className='model-add-form';form.innerHTML=`<strong style="font-size:13px">${t('model.addTitle')}</strong><label>${t('model.baseUrl')}</label><input id="draftBaseUrl" type="url" placeholder="https://api.openai.com/v1" value="${escAttr(routingDraft.base_url||'')}"/><label>${t('model.name')}</label><input id="draftModel" placeholder="gpt-4o-mini" value="${escAttr(routingDraft.model||'')}"/><label>${t('model.apiKey')}</label><input id="draftApiKey" type="password" placeholder="sk-..." value="${escAttr(routingDraft.api_key||'')}"/><div class="form-actions"><button type="button" class="primary" onclick="confirmAddModel('${group}')">${t('model.confirm')}</button><button type="button" class="secondary" onclick="cancelAddModel()">${t('model.cancel')}</button></div>`;wireDraftForm(form);return form;}
+function escAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function startAddModel(group){routingDraft={group,base_url:'',model:'',api_key:''};saveRoutingDraft();renderGroups();document.getElementById('draftBaseUrl')?.focus();}
+function confirmAddModel(group){syncDraftFromForm();const base_url=(routingDraft?.base_url||'').trim();const model=(routingDraft?.model||'').trim();const api_key=(routingDraft?.api_key||'').trim();if(!base_url||!model||!api_key){showToast(t('toast.fillModel'),false);return;}if(!cfg.fallback_groups[group])cfg.fallback_groups[group]=[];cfg.fallback_groups[group].push({id:'model-'+Date.now(),base_url,model,api_key,timeout_secs:120});clearRoutingDraft();renderGroups();}
+function cancelAddModel(){clearRoutingDraft();renderGroups();}
+function removeModel(group,i){cfg.fallback_groups?.[group]?.splice(i,1);renderGroups();}
+function moveModel(fromGroup,fromIndex,toGroup,toIndex,insertAfter){const src=cfg.fallback_groups?.[fromGroup];if(!src||fromIndex<0||fromIndex>=src.length)return;const[item]=src.splice(fromIndex,1);if(!cfg.fallback_groups[toGroup])cfg.fallback_groups[toGroup]=[];const dest=cfg.fallback_groups[toGroup];let insertAt=toIndex+(insertAfter?1:0);if(fromGroup===toGroup&&fromIndex<insertAt)insertAt--;insertAt=Math.max(0,Math.min(insertAt,dest.length));dest.splice(insertAt,0,item);renderGroups();}
+function dropModelAt(e,toGroup,toIndex){e.preventDefault();e.stopPropagation();const row=e.currentTarget;row.classList.remove('drag-over');const d=readDragPayload(e);if(!d)return;const rect=row.getBoundingClientRect();const insertAfter=e.clientY>rect.top+rect.height/2;moveModel(d.group,d.index,toGroup,toIndex,insertAfter);}
+function dropModelOnList(e,group){e.preventDefault();const d=readDragPayload(e);if(!d)return;moveModel(d.group,d.index,group,(cfg.fallback_groups[group]||[]).length,false);}
+function renderFileRules(){fileRulesList.innerHTML='';const rules=cfg.file_rules||[];if(!rules.length){fileRulesList.innerHTML=`<div class="empty-state">${lang==='zh'?'暂无文件保护规则':'No file rules yet'}</div>`;return;}for(let i=0;i<rules.length;i++){const r=rules[i];const row=document.createElement('div');row.className='rule-item';const path=document.createElement('span');path.className='rule-item-path';path.textContent=r.path||'';path.title=r.path||'';row.appendChild(path);const meta=document.createElement('span');meta.className='rule-item-meta';const fm=(r.formats||[]).slice(0,5).join(',')+((r.formats||[]).length>5?'…':'');meta.textContent=`${fm||'—'} · ${r.enabled?t('file.watching'):t('file.disabled')}`;row.appendChild(meta);const del=document.createElement('button');del.type='button';del.className='btn-del';del.textContent=t('delete');del.onclick=()=>{cfg.file_rules.splice(i,1);renderFileRules();};row.appendChild(del);fileRulesList.appendChild(row);}}
+function addFileRule(){const p=filePathInput.value.trim();if(!p)return;cfg.file_rules=cfg.file_rules||[];cfg.file_rules.push({id:'file-'+Date.now(),path:p,enabled:true,recursive:true,trigger_window:5,match_mode:'fragment',min_fragment_len:65,min_fragment_ratio:0.5,formats:DEFAULT_FILE_FORMATS.slice()});if(document.getElementById('fileRulePathProtect')?.checked)ensurePathProtectionForDir(p);filePathInput.value='';renderFileRules();}
+function renderSecretTags(){secretTags.innerHTML='';(cfg.content_rules||[]).forEach((r,i)=>{if(!r.enabled)return;const tag=document.createElement('div');tag.className='tag';const text=document.createElement('span');text.textContent=(r.value.slice(0,20))+(r.value.length>20?'…':'');tag.appendChild(text);const del=document.createElement('span');del.className='tag-remove';del.textContent='×';del.onclick=()=>{cfg.content_rules.splice(i,1);renderSecretTags();};tag.appendChild(del);secretTags.appendChild(tag);});}
+function addSecretTag(){const v=secretInput.value.trim();if(!v)return;cfg.content_rules=cfg.content_rules||[];cfg.content_rules.push({id:'secret-'+Date.now(),enabled:true,match_mode:'full',category:'secret',value:v});secretInput.value='';renderSecretTags();}
+function levelLabel(l){return l==='deny_delete'?t('level.deny_delete'):l==='deny_modify'?t('level.deny_modify'):t('level.deny_access');}
+function renderPathRules(){pathProtectTable.innerHTML='';const rules=cfg.path_protection_rules||[];if(!rules.length){pathProtectTable.innerHTML=`<tr class="data-table-empty"><td colspan="3">${lang==='zh'?'暂无路径规则':'No path rules yet'}</td></tr>`;return;}rules.forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML=`<td><input value="${escAttr(r.path||'')}" onchange="cfg.path_protection_rules[${i}].path=this.value"/></td><td><select onchange="cfg.path_protection_rules[${i}].level=this.value"><option value="deny_delete" ${r.level==='deny_delete'?'selected':''}>${t('level.deny_delete')}</option><option value="deny_modify" ${r.level==='deny_modify'?'selected':''}>${t('level.deny_modify')}</option><option value="deny_access" ${r.level==='deny_access'?'selected':''}>${t('level.deny_access')}</option></select></td><td class="col-actions"><button type="button" class="btn-del" onclick="cfg.path_protection_rules.splice(${i},1);renderPathRules()">${t('delete')}</button></td>`;pathProtectTable.appendChild(tr);});}
+function renderOps(){opsTable.innerHTML='';const rules=cfg.operation_rules||[];if(!rules.length){opsTable.innerHTML=`<tr class="data-table-empty"><td colspan="3">${lang==='zh'?'暂无操作规则':'No operation rules yet'}</td></tr>`;return;}rules.forEach((r,i)=>{const tr=document.createElement('tr');tr.innerHTML=`<td><select onchange="cfg.operation_rules[${i}].operation=this.value"><option value="command_exec" ${r.operation==='command_exec'?'selected':''}>${t('op.command')}</option><option value="api_call" ${r.operation==='api_call'?'selected':''}>${t('op.api')}</option><option value="network_access" ${r.operation==='network_access'?'selected':''}>${t('op.network')}</option></select></td><td><input value="${escAttr(r.object?.pattern||'')}" onchange="cfg.operation_rules[${i}].object.pattern=this.value"/></td><td class="col-actions"><button type="button" class="btn-del" onclick="cfg.operation_rules.splice(${i},1);renderOps()">${t('delete')}</button></td>`;opsTable.appendChild(tr);});}
+function addPathRule(){const p=(pathProtectInput.value||'').trim();if(!p)return;cfg.path_protection_rules=cfg.path_protection_rules||[];cfg.path_protection_rules.push({id:'path-'+Date.now(),enabled:true,path:p,level:pathProtectLevel.value});pathProtectInput.value='';renderPathRules();}
+function addOpRule(){cfg.operation_rules=cfg.operation_rules||[];cfg.operation_rules.push({id:'op-'+Date.now(),enabled:true,operation:'command_exec',object:{pattern:'',is_regex:false}});renderOps();}
+async function toggleTrafficLog(){cfg.logging=cfg.logging||{level:'info',redact_content:true};cfg.logging.save_traffic_bodies=trafficToggle.checked;if(!cfg.logging.traffic_request_capture)cfg.logging.traffic_request_capture='after_dlp';syncTrafficCaptureUi();await saveConfig('traffic',true);}
+async function setTrafficCapture(mode){if(!trafficToggle?.checked)return;if(mode!=='before_dlp'&&mode!=='after_dlp')return;if(trafficCaptureMode()===mode)return;cfg.logging=cfg.logging||{level:'info',redact_content:true};cfg.logging.traffic_request_capture=mode;syncTrafficCaptureUi();await saveConfig('traffic',true);}
+function toggleSecurity(){cfg.pipeline=cfg.pipeline||{};cfg.pipeline.security_enabled=securityMaster.checked;saveConfig('security',true);}
+async function saveRouting(){if(routingDraft){showToast(t('toast.completeDraft'),false);return;}await saveConfig('routing');}
+async function saveConfig(section,quiet){const silent=quiet===true;try{if(section==='yaml')cfg=JSON.parse(configEditor.value);if(!silent)showToast(t('toast.saving'),true);const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});if(!r.ok)throw new Error(await r.text());configEditor.value=JSON.stringify(cfg,null,2);if(!silent){const msg=section==='routing'?t('toast.savedRouting'):t('toast.saved');showToast(msg,true);}loadStatus().catch(()=>{});}catch(e){showToast(t('toast.failed')+': '+(e.message||e),false);}}
+async function reloadConfig(){clearRoutingDraft();await fetch('/api/reload',{method:'PUT',body:'{}'});await loadConfig();await loadStatus();showToast(t('toast.reloadOk'));}
+async function loadEvents(){const d=await(await fetch('/api/events?limit=50')).json();logBody.innerHTML='';for(const e of d.events||[]){const k=typeof e.kind==='string'?e.kind:Object.keys(e.kind||{})[0];logBody.innerHTML+=`<tr><td>${(e.timestamp||'').slice(0,19).replace('T',' ')}</td><td>${k}</td><td>${escAttr(e.message||'')}</td></tr>`;}}
+async function loadAudits(){const d=await(await fetch('/api/audits?limit=30')).json();auditBody.innerHTML='';for(const a of d.audits||[]){auditBody.innerHTML+=`<tr><td>${(a.timestamp||'').slice(0,19).replace('T',' ')}</td><td>${a.protocol} | ${(a.fallback_chain||[]).join('→')} | DLP:${a.dlp_replacements} Safety:${a.safety_blocks}</td></tr>`;}}
+async function loadTraffic(){const d=await(await fetch('/api/traffic?limit=20')).json();trafficList.innerHTML='';if(!d.records?.length){trafficList.innerHTML=`<div class="empty-state">${lang==='zh'?'暂无快照':'No snapshots yet'}</div>`;return;}if(d.traffic_dir){trafficList.innerHTML+=`<p class="hint log-entry-meta">${lang==='zh'?'保存目录':'Save dir'}: ${escAttr(d.traffic_dir)}</p>`;}for(const r of d.records){const div=document.createElement('div');div.className='log-entry';const trunc=r.truncated?` · ${t('logs.trafficTruncated')}`:'';const saved=r.saved_bytes??r.bytes;div.innerHTML=`<div class="log-entry-meta">${(r.timestamp||'').slice(0,19).replace('T',' ')} · ${escAttr(r.phase)} · ${saved}/${r.bytes} B ${t('logs.trafficSaved')}${trunc} · session ${escAttr(r.session_id?.slice(0,8)||'')}</div><div class="traffic-actions"><button type="button" class="secondary btn-sm" title="${escAttr(t('logs.trafficViewFullHint'))}" onclick="openTrafficViewer('${escAttr(r.id)}')">${t('logs.trafficViewFull')}</button><span class="hint">${escAttr(r.file_path||'')}</span></div><div class="traffic-body">${escAttr(r.preview||r.body||'')}</div>`;trafficList.appendChild(div);}}
+let trafficViewerRaw='';
+function pathFromFileUri(uri){try{const u=new URL(uri.trim());if(u.protocol!=='file:')return null;let p=decodeURIComponent(u.pathname);if(/^\/[A-Za-z]:\//.test(p))p=p.slice(1);return p||null;}catch{return null;}}
+function looksLikePath(s){const t=(s||'').trim();return t.startsWith('/')||/^[A-Za-z]:[\\/]/.test(t)||t.startsWith('\\\\');}
+function pathsFromDropEvent(e){const paths=[];const uriList=e.dataTransfer?.getData('text/uri-list');if(uriList){for(const line of uriList.split(/\r?\n/)){if(!line||line.startsWith('#'))continue;const p=pathFromFileUri(line);if(p)paths.push(p);}}const plain=e.dataTransfer?.getData('text/plain');if(plain){const t=plain.trim();if(t&&!t.startsWith('{')&&looksLikePath(t))paths.push(t);}const files=e.dataTransfer?.files;if(files?.length){for(const f of files){if(f.path)paths.push(f.path);}}return[...new Set(paths.filter(Boolean))];}
+function isModelDragPayload(e){const raw=e.dataTransfer?.getData('text/plain');if(!raw)return false;try{const o=JSON.parse(raw);return o&&typeof o.group==='string'&&typeof o.index==='number';}catch{return false;}}
+function setupPathDropZone(el,onPaths){el.ondragover=e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';el.classList.add('dragover');};el.ondragleave=e=>{if(!el.contains(e.relatedTarget))el.classList.remove('dragover');};el.ondrop=e=>{e.preventDefault();el.classList.remove('dragover');if(isModelDragPayload(e))return;const paths=pathsFromDropEvent(e);if(!paths.length){showToast(t('drop.pathFailed'),false);return;}onPaths(paths);};}
+function jsonValueType(v){if(v===null)return'null';if(Array.isArray(v))return'array';return typeof v;}
+function jsonFormatLeaf(v){const tp=jsonValueType(v);if(tp==='string')return `<span class="json-str">${escAttr(JSON.stringify(v))}</span>`;if(tp==='number')return `<span class="json-num">${String(v)}</span>`;if(tp==='boolean')return `<span class="json-bool">${String(v)}</span>`;return `<span class="json-null">null</span>`;}
+function buildJsonTree(value,keyLabel,depth){const li=document.createElement('li');li.className='json-node';const line=document.createElement('div');line.className='json-line';const tp=jsonValueType(value);const collapsible=tp==='object'||tp==='array';const toggle=document.createElement('span');toggle.className='json-toggle'+(collapsible?'':' empty');toggle.textContent=collapsible?'▾':'·';line.appendChild(toggle);if(keyLabel!==null&&keyLabel!==undefined){const key=document.createElement('span');key.className='json-key'+(depth===0?' root':'');key.textContent=typeof keyLabel==='number'?`[${keyLabel}]`:String(keyLabel);line.appendChild(key);const sep=document.createElement('span');sep.className='json-sep';sep.textContent=': ';line.appendChild(sep);}if(!collapsible){line.insertAdjacentHTML('beforeend',jsonFormatLeaf(value));li.appendChild(line);return li;}const isArr=tp==='array';const entries=isArr?value.map((v,i)=>[i,v]):Object.entries(value||{});const open=document.createElement('span');open.className='json-bracket';open.textContent=isArr?'[':'{';line.appendChild(open);const preview=document.createElement('span');preview.className='json-preview';preview.textContent=` ${entries.length} ${isArr?'items':'keys'} `;line.appendChild(preview);const closeInline=document.createElement('span');closeInline.className='json-bracket';closeInline.textContent=isArr?']':'}';line.appendChild(closeInline);li.appendChild(line);const child=document.createElement('ul');child.className='json-tree';for(const [k,v] of entries)child.appendChild(buildJsonTree(v,k,depth+1));const closeLine=document.createElement('div');closeLine.className='json-line';closeLine.innerHTML=`<span class="json-toggle empty">·</span><span class="json-bracket">${isArr?']':'}'}</span>`;const closeLi=document.createElement('li');closeLi.appendChild(closeLine);child.appendChild(closeLi);li.appendChild(child);let expanded=depth<1;toggle.textContent=expanded?'▾':'▸';child.style.display=expanded?'block':'none';preview.style.display=expanded?'none':'inline';closeInline.style.display=expanded?'none':'inline';toggle.onclick=()=>{expanded=!expanded;toggle.textContent=expanded?'▾':'▸';child.style.display=expanded?'block':'none';preview.style.display=expanded?'none':'inline';closeInline.style.display=expanded?'none':'inline';};return li;}
+function renderJsonTree(root){const ul=document.createElement('ul');ul.className='json-tree';ul.appendChild(buildJsonTree(root,null,0));return ul;}
+async function openTrafficViewer(id){const modal=document.getElementById('jsonModal');const bodyEl=document.getElementById('jsonModalBody');const metaEl=document.getElementById('jsonModalMeta');const titleEl=document.getElementById('jsonModalTitle');bodyEl.innerHTML=lang==='zh'?'加载中…':'Loading…';metaEl.textContent='';titleEl.textContent=t('logs.trafficViewerTitle');modal.classList.add('open');try{const d=await(await fetch(`/api/traffic/${encodeURIComponent(id)}?format=json`)).json();trafficViewerRaw=d.text||'';const rec=d.record||{};metaEl.textContent=`${(rec.timestamp||'').slice(0,19).replace('T',' ')} · ${rec.phase||''} · ${rec.saved_bytes??''}/${rec.bytes??''} B · session ${(rec.session_id||'').slice(0,8)}`;bodyEl.innerHTML='';if(d.is_json&&d.parsed!=null){bodyEl.appendChild(renderJsonTree(d.parsed));}else{const note=document.createElement('p');note.className='hint';note.textContent=t('logs.trafficNotJson');bodyEl.appendChild(note);const pre=document.createElement('div');pre.className='json-raw';pre.textContent=trafficViewerRaw;bodyEl.appendChild(pre);}}catch(err){bodyEl.textContent=(err&&err.message)||String(err);}}
+function closeTrafficViewer(){document.getElementById('jsonModal')?.classList.remove('open');trafficViewerRaw='';}
+function copyTrafficRaw(){if(!trafficViewerRaw)return;navigator.clipboard.writeText(trafficViewerRaw).then(()=>showToast(t('toast.copied'))).catch(()=>{});}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeTrafficViewer();});
+const fileDrop=document.getElementById('fileDrop');const pathDrop=document.getElementById('pathDrop');
+setupPathDropZone(fileDrop,paths=>{for(const p of paths){filePathInput.value=p;addFileRule();}});
+setupPathDropZone(pathDrop,paths=>{for(const p of paths){pathProtectInput.value=p;addPathRule();}});
+window.addEventListener('pagehide',()=>{syncDraftFromForm();saveRoutingDraft();});
+langSelect.value=lang;document.documentElement.lang=lang==='zh'?'zh-CN':'en';applyI18n();statusText.textContent=t('status.loading');loadStatus();loadConfig();loadEvents();loadAudits();loadTraffic();setInterval(()=>{loadEvents();loadAudits();if(document.getElementById('logs').classList.contains('active'))loadTraffic();},8000);
+</script>
+</body>
+</html>
