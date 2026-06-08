@@ -11,7 +11,26 @@
 
 **中文文档:** [README.zh-CN.md](README.zh-CN.md)
 
-![LLM-SafeRoute admin UI — model routing](docs/en-route-gui.png)
+<a id="admin-ui-screenshots"></a>
+
+<p align="center"><sub>Admin UI screenshots — click a title to flip · 1–4</sub></p>
+
+<details open>
+<summary><strong>1 / 4 · Overview</strong></summary>
+<p align="center"><img src="docs/overview-en.png" width="780" alt="Admin UI — overview"/></p>
+</details>
+<details>
+<summary><strong>2 / 4 · Model routing</strong></summary>
+<p align="center"><img src="docs/routing-en.png" width="780" alt="Admin UI — model routing"/></p>
+</details>
+<details>
+<summary><strong>3 / 4 · DLP</strong></summary>
+<p align="center"><img src="docs/dlp-en.png" width="780" alt="Admin UI — DLP rules"/></p>
+</details>
+<details>
+<summary><strong>4 / 4 · Traffic logs</strong></summary>
+<p align="center"><img src="docs/log-json-en.png" width="780" alt="Admin UI — traffic log viewer"/></p>
+</details>
 
 ---
 
@@ -101,9 +120,11 @@ Config after install: `~/.local/etc/securemodelroute/smr.yaml` (macOS/Linux/Wind
 
 [OpenClaw](https://docs.openclaw.ai/) is an OpenAI-compatible agent gateway. Point it at LLM-SafeRoute so OpenClaw calls your local fallback router instead of vendor APIs directly.
 
-**Prerequisites:** LLM-SafeRoute running (`securemodelroute` or the tray app) with models configured in `smr.yaml`. Real provider keys live in LLM-SafeRoute only.
+**Prerequisites:** LLM-SafeRoute running (`securemodelroute` or the tray app). Configure upstream models and API keys in LLM-SafeRoute only (admin UI → **Routing** or `smr.yaml`). OpenClaw never needs real vendor keys.
 
-Edit `~/.openclaw/openclaw.json` (JSON5). Use model **ids that match** your LLM-SafeRoute `fallback_groups` entries:
+**Provider mode (recommended):** LLM-SafeRoute is one OpenAI-compatible provider. Public model ids are the three fallback tiers — `saferoute-high`, `saferoute-medium`, `saferoute-lite` — not upstream names like `gpt-4o-mini`. Each id selects a fallback group; LLM-SafeRoute walks that group’s chain and handles OpenAI ↔ Anthropic conversion internally.
+
+Edit `~/.openclaw/openclaw.json` (JSON5):
 
 ```json5
 {
@@ -116,8 +137,26 @@ Edit `~/.openclaw/openclaw.json` (JSON5). Use model **ids that match** your LLM-
         api: "openai-completions",
         models: [
           {
-            id: "glm-4-flash",
-            name: "GLM 4 Flash",
+            id: "saferoute-high",
+            name: "SafeRoute High",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+          {
+            id: "saferoute-medium",
+            name: "SafeRoute Medium",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+          {
+            id: "saferoute-lite",
+            name: "SafeRoute Lite",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -130,9 +169,11 @@ Edit `~/.openclaw/openclaw.json` (JSON5). Use model **ids that match** your LLM-
   },
   agents: {
     defaults: {
-      model: { primary: "saferoute/glm-4-flash" },
+      model: { primary: "saferoute/saferoute-high" },
       models: {
-        "saferoute/glm-4-flash": { alias: "saferoute" },
+        "saferoute/saferoute-high": { alias: "high" },
+        "saferoute/saferoute-medium": { alias: "medium" },
+        "saferoute/saferoute-lite": { alias: "lite" },
       },
     },
   },
@@ -141,24 +182,17 @@ Edit `~/.openclaw/openclaw.json` (JSON5). Use model **ids that match** your LLM-
 
 Steps:
 
-1. Replace `glm-4-flash` with a model id from your LLM-SafeRoute routing table (admin UI → **Routing**).
-2. Add every `saferoute/<model-id>` you use to `agents.defaults.models` (required allowlist).
-3. Restart the OpenClaw gateway: `openclaw gateway restart` (or restart the OpenClaw app).
+1. In LLM-SafeRoute admin UI → **Routing**, configure each tier’s upstream chain (OpenAI, Anthropic, DeepSeek, etc.).
+2. In OpenClaw, register the three **public** ids above (`saferoute-high` / `medium` / `lite`) under `models.providers.saferoute.models`.
+3. Add every `saferoute/<public-id>` you use to `agents.defaults.models` (OpenClaw allowlist). Switch tiers with `openclaw models set saferoute/saferoute-medium` or set `agents.defaults.model.primary`.
+4. Restart the gateway: `openclaw gateway restart` (or restart the OpenClaw app).
 
-Optional: route a session to a tier via URL path (recommended) or provider headers:
+Tip: admin UI → **Overview** → **OpenClaw configuration** lists the same base URL and model ids; use **Copy** there.
 
-```json5
-providers: {
-  saferoute: {
-    baseUrl: "http://127.0.0.1:8080/high/v1",
-    // medium: "http://127.0.0.1:8080/medium/v1"
-    // lite:    "http://127.0.0.1:8080/lite/v1"
-    // ...
-  },
-}
-```
+**Legacy alternatives** (when a client cannot set `model` to `saferoute-*`):
 
-Or keep `baseUrl: "http://127.0.0.1:8080/v1"` and set `headers: { "X-SMR-Fallback-Group": "high" }` if your client supports custom headers.
+- Tier path prefix: `baseUrl: "http://127.0.0.1:8080/high/v1"` (also `/medium/v1`, `/lite/v1`)
+- Header override: `headers: { "X-SMR-Fallback-Group": "high" }` on `http://127.0.0.1:8080/v1`
 
 LLM-SafeRoute applies DLP, operation rules, and path protection to OpenClaw traffic the same as any other client.
 
@@ -261,7 +295,7 @@ Files: `{config_dir}/traffic/*.body`
 
 ## Admin UI
 
-Open `http://127.0.0.1:8080/ui` — overview, routing, DLP, path rules, operation rules, logs, full YAML editor.
+Open `http://127.0.0.1:8080/ui` — overview, routing, DLP, path rules, operation rules, logs, full YAML editor. Screenshots: see [Admin UI preview](#admin-ui-screenshots) above.
 
 
 | API                              | Description                                     |

@@ -11,7 +11,26 @@
 
 **English:** [README.md](README.md)
 
-![LLM-SafeRoute 管理界面 — 模型路由](docs/cn-route-gui.png)
+<a id="admin-ui-screenshots"></a>
+
+<p align="center"><sub>管理界面截图 — 点击标题翻页查看 · 1–4</sub></p>
+
+<details open>
+<summary><strong>1 / 4 · 概览</strong></summary>
+<p align="center"><img src="docs/overview-cn.png" width="780" alt="管理界面 — 概览"/></p>
+</details>
+<details>
+<summary><strong>2 / 4 · 模型路由</strong></summary>
+<p align="center"><img src="docs/routing-cn.png" width="780" alt="管理界面 — 模型路由"/></p>
+</details>
+<details>
+<summary><strong>3 / 4 · DLP</strong></summary>
+<p align="center"><img src="docs/dlp-cn.png" width="780" alt="管理界面 — DLP 规则"/></p>
+</details>
+<details>
+<summary><strong>4 / 4 · 日志查看</strong></summary>
+<p align="center"><img src="docs/log-json-cn.png" width="780" alt="管理界面 — 流量日志"/></p>
+</details>
 
 ---
 
@@ -99,9 +118,11 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
 
 [OpenClaw](https://docs.openclaw.ai/) 是 OpenAI 兼容的 Agent 网关。将其指向本地 LLM-SafeRoute，即可由 LLM-SafeRoute 做 fallback 路由，并统一应用 DLP / 操作拦截 / 路径防护。
 
-**前提：** LLM-SafeRoute 已启动（`securemodelroute` 或托盘应用），且 `smr.yaml` 中已配置模型。真实 API Key 只放在 LLM-SafeRoute，不要写入 OpenClaw。
+**前提：** LLM-SafeRoute 已启动（`securemodelroute` 或托盘应用）。上游模型与 API Key 仅在 LLM-SafeRoute 中配置（管理界面 → **路由**，或 `smr.yaml`）；OpenClaw 不需要真实厂商密钥。
 
-编辑 `~/.openclaw/openclaw.json`（JSON5）。`models[].id` 必须与 LLM-SafeRoute **路由表中的 model 名称一致**：
+**Provider 模式（推荐）：** LLM-SafeRoute 作为一个 OpenAI 兼容 Provider 暴露三个档位模型 — `saferoute-high`、`saferoute-medium`、`saferoute-lite` — **不是**上游名称（如 `gpt-4o-mini`）。每个 id 对应一组 fallback 链；组内自动切换，并由 LLM-SafeRoute 完成 OpenAI ↔ Anthropic 转换。
+
+编辑 `~/.openclaw/openclaw.json`（JSON5）：
 
 ```json5
 {
@@ -114,8 +135,26 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
         api: "openai-completions",
         models: [
           {
-            id: "glm-4-flash",
-            name: "GLM 4 Flash",
+            id: "saferoute-high",
+            name: "SafeRoute High",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+          {
+            id: "saferoute-medium",
+            name: "SafeRoute Medium",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+          {
+            id: "saferoute-lite",
+            name: "SafeRoute Lite",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -128,9 +167,11 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
   },
   agents: {
     defaults: {
-      model: { primary: "saferoute/glm-4-flash" },
+      model: { primary: "saferoute/saferoute-high" },
       models: {
-        "saferoute/glm-4-flash": { alias: "saferoute" },
+        "saferoute/saferoute-high": { alias: "high" },
+        "saferoute/saferoute-medium": { alias: "medium" },
+        "saferoute/saferoute-lite": { alias: "lite" },
       },
     },
   },
@@ -139,24 +180,17 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
 
 步骤：
 
-1. 将 `glm-4-flash` 换成 LLM-SafeRoute 管理界面 **路由** 里实际配置的 model id。
-2. 在 `agents.defaults.models` 中登记每个要用的 `saferoute/<model-id>`（OpenClaw 必填 allowlist）。
-3. 重启 OpenClaw 网关：`openclaw gateway restart`（或重启 OpenClaw 应用）。
+1. 在 LLM-SafeRoute 管理界面 → **路由** 中配置各档位的上游链（OpenAI、Anthropic、DeepSeek 等）。
+2. 在 OpenClaw 的 `models.providers.saferoute.models` 中注册上述三个**公开** model id。
+3. 在 `agents.defaults.models` 中登记每个要用的 `saferoute/<公开-id>`（OpenClaw 必填 allowlist）。切换档位可用 `openclaw models set saferoute/saferoute-medium`，或修改 `agents.defaults.model.primary`。
+4. 重启网关：`openclaw gateway restart`（或重启 OpenClaw 应用）。
 
-可选：通过 URL 路径选择档位（推荐）或请求头指定路由组：
+提示：管理界面 → **概览** → **OpenClaw 配置示例** 会列出相同的 base URL 与 model id，可直接 **复制**。
 
-```json5
-providers: {
-  saferoute: {
-    baseUrl: "http://127.0.0.1:8080/high/v1",
-    // medium: "http://127.0.0.1:8080/medium/v1"
-    // lite:    "http://127.0.0.1:8080/lite/v1"
-    // ...
-  },
-}
-```
+**旧版替代方式**（客户端无法设置 `model` 为 `saferoute-*` 时）：
 
-也可保持 `baseUrl: "http://127.0.0.1:8080/v1"` 并设置 `headers: { "X-SMR-Fallback-Group": "high" }`（若客户端支持自定义 headers）。
+- 档位路径前缀：`baseUrl: "http://127.0.0.1:8080/high/v1"`（亦可用 `/medium/v1`、`/lite/v1`）
+- 请求头覆盖：在 `http://127.0.0.1:8080/v1` 上设置 `headers: { "X-SMR-Fallback-Group": "high" }`
 
 OpenClaw 经 LLM-SafeRoute 发出的请求与 IDE、SDK 一样，都会走相同的安全策略。
 
@@ -259,8 +293,7 @@ logging:
 
 ## 管理界面
 
-`http://127.0.0.1:8080/ui` — 概览、路由、DLP、路径、操作规则、日志、YAML 编辑。
-
+`http://127.0.0.1:8080/ui` — 概览、路由、DLP、路径、操作规则、日志、YAML 编辑。截图见上文 [管理界面预览](#admin-ui-screenshots)。
 
 | API                             | 说明             |
 | ------------------------------- | -------------- |
