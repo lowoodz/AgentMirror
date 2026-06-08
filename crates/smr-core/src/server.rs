@@ -9,9 +9,8 @@ use axum::routing::{any, get};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 use tracing::info;
-use uuid::Uuid;
-
 use crate::admin;
+use crate::session_key;
 use crate::body_util::{apply_streaming_headers, proxy_body_to_axum};
 use crate::http_state::HttpState;
 use crate::proxy::ProxyService;
@@ -65,11 +64,7 @@ async fn proxy_handler(
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
 
-    let session_id = headers
-        .get("x-smr-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let session_id = session_key::derive_session_id(&headers, &body);
 
     let (path_tier, forward_path) = proxy_path::split_tier_path(path);
     let header_group = headers

@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use quick_xml::events::Event;
@@ -17,12 +18,65 @@ pub fn extract_text(path: &Path) -> Result<String> {
 
     match ext.as_str() {
         "pdf" => extract_pdf(path),
+        "doc" => extract_doc(path),
         "docx" => extract_ooxml(path, "word/document.xml"),
         "pptx" => extract_pptx(path),
         _ => {
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
         }
     }
+}
+
+fn extract_doc(path: &Path) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    if let Ok(text) = extract_doc_textutil(path) {
+        if !text.trim().is_empty() {
+            return Ok(text);
+        }
+    }
+
+    for cmd in ["antiword", "catdoc"] {
+        if let Ok(text) = extract_doc_external(path, cmd) {
+            if !text.trim().is_empty() {
+                return Ok(text);
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "legacy .doc extraction failed for {} (macOS: textutil; Linux: antiword/catdoc)",
+        path.display()
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn extract_doc_textutil(path: &Path) -> Result<String> {
+    let output = Command::new("textutil")
+        .args(["-convert", "txt", "-stdout"])
+        .arg(path)
+        .output()
+        .context("spawn textutil")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "textutil failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn extract_doc_external(path: &Path, program: &str) -> Result<String> {
+    let output = Command::new(program)
+        .arg(path)
+        .output()
+        .with_context(|| format!("spawn {program}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{program} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn extract_pdf(path: &Path) -> Result<String> {

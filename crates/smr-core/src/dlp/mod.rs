@@ -181,21 +181,51 @@ impl DlpEngine {
     }
 
     fn apply_path_triggers(&self, session_id: &str, body: &serde_json::Value) {
-        let Ok(tool_texts) = extract_tool_call_texts(body) else {
-            return;
+        let tool_blob = match collect_tool_path_scan_text(body) {
+            Some(s) if !s.is_empty() => s,
+            _ => return,
         };
-        let tool_blob: String = tool_texts
-            .iter()
-            .map(|t| t.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if tool_blob.is_empty() {
-            return;
-        }
         self.file
             .check_path_triggers_in_tool_text(session_id, &tool_blob, |sid, rule, files| {
                 self.sessions.activate(sid, rule, files, rule.trigger_window);
             });
+    }
+}
+
+/// Tool-call arguments plus tool-result bodies — any mention of a protected zone activates DLP.
+fn collect_tool_path_scan_text(body: &serde_json::Value) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Ok(tool_texts) = extract_tool_call_texts(body) {
+        for t in tool_texts {
+            if !t.text.is_empty() {
+                parts.push(t.text);
+            }
+        }
+    }
+    if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
+        for msg in messages {
+            if msg.get("role").and_then(|r| r.as_str()) != Some("tool") {
+                continue;
+            }
+            match msg.get("content") {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => parts.push(s.clone()),
+                Some(serde_json::Value::Array(blocks)) => {
+                    for block in blocks {
+                        if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                            if !t.is_empty() {
+                                parts.push(t.to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
     }
 }
 
@@ -294,6 +324,70 @@ mod file_session_tests {
         assert!(
             !sanitized.contains(&secret),
             "file secret should be redacted: {sanitized}"
+        );
+    }
+
+    #[test]
+    fn protected_directory_mention_does_not_activate_session() {
+        let tmp = TempDir::new().unwrap();
+        let probe = tmp.path().join("probe.txt");
+        fs::write(&probe, "Q".repeat(65)).unwrap();
+
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            pipeline: PipelineConfig {
+                dlp_enabled: true,
+                ..Default::default()
+            },
+            logging: LoggingConfig::default(),
+            fallback_groups: Default::default(),
+            content_rules: vec![],
+            file_rules: vec![FileRule {
+                id: "zone".into(),
+                path: tmp.path().to_path_buf(),
+                enabled: true,
+                recursive: true,
+                trigger_window: 15,
+                match_mode: MatchMode::Fragment,
+                min_fragment_len: None,
+                min_fragment_ratio: None,
+                formats: vec!["txt".into()],
+                index: Default::default(),
+            }],
+            operation_rules: vec![],
+            path_protection_rules: vec![],
+        };
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        dlp.reload(&config).unwrap();
+        for _ in 0..300 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(dlp.is_file_index_ready());
+
+        let dir = tmp.path().to_string_lossy().replace('\\', "/");
+        let session = "zone-ls";
+        let trigger = serde_json::json!({
+            "messages": [{
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": format!(r#"{{"command":"ls -la \"{dir}\""}}"#)
+                    }
+                }]
+            }]
+        });
+        dlp.register_path_triggers(session, &trigger);
+        assert!(
+            dlp.sessions().active_snapshot(session).is_none(),
+            "directory-only mention must not activate file DLP"
         );
     }
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::config::FileRule;
-use crate::dlp::disk_index::{FileIndexManager, filter_most_specific_rules};
+use crate::dlp::disk_index::{FileIndexManager, filter_most_specific_indexed, IndexedRule};
 use crate::dlp::session::ActiveFileContent;
 
 pub struct FileDlp {
@@ -33,13 +33,31 @@ impl FileDlp {
         activate: impl Fn(&str, &FileRule, &[String]),
     ) {
         let rules = self.index.rules();
-        for rule in filter_most_specific_rules(&rules, tool_text) {
-            let candidates = extract_triggered_files(tool_text, &rule);
-            let resolved = self.index.resolve_triggered_files(&rule.id, &candidates);
+        let mut pending: Vec<(FileRule, Vec<String>)> = Vec::new();
+        for indexed in &rules {
+            let candidates = extract_triggered_files(tool_text, &indexed.rule);
+            let resolved = self
+                .index
+                .resolve_triggered_files(&indexed.rule.id, &candidates);
             if resolved.is_empty() {
                 continue;
             }
-            activate(session_id, &rule, &resolved);
+            pending.push((indexed.rule.clone(), resolved));
+        }
+        if pending.is_empty() {
+            return;
+        }
+
+        let matched: Vec<IndexedRule> = rules
+            .iter()
+            .filter(|ir| pending.iter().any(|(r, _)| r.id == ir.rule.id))
+            .cloned()
+            .collect();
+        for rule in filter_most_specific_indexed(&matched) {
+            let Some((_, files)) = pending.iter().find(|(r, _)| r.id == rule.id) else {
+                continue;
+            };
+            activate(session_id, &rule, files);
         }
     }
 
@@ -182,17 +200,21 @@ fn looks_like_absolute_path(s: &str) -> bool {
 }
 
 fn resolve_rule_base(rule_base: &str) -> String {
-    let p = PathBuf::from(rule_base);
+    canonicalize_if_exists(rule_base)
+}
+
+fn canonicalize_if_exists(path: &str) -> String {
+    let p = PathBuf::from(path);
     if p.exists() {
         if let Ok(c) = std::fs::canonicalize(&p) {
             return normalize_trigger_path(&c.to_string_lossy());
         }
     }
-    normalize_trigger_path(rule_base)
+    normalize_trigger_path(path)
 }
 
 fn path_under_rule(path: &str, rule_base: &str) -> bool {
-    let path = normalize_trigger_path(path);
+    let path = canonicalize_if_exists(path);
     let rule_base = resolve_rule_base(rule_base);
     #[cfg(windows)]
     {
@@ -213,7 +235,11 @@ pub fn strip_verbatim_path_prefix(path: &str) -> String {
 }
 
 pub fn normalize_trigger_path(path: &str) -> String {
-    strip_verbatim_path_prefix(path)
+    let mut p = strip_verbatim_path_prefix(path);
+    while p.len() > 1 && p.ends_with('/') {
+        p.pop();
+    }
+    p
 }
 
 pub fn paths_equivalent(a: &str, b: &str) -> bool {
@@ -242,16 +268,19 @@ fn normalize_path_str(path: &str) -> String {
 }
 
 fn normalize_existing_path(path: &str) -> String {
-    let p = PathBuf::from(path);
-    if p.is_file() {
-        if let Ok(canon) = std::fs::canonicalize(&p) {
-            return normalize_trigger_path(&canon.to_string_lossy());
-        }
-    }
-    normalize_trigger_path(path)
+    canonicalize_if_exists(&trim_trailing_path_escapes(path))
+}
+
+/// Shell-escaped paths in tool JSON often end with `\` before a closing quote.
+fn trim_trailing_path_escapes(path: &str) -> String {
+    path.trim_end_matches('\\').to_string()
 }
 
 fn is_path_char(b: u8) -> bool {
+    if !b.is_ascii() {
+        // UTF-8 file/dir names (e.g. CJK) are valid inside absolute paths.
+        return true;
+    }
     b.is_ascii_alphanumeric()
         || b"/\\._-".contains(&b)
         || b" #+()[]@!$&',;=~".contains(&b)
@@ -272,9 +301,106 @@ fn matches_format(path: &Path, formats: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::config::{FileIndexOptions, FileRule, MatchMode};
-    use crate::dlp::disk_index::IndexedRule;
+    use crate::dlp::disk_index::{filter_most_specific_rules, IndexedRule};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn extracts_doc_path_from_exec_command() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join("protected-zone");
+        fs::create_dir_all(&zone).unwrap();
+        let doc = zone.join("sample.doc");
+        fs::write(&doc, b"legacy doc").unwrap();
+        let doc_str = doc.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "docs".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 15,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["doc".into(), "pdf".into()],
+            index: FileIndexOptions::default(),
+        };
+        let tool = format!(
+            r#"{{"command":"textutil -convert txt -stdout \"{doc_str}\" 2>&1 | head -500"}}"#
+        );
+        let files = extract_triggered_files(&tool, &rule);
+        assert_eq!(files.len(), 1, "files={files:?}");
+        let expected = fs::canonicalize(&doc)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(paths_equivalent(&files[0], &expected), "got {}", files[0]);
+    }
+
+    #[test]
+    fn extracts_pdf_path_from_pdftotext_exec() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join("protected-zone");
+        fs::create_dir_all(&zone).unwrap();
+        let pdf = zone.join("sample.pdf");
+        fs::write(&pdf, b"%PDF-1.4 stub").unwrap();
+
+        let rule = FileRule {
+            id: "pdf-zone".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 5,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["pdf".into()],
+            index: FileIndexOptions::default(),
+        };
+        let pdf_str = pdf.to_string_lossy().replace('\\', "/");
+        let tool = format!(r#"{{"command":"pdftotext \"{pdf_str}\" - 2>&1 | head -300"}}"#);
+        let files = extract_triggered_files(&tool, &rule);
+        assert_eq!(files.len(), 1, "files={files:?}");
+        let expected = fs::canonicalize(&pdf)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(paths_equivalent(&files[0], &expected), "got {}", files[0]);
+    }
+
+    #[test]
+    fn extracts_non_ascii_path_from_exec_command() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join(format!("zone-\u{6d4b}"));
+        fs::create_dir_all(&zone).unwrap();
+        let doc = zone.join(format!("sample-\u{6863}.doc"));
+        fs::write(&doc, b"legacy doc").unwrap();
+        let doc_str = doc.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "unicode-zone".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 15,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["doc".into()],
+            index: FileIndexOptions::default(),
+        };
+        let tool = format!(
+            r#"{{"command":"textutil -convert txt -stdout \"{doc_str}\" 2>&1 | head -500"}}"#
+        );
+        let files = extract_triggered_files(&tool, &rule);
+        assert_eq!(files.len(), 1, "files={files:?}");
+        let expected = fs::canonicalize(&doc)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(paths_equivalent(&files[0], &expected), "got {}", files[0]);
+    }
 
     #[test]
     fn path_trigger_avoids_prefix_false_positive() {
@@ -346,8 +472,49 @@ mod tests {
     }
 
     #[test]
+    fn directory_only_mention_does_not_activate_index() {
+        use std::thread;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let probe = tmp.path().join("probe.txt");
+        fs::write(&probe, "secret").unwrap();
+        let rule = FileRule {
+            id: "zone".into(),
+            path: tmp.path().to_path_buf(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 5,
+            match_mode: MatchMode::Full,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["txt".into()],
+            index: FileIndexOptions::default(),
+        };
+        let fdlp = FileDlp::new(std::slice::from_ref(&rule)).unwrap();
+        for _ in 0..300 {
+            if fdlp.is_index_ready() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert!(fdlp.is_index_ready());
+
+        let dir = tmp.path().to_string_lossy().replace('\\', "/");
+        let tool = format!(r#"{{"command":"ls -la \"{dir}\""}}"#);
+        let activated = std::sync::Mutex::new(false);
+        fdlp.check_path_triggers_in_tool_text("sess", &tool, |_, _, _| {
+            *activated.lock().unwrap() = true;
+        });
+        assert!(
+            !*activated.lock().unwrap(),
+            "directory-only tool text must not activate"
+        );
+    }
+
+    #[test]
     fn extracts_macos_temp_probe_under_rule_dir() {
-        use std::io::Write as _;
         use tempfile::TempDir;
 
         let tmp = TempDir::new().unwrap();

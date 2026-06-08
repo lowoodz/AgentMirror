@@ -214,6 +214,16 @@ impl FileIndexManager {
         result
     }
 
+    /// All indexed file paths for a rule (internal diagnostics / tests).
+    pub fn indexed_paths_for_rule(&self, rule_id: &str) -> Vec<String> {
+        let guard = self.inner.read();
+        guard
+            .snapshots
+            .get(rule_id)
+            .map(|snapshot| snapshot.indexed_paths.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// Keep only tool-mentioned paths that exist in this rule's index.
     pub fn resolve_triggered_files(&self, rule_id: &str, candidates: &[String]) -> Vec<String> {
         let guard = self.inner.read();
@@ -1527,6 +1537,12 @@ pub fn filter_most_specific_rules(rules: &[IndexedRule], tool_text: &str) -> Vec
         .iter()
         .filter(|r| path_trigger_match(&r.normalized_path, tool_text))
         .collect();
+    filter_most_specific_indexed(matches)
+}
+
+/// Among pre-matched rules, drop parent zones when a more specific child zone also matched.
+pub fn filter_most_specific_indexed<'a>(rules: impl IntoIterator<Item = &'a IndexedRule>) -> Vec<FileRule> {
+    let matches: Vec<&IndexedRule> = rules.into_iter().collect();
     if matches.is_empty() {
         return Vec::new();
     }

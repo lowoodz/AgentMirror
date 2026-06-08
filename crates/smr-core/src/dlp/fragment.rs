@@ -3,7 +3,8 @@
 pub const DEFAULT_FILE_MIN_FRAGMENT_LEN: usize = 65;
 pub const DEFAULT_FILE_MIN_FRAGMENT_RATIO: f64 = 0.5;
 
-/// File DLP: normalized exact substring must meet min length AND block overlap ratio (AND).
+/// File DLP: normalized exact substring must meet min length; ratio applies to short
+/// haystacks or when the match covers enough of the indexed window.
 pub fn file_fragment_meets_threshold(
     norm_match_len: usize,
     norm_index_chunk_len: usize,
@@ -21,7 +22,11 @@ pub fn file_fragment_meets_threshold(
     let min_ratio = min_fragment_ratio.unwrap_or(DEFAULT_FILE_MIN_FRAGMENT_RATIO);
     let r_index = norm_match_len as f64 / norm_index_chunk_len as f64;
     let r_hay = norm_match_len as f64 / norm_haystack_chunk_len as f64;
-    r_index.max(r_hay) > min_ratio
+    if r_index > min_ratio || r_hay > min_ratio {
+        return true;
+    }
+    // Verified substring match at min_len in a large tool payload (common for agent reads).
+    norm_haystack_chunk_len > min_len * 4 && norm_match_len >= min_len
 }
 
 pub fn file_min_fragment_len(min_fragment_len: Option<usize>) -> usize {
@@ -77,7 +82,7 @@ mod tests {
             Some(65),
             Some(0.5)
         ));
-        assert!(!file_fragment_meets_threshold(
+        assert!(file_fragment_meets_threshold(
             120,
             8192,
             8192,

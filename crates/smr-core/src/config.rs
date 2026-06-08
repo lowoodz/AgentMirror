@@ -346,7 +346,7 @@ fn default_true() -> bool {
 }
 
 fn default_trigger_window() -> u32 {
-    5
+    15
 }
 
 fn default_formats() -> Vec<String> {
@@ -366,6 +366,7 @@ fn default_formats() -> Vec<String> {
         "css".into(),
         "xml".into(),
         "csv".into(),
+        "doc".into(),
         "docx".into(),
         "pptx".into(),
         "pdf".into(),
