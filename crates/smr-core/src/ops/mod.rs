@@ -267,6 +267,53 @@ mod tests {
     }
 
     #[test]
+    fn regex_mode_matches_flexible_whitespace() {
+        let rules = vec![OperationRule {
+            id: "block-rm-flex".into(),
+            enabled: true,
+            operation: OperationType::CommandExec,
+            object: OperationObject {
+                pattern: r"(?i)rm\s+-rf".into(),
+                is_regex: true,
+            },
+        }];
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let extracted = vec![ExtractedText {
+            pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
+                message_index: 0,
+                tool_index: 0,
+            },
+            text: r#"{"command":"rm  -rf /"}"#.into(),
+        }];
+        let out = ops.process_response(&extracted).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].1.contains("SMR BLOCKED"));
+    }
+
+    #[test]
+    fn literal_mode_does_not_match_extra_whitespace() {
+        let rules = vec![OperationRule {
+            id: "block-rm".into(),
+            enabled: true,
+            operation: OperationType::CommandExec,
+            object: OperationObject {
+                pattern: "rm -rf".into(),
+                is_regex: false,
+            },
+        }];
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let extracted = vec![ExtractedText {
+            pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
+                message_index: 0,
+                tool_index: 0,
+            },
+            text: r#"{"command":"rm  -rf /"}"#.into(),
+        }];
+        let out = ops.process_response(&extracted).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
     fn path_protection_blocks_via_ops_engine() {
         use crate::config::{PathProtectionLevel, PathProtectionRule};
         use std::path::PathBuf;

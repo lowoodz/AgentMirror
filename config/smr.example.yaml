@@ -111,6 +111,25 @@ operation_rules:
     object:
       pattern: "wget http://"
       is_regex: false
+  # Regex (is_regex: true) — whitespace tolerance, wildcards, case-insensitive
+  - id: block-rm-rf-flex
+    enabled: false
+    operation: command_exec
+    object:
+      pattern: "(?i)rm\\s+-rf"
+      is_regex: true
+  - id: block-example-subdomains
+    enabled: false
+    operation: network_access
+    object:
+      pattern: "https://[^/]+\\.example\\.com"
+      is_regex: true
+  - id: block-curl-any-scheme
+    enabled: false
+    operation: network_access
+    object:
+      pattern: "curl\\s+https?://"
+      is_regex: true
 
 path_protection_rules:
   - id: protect-etc-passwd
