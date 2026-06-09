@@ -30,10 +30,13 @@ smr_stop_processes() {
   sleep "${1:-2}"
 }
 
+smr_host_is_apple_silicon() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
+  sysctl -n hw.optional.arm64 2>/dev/null | grep -qx 1
+}
+
 smr_native_arch() {
-  local m
-  m="$(uname -m)"
-  if [[ "$m" == "arm64" ]]; then echo arm64; else echo x86_64; fi
+  if smr_host_is_apple_silicon; then echo arm64; else echo x86_64; fi
 }
 
 smr_dist_paths() {

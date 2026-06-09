@@ -4,6 +4,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=macos/common.sh
+source "${ROOT}/scripts/macos/common.sh"
 
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${ROOT}/target"
@@ -17,8 +19,28 @@ VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
 OUT="${ROOT}/dist"
 mkdir -p "${OUT}"
 
-echo "==> Stage bundled document tools (poppler pdftotext)"
-bash "${ROOT}/scripts/vendor/stage-doc-tools.sh" "${ROOT}/resources/doc-tools"
+mac_native_arch_label() {
+  smr_native_arch
+}
+
+echo "==> Stage bundled document tools (poppler pdftotext) per macOS arch"
+DOC_TOOLS="${ROOT}/resources/doc-tools"
+stage_macos_tools() {
+  local label="$1"
+  local dest="${DOC_TOOLS}/darwin-${label}"
+  if [[ -f "${dest}/bin/pdftotext" ]]; then
+    echo "    darwin-${label} already staged ($(du -sh "${dest}" | awk '{print $1}')), reuse"
+    return 0
+  fi
+  echo "    staging darwin-${label}..."
+  bash "${ROOT}/scripts/vendor/stage-doc-tools.sh" "${DOC_TOOLS}" "${label}"
+}
+for label in arm64 x86_64; do
+  stage_macos_tools "${label}"
+done
+native_arch="$(mac_native_arch_label)"
+ln -sfn "darwin-${native_arch}" "${DOC_TOOLS}/current"
+echo "==> doc-tools/current -> darwin-${native_arch} (Tauri bundle)"
 
 CLI_ONLY=false
 while [[ $# -gt 0 ]]; do
@@ -49,23 +71,13 @@ pack_one() {
   cp scripts/verify.sh "${stage}/verify.sh"
   chmod +x "${stage}/install.sh" "${stage}/verify.sh"
   if [[ -d "${ROOT}/resources/doc-tools" ]]; then
-    local host_os arch_label src=""
-    host_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-    case "$(uname -m)" in
-      arm64|aarch64) arch_label="arm64" ;;
-      *) arch_label="x86_64" ;;
-    esac
-    for candidate in \
-      "${ROOT}/resources/doc-tools/${host_os}-${arch_label}" \
-      "${ROOT}/resources/doc-tools/current"; do
-      if [[ -d "${candidate}/bin/pdftotext" || -f "${candidate}/bin/pdftotext" || -f "${candidate}/bin/pdftotext.exe" ]]; then
-        src="${candidate}"
-        break
-      fi
-    done
-    if [[ -n "${src}" ]]; then
-      cp -R "${src}" "${stage}/tools"
-      echo "==> Bundled doc tools in ${pkg} (from ${src})"
+    local tools_src="${ROOT}/resources/doc-tools/darwin-${arch_label}"
+    if [[ -f "${tools_src}/bin/pdftotext" ]]; then
+      cp -R "${tools_src}" "${stage}/tools"
+      echo "==> Bundled doc tools in ${pkg} (from ${tools_src})"
+    else
+      echo "ERROR: missing doc-tools for darwin-${arch_label} at ${tools_src}/bin/pdftotext" >&2
+      exit 1
     fi
   fi
 
@@ -82,9 +94,10 @@ if [[ "$CLI_ONLY" != true ]] && [[ -f "$ROOT/gui/package.json" ]] && command -v 
   echo "==> Sync admin UI assets"
   bash "${ROOT}/scripts/sync-admin-ui.sh"
   echo "==> Building desktop app (Tauri, host arch)"
-  (cd "$ROOT/gui" && npm ci --silent && npm run build --silent) || {
-    echo "Warning: Tauri build failed or skipped."
-  }
+  if ! (cd "$ROOT/gui" && npm ci --silent && npm run build --silent); then
+    echo "ERROR: Tauri build failed" >&2
+    exit 1
+  fi
   APP_BUNDLE=""
   APP_NAME=""
   for name in SafeRoute.app; do
@@ -94,6 +107,10 @@ if [[ "$CLI_ONLY" != true ]] && [[ -f "$ROOT/gui/package.json" ]] && command -v 
       break
     fi
   done
+  if [[ -z "$APP_BUNDLE" ]]; then
+    echo "ERROR: Tauri build did not produce SafeRoute.app under target/release/bundle/macos/" >&2
+    exit 1
+  fi
   if [[ -n "$APP_BUNDLE" ]]; then
     app_bin="$APP_BUNDLE/Contents/MacOS/smr-gui"
     if file "$app_bin" 2>/dev/null | grep -q 'arm64'; then
@@ -122,8 +139,7 @@ pack_one "aarch64-apple-darwin" "arm64"
 pack_one "x86_64-apple-darwin" "x86_64"
 
 # Default smr symlink for local smoke: native arch
-native="$(uname -m)"
-if [[ "$native" == "arm64" ]]; then
+if [[ "$(smr_native_arch)" == "arm64" ]]; then
   cp "${OUT}/smr-arm64" "${OUT}/smr"
 else
   cp "${OUT}/smr-x86_64" "${OUT}/smr"
