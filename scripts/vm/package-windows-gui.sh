@@ -51,6 +51,14 @@ APP_ZIP="${DIST}/smr-${VERSION}-windows-${APP_SUFFIX}-app.zip"
 
 echo "==> Pack minimal source for Windows GUI build"
 bash "${ROOT}/scripts/sync-admin-ui.sh"
+echo "==> Prefetch Windows doc-tools on Mac host (VM bundle)"
+bash "${ROOT}/scripts/vendor/prefetch-poppler-windows.sh" "${ROOT}/resources/doc-tools"
+bash "${ROOT}/scripts/vendor/prefetch-node-windows.sh" arm64 >/dev/null
+NODE_STAGE="${ROOT}/dist/vendor-cache/node-win-22.15.0-arm64"
+[[ -x "${NODE_STAGE}/node.exe" || -f "${NODE_STAGE}/node.exe" ]] || {
+  echo "ERROR: Node prefetch missing at ${NODE_STAGE}/node.exe" >&2
+  exit 1
+}
 if [[ -f "${ROOT}/gui/src-tauri/create_icon.sh" ]]; then
   (cd "${ROOT}/gui/src-tauri" && bash create_icon.sh) 2>/dev/null || true
 fi
@@ -58,7 +66,7 @@ SRC_TAR="${DIST}/smr-windows-build-src.tar.gz"
 TMP_DIR="$(mktemp -d)"
 tar -czf "$SRC_TAR" -C "$ROOT" \
   --exclude=./dist --exclude=target --exclude=node_modules --exclude=.git \
-  Cargo.toml Cargo.lock crates gui config scripts README.md
+  Cargo.toml Cargo.lock crates gui config scripts README.md resources
 
 SRC_ZIP="${DIST}/smr-windows-build-src.zip"
 rm -f "$SRC_ZIP"
@@ -74,6 +82,23 @@ vm_scp_to "$SRC_ZIP" "$SRC_ZIP_GUEST"
 vm_scp_to "$BUILD_PS1" "$BUILD_PS1_GUEST"
 echo -n "$GUI_TARGET" > "${DIST}/.smr-gui-target.txt"
 vm_scp_to "${DIST}/.smr-gui-target.txt" "$TARGET_GUEST"
+
+echo "==> Ensure prebuilt Node.js on ARM64 guest"
+STAGING_WIN="${STAGING//\//\\}"
+if vm_ssh "powershell -NoProfile -Command \"Test-Path '${STAGING_WIN}\\node\\node.exe'\"" 2>/dev/null | grep -qi true; then
+  echo "    Node already on guest ($(vm_ssh "powershell -NoProfile -Command \"(Get-Item '${STAGING_WIN}\\node\\node.exe').Length\"" 2>/dev/null | tr -d '\r' ) bytes), skip upload"
+else
+  vm_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '${STAGING_WIN}\\node' | Out-Null\""
+  NODE_ZIP="${DIST}/node-win-arm64.zip"
+  if [[ ! -f "$NODE_ZIP" ]]; then
+    echo "    Creating ${NODE_ZIP} from ${NODE_STAGE}"
+    rm -f "$NODE_ZIP"
+    ( cd "$NODE_STAGE" && zip -rq "$NODE_ZIP" . )
+  fi
+  echo "    Uploading Node zip ($(du -h "$NODE_ZIP" | awk '{print $1}'))..."
+  vm_scp_to "$NODE_ZIP" "${STAGING}/node-win-arm64.zip"
+  vm_ssh "powershell -NoProfile -Command \"Expand-Archive -Path '${STAGING_WIN}\\node-win-arm64.zip' -DestinationPath '${STAGING_WIN}\\node' -Force; if (-not (Test-Path '${STAGING_WIN}\\node\\node.exe')) { Write-Error 'node.exe missing after Expand-Archive'; exit 1 }; Write-Host 'Node OK:' (Get-Item '${STAGING_WIN}\\node\\node.exe').Length\""
+fi
 
 echo "==> Clear previous build log on guest"
 LOG_WIN="${LOG_GUEST//\//\\}"

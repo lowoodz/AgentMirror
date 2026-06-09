@@ -21,6 +21,12 @@ $Bin = Join-Path $Stage "bin"
 $Lib = Join-Path $Stage "lib"
 $Cache = Join-Path $Root "dist\vendor-cache"
 
+if (Test-Path (Join-Path $Bin "pdftotext.exe")) {
+    Write-Host "==> doc-tools already staged at $Stage (skip download)"
+    Get-ChildItem $Bin | Select-Object Name, Length
+    return
+}
+
 New-Item -ItemType Directory -Force -Path $Bin, $Lib, $Cache | Out-Null
 if (Test-Path $Stage) {
     Remove-Item $Stage -Recurse -Force
@@ -33,7 +39,20 @@ $ZipPath = Join-Path $Cache $ZipName
 
 if (-not (Test-Path $ZipPath)) {
     Write-Host "==> Download poppler-windows $PopplerVersion"
-    Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing
+    $downloaded = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing -TimeoutSec 600
+            $downloaded = $true
+            break
+        } catch {
+            Write-Warning "poppler download attempt $attempt failed: $($_.Exception.Message)"
+            if ($attempt -lt 3) { Start-Sleep -Seconds 5 }
+        }
+    }
+    if (-not $downloaded) {
+        throw "Failed to download poppler-windows after 3 attempts: $ZipUrl"
+    }
 }
 
 $Extract = Join-Path $Cache "poppler-$PopplerVersion"

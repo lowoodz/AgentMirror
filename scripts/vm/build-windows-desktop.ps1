@@ -69,7 +69,20 @@ function Refresh-Path {
 function Ensure-Node {
     $NodeDir = Join-Path $Staging "node"
     $nodeExe = Join-Path $NodeDir "node.exe"
-    if (Test-Path $nodeExe) { return $NodeDir }
+    if (Test-Path $nodeExe) {
+        try {
+            $machine = Get-PeMachine $nodeExe
+            $expected = if ((Get-RustHostArch) -eq "ARM64") { 0xAA64 } else { 0x8664 }
+            if ($machine -eq $expected) {
+                Log "Using pre-staged Node.js: $nodeExe"
+                return $NodeDir
+            }
+            Log "Removing mismatched Node PE (0x$($machine.ToString('X4')))"
+        } catch {
+            Log "Removing invalid staged Node: $($_.Exception.Message)"
+        }
+        Remove-Item $NodeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
     $ver = "22.15.0"
     $osArch = Get-RustHostArch
@@ -236,7 +249,15 @@ Log "OS arch: $(Get-OsArch)"
 
 # Drop cached x64 Node on ARM hosts when a stale cache exists from prior builds.
 if ((Get-OsArch) -eq "ARM64" -and (Test-Path (Join-Path $Staging "node\node.exe"))) {
-    Remove-Item (Join-Path $Staging "node") -Recurse -Force -ErrorAction SilentlyContinue
+    $nodeExe = Join-Path $Staging "node\node.exe"
+    try {
+        $machine = Get-PeMachine $nodeExe
+        if ($machine -ne 0xAA64) {
+            Remove-Item (Join-Path $Staging "node") -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Remove-Item (Join-Path $Staging "node") -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $SrcZip = Join-Path $Staging "smr-build-src.zip"
@@ -281,9 +302,6 @@ if (-not (Ensure-Rust)) {
 
 $rustHost = Get-RustHostArch
 Log "Rust host arch: $rustHost"
-if ($rustHost -eq "ARM64" -and (Test-Path (Join-Path $Staging "node"))) {
-    Remove-Item (Join-Path $Staging "node") -Recurse -Force -ErrorAction SilentlyContinue
-}
 
 $nodeDir = Ensure-Node
 if (-not $nodeDir) { exit 1 }

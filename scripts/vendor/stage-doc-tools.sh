@@ -111,6 +111,7 @@ bundle_macos_pdftotext() {
 
   if [[ -n "$poppler_prefix" && -d "${poppler_prefix}/lib" ]]; then
     cp -f "${poppler_prefix}/lib"/libpoppler*.dylib "${LIB}/" 2>/dev/null || true
+    chmod 644 "${LIB}"/libpoppler*.dylib 2>/dev/null || true
   fi
 
   local queue=()
@@ -134,6 +135,7 @@ bundle_macos_pdftotext() {
           if [[ -n "$poppler_prefix" && -f "${poppler_prefix}/lib/${name}" ]]; then
             resolved="${poppler_prefix}/lib/${name}"
             cp -f "$resolved" "${LIB}/${name}"
+            chmod 644 "${LIB}/${name}" 2>/dev/null || true
             queue+=("${LIB}/${name}")
           fi
           ;;
@@ -161,6 +163,11 @@ bundle_macos_pdftotext() {
     install_name_tool -change @rpath/libpoppler.dylib "@loader_path/../lib/$(basename "$poppler_lib")" "${BIN}/pdftotext" 2>/dev/null || true
   fi
   install_name_tool -add_rpath @loader_path/../lib "${BIN}/pdftotext" 2>/dev/null || true
+
+  # Brew poppler dylibs are often 0400; Tauri resource bundler must read them.
+  find "${STAGE}" -type f -exec chmod a+r {} \;
+  find "${STAGE}" -type d -exec chmod a+rx {} \;
+  chmod 755 "${BIN}/pdftotext"
 }
 
 PDFTOTEXT="$(find_pdftotext)" || {
@@ -187,4 +194,5 @@ if ! "${BIN}/pdftotext" -v >/dev/null 2>&1; then
 fi
 
 echo "==> staged $(du -sh "${STAGE}" | awk '{print $1}') at ${STAGE}"
+ln -sfn "${OS}-${ARCH_LABEL}" "${OUT}/current"
 ls -la "${BIN}" "${LIB}" 2>/dev/null | head -20 || true
