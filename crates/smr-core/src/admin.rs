@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Json, Response};
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,34 @@ pub fn router() -> Router<HttpState> {
         .route("/api/traffic", get(api_traffic))
         .route("/api/traffic/{id}", get(api_traffic_body))
         .route("/api/reload", put(api_reload))
+        .route("/api/canonicalize-paths", post(api_canonicalize_paths))
+}
+
+#[derive(Deserialize)]
+struct CanonicalizePathsRequest {
+    paths: Vec<String>,
+}
+
+async fn api_canonicalize_paths(
+    Json(req): Json<CanonicalizePathsRequest>,
+) -> Json<serde_json::Value> {
+    let mut out = Vec::new();
+    for raw in req.paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = std::path::PathBuf::from(trimmed);
+        if path.exists() {
+            let canon = path.canonicalize().unwrap_or(path);
+            out.push(canon.display().to_string());
+        } else {
+            out.push(trimmed.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    Json(serde_json::json!({ "paths": out }))
 }
 
 async fn ui_index() -> impl IntoResponse {

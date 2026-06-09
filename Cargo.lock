@@ -3954,6 +3954,7 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "objc2-app-kit",
+ "serde_json",
  "smr-core",
  "tauri",
  "tauri-build",

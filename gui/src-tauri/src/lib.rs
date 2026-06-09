@@ -8,7 +8,7 @@ use smr_core::{run_app, SharedApp, DEFAULT_CONFIG_YAML};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent, Url, WindowEvent,
+    Listener, Manager, RunEvent, Url, WebviewWindow, WindowEvent,
 };
 use tracing::info;
 
@@ -416,6 +416,55 @@ fn refresh_native_titlebar_for_window(window: &tauri::Window) {
     }
 }
 
+fn install_native_drop_bridge(window: &WebviewWindow) {
+    let win = window.clone();
+    let _ = window.listen("tauri://drag-drop", move |event| {
+        let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+            return;
+        };
+        let scale = win.scale_factor().unwrap_or(1.0);
+        if let Some(pos) = payload.get_mut("position") {
+            if let Some(x) = pos.get("x").and_then(|v| v.as_f64()) {
+                pos["x"] = serde_json::json!(x / scale);
+            }
+            if let Some(y) = pos.get("y").and_then(|v| v.as_f64()) {
+                pos["y"] = serde_json::json!(y / scale);
+            }
+        }
+        let js = payload.to_string();
+        let _ = win.eval(&format!(
+            "window.smrHandleNativeDrop&&window.smrHandleNativeDrop({js});"
+        ));
+    });
+    let win = window.clone();
+    let _ = window.listen("tauri://drag-over", move |event| {
+        let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+            return;
+        };
+        let scale = win.scale_factor().unwrap_or(1.0);
+        if let Some(pos) = payload.get_mut("position") {
+            if let Some(x) = pos.get("x").and_then(|v| v.as_f64()) {
+                pos["x"] = serde_json::json!(x / scale);
+            }
+            if let Some(y) = pos.get("y").and_then(|v| v.as_f64()) {
+                pos["y"] = serde_json::json!(y / scale);
+            }
+        }
+        let js = payload.to_string();
+        let _ = win.eval(&format!(
+            "window.smrNativeDragOver&&window.smrNativeDragOver({js});"
+        ));
+    });
+    let win = window.clone();
+    let _ = window.listen("tauri://drag-enter", move |_| {
+        let _ = win.eval("window.smrNativeDragActive&&window.smrNativeDragActive(true);");
+    });
+    let win = window.clone();
+    let _ = window.listen("tauri://drag-leave", move |_| {
+        let _ = win.eval("window.smrNativeDragActive&&window.smrNativeDragActive(false);");
+    });
+}
+
 fn apply_window_chrome(window: &tauri::WebviewWindow) {
     use tauri::{Theme, window::Color};
 
@@ -528,6 +577,7 @@ pub fn run() {
                 .ok_or("missing main window")?;
 
             apply_window_chrome(&window);
+            install_native_drop_bridge(&window);
 
             let listen_js = listen.replace('\\', "\\\\").replace('\'', "\\'");
             let _ = window.eval(&format!("window.__SMR_LISTEN='{listen_js}';"));

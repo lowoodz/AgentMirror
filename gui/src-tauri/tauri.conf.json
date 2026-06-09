@@ -17,7 +17,7 @@
         "height": 760,
         "resizable": true,
         "url": "bootstrap.html",
-        "dragDropEnabled": false,
+        "dragDropEnabled": true,
         "theme": "Dark",
         "backgroundColor": "#2e323a"
       }
