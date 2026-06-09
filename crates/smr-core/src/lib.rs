@@ -19,6 +19,7 @@ pub mod state;
 pub mod storage;
 pub mod streaming;
 pub mod traffic;
+pub mod traffic_parse;
 
 pub use config::AppConfig;
 pub use server::run_app;

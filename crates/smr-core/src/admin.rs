@@ -140,13 +140,15 @@ async fn api_traffic_body(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     if q.format.as_deref() == Some("json") {
-        let text = String::from_utf8_lossy(&data).into_owned();
-        let parsed = serde_json::from_slice::<serde_json::Value>(&data).ok();
+        let parsed_body = crate::traffic_parse::parse_traffic_body(&data);
         let body = serde_json::json!({
             "record": record,
-            "text": text,
-            "parsed": parsed,
-            "is_json": parsed.is_some(),
+            "text": parsed_body.text_clean,
+            "parsed": parsed_body.parsed,
+            "is_json": parsed_body.kind == crate::traffic_parse::TrafficContentKind::Json,
+            "content_kind": parsed_body.kind.as_str(),
+            "sse_events": parsed_body.sse_events,
+            "sse_count": parsed_body.sse_events.len(),
         });
         return Ok(Json(body).into_response());
     }

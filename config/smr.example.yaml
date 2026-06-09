@@ -72,17 +72,44 @@ file_rules:
     formats: [txt, md, json, yaml, doc, docx, pptx, pdf]
 
 operation_rules:
+  # command_exec — shell / terminal commands
   - id: block-rm-rf
     enabled: true
     operation: command_exec
     object:
       pattern: "rm -rf"
       is_regex: false
-  - id: block-prod-api
-    enabled: true
+  # api_call — local/runtime tools, HTTPS APIs, SDK, RPC, gRPC
+  - id: block-read-secrets
+    enabled: false
     operation: api_call
     object:
-      pattern: "https://prod.example.com"
+      pattern: "\"name\": \"read_file\""
+      is_regex: false
+  - id: block-internal-grpc
+    enabled: false
+    operation: api_call
+    object:
+      pattern: "grpc://inventory.internal"
+      is_regex: false
+  - id: block-stripe-api
+    enabled: false
+    operation: api_call
+    object:
+      pattern: "https://api.stripe.com"
+      is_regex: false
+  # network_access — fetch network URLs (curl, wget, web_fetch, etc.)
+  - id: block-curl-exfil
+    enabled: false
+    operation: network_access
+    object:
+      pattern: "curl https://"
+      is_regex: false
+  - id: block-wget
+    enabled: false
+    operation: network_access
+    object:
+      pattern: "wget http://"
       is_regex: false
 
 path_protection_rules:
