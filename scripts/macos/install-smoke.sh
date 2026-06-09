@@ -47,6 +47,11 @@ stage="$(mktemp -d)"
 tar -xzf "$CLI_TAR" -C "$stage"
 install -d "${PREFIX}/bin" "${PREFIX}/etc/securemodelroute"
 install -m 755 "${stage}/smr" "${PREFIX}/bin/smr"
+if [[ -d "${stage}/tools" ]]; then
+  rm -rf "${PREFIX}/bin/tools"
+  cp -R "${stage}/tools" "${PREFIX}/bin/tools"
+  log "Installed bundled doc tools to ${PREFIX}/bin/tools"
+fi
 if [[ ! -f "${PREFIX}/etc/securemodelroute/smr.yaml" ]]; then
   install -m 644 "${stage}/smr.example.yaml" "${PREFIX}/etc/securemodelroute/smr.yaml"
 fi

@@ -17,6 +17,9 @@ VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
 OUT="${ROOT}/dist"
 mkdir -p "${OUT}"
 
+echo "==> Stage bundled document tools (poppler pdftotext)"
+bash "${ROOT}/scripts/vendor/stage-doc-tools.sh" "${ROOT}/resources/doc-tools"
+
 CLI_ONLY=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,6 +48,26 @@ pack_one() {
   cp scripts/install.sh "${stage}/install.sh"
   cp scripts/verify.sh "${stage}/verify.sh"
   chmod +x "${stage}/install.sh" "${stage}/verify.sh"
+  if [[ -d "${ROOT}/resources/doc-tools" ]]; then
+    local host_os arch_label src=""
+    host_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    case "$(uname -m)" in
+      arm64|aarch64) arch_label="arm64" ;;
+      *) arch_label="x86_64" ;;
+    esac
+    for candidate in \
+      "${ROOT}/resources/doc-tools/${host_os}-${arch_label}" \
+      "${ROOT}/resources/doc-tools/current"; do
+      if [[ -d "${candidate}/bin/pdftotext" || -f "${candidate}/bin/pdftotext" || -f "${candidate}/bin/pdftotext.exe" ]]; then
+        src="${candidate}"
+        break
+      fi
+    done
+    if [[ -n "${src}" ]]; then
+      cp -R "${src}" "${stage}/tools"
+      echo "==> Bundled doc tools in ${pkg} (from ${src})"
+    fi
+  fi
 
   tar -czf "${OUT}/${pkg}.tar.gz" -C "${stage}" .
   rm -rf "${stage}"

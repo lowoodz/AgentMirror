@@ -19,5 +19,10 @@ SecureModelRoute方案设计.docx
 /gui/bundle-extra/*
 !/gui/bundle-extra/.gitkeep
 
+# Bundled poppler pdftotext (see scripts/vendor/stage-doc-tools.sh)
+/resources/doc-tools/*
+!/resources/doc-tools/.gitkeep
+/dist/vendor-cache/
+
 # Local ad-hoc smoke script (not maintained in repo)
 scripts/windows/smoke_chat.py

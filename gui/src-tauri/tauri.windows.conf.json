@@ -9,6 +9,7 @@
     "resources": {
       "../bundle-extra/smr.exe": "cli/smr.exe",
       "../bundle-extra/smr.example.yaml": "cli/smr.example.yaml",
+      "../../resources/doc-tools/": "doc-tools/",
       "nsis/post-install-cli.ps1": "cli/post-install-cli.ps1",
       "nsis/post-uninstall-cli.ps1": "cli/post-uninstall-cli.ps1"
     },

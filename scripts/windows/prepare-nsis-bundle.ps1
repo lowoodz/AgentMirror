@@ -34,4 +34,10 @@ if (-not (Test-Path $Example)) {
 
 Copy-Item $SmrExe (Join-Path $BundleExtra "smr.exe") -Force
 Copy-Item $Example (Join-Path $BundleExtra "smr.example.yaml") -Force
+
+$StageDocTools = Join-Path $Root "scripts\windows\stage-doc-tools.ps1"
+if (Test-Path $StageDocTools) {
+    & $StageDocTools -Root $Root
+}
+
 Write-Host "==> NSIS bundle extras: $BundleExtra"
