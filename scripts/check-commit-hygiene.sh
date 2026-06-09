@@ -30,9 +30,26 @@ log_fail() {
 FORBIDDEN_PATHS=(
   config/test.env
   config/smr.yaml
+  config/local-hygiene.env
   test_model_api_key.txt
   dist/.test-keys-from-env.txt
 )
+
+# Optional comma-separated personal identifiers (copy config/local-hygiene.env.example).
+HYGIENE_BLOCK_IDENTIFIERS=()
+LOCAL_HYGIENE="${ROOT}/config/local-hygiene.env"
+if [[ -f "$LOCAL_HYGIENE" ]]; then
+  # shellcheck disable=SC1090
+  source "$LOCAL_HYGIENE"
+  if [[ -n "${SMR_HYGIENE_BLOCK_IDENTIFIERS:-}" ]]; then
+    IFS=',' read -ra _blocks <<< "$SMR_HYGIENE_BLOCK_IDENTIFIERS"
+    for _b in "${_blocks[@]}"; do
+      _b="${_b#"${_b%%[![:space:]]*}"}"
+      _b="${_b%"${_b##*[![:space:]]}"}"
+      [[ -n "$_b" ]] && HYGIENE_BLOCK_IDENTIFIERS+=("$_b")
+    done
+  fi
+fi
 
 should_skip_file() {
   local f="$1"
@@ -181,15 +198,20 @@ scan_file() {
       ;;
     esac
 
-    # --- Portability smells in scripts/source (not docs) ---
-    case "$f" in
-      scripts/check-commit-hygiene.sh) ;;
-      scripts/*|crates/*|gui/src*|config/*.yaml)
-        if [[ "$line" =~ testuser ]]; then
-          log_fail "$f:$line_num: personal identifier — use env vars / placeholders before commit"
-        fi
-        ;;
-    esac
+    # --- Optional personal identifiers (config/local-hygiene.env, gitignored) ---
+    if [[ ${#HYGIENE_BLOCK_IDENTIFIERS[@]} -gt 0 ]]; then
+      case "$f" in
+        scripts/check-commit-hygiene.sh|config/local-hygiene.env.example) ;;
+        scripts/*|crates/*|gui/src*|config/*.yaml|.cursor/rules/*)
+          for _id in "${HYGIENE_BLOCK_IDENTIFIERS[@]}"; do
+            if [[ "$line" == *"$_id"* ]]; then
+              log_fail "$f:$line_num: blocked personal identifier \"$_id\" — use config/test.env or placeholders"
+              break
+            fi
+          done
+          ;;
+      esac
+    fi
   done <"$f"
 }
 

@@ -14,7 +14,7 @@ Before **every** `git commit` (human or agent):
    - macOS `/Users/<real-user>/…`
    - Windows `C:/Users/<real-user>/…` (use `SMR_WINDOWS_USER`, `SMR_GUEST_STAGING`, `windows-user` placeholders)
    - LAN IPs / `HostName` in repo (belong in `~/.ssh/config` + `config/test.env`)
-5. Tests/scripts: no hardcoded usernames (`testuser`, etc.); use `load_test_env.sh`, `vm-ssh.sh`, generic staging paths.
+5. Tests/scripts: no hardcoded OS usernames or machine paths; use `load_test_env.sh`, `vm-ssh.sh`, `windows-user` placeholders. Optional blocklist: copy `config/local-hygiene.env.example` → `config/local-hygiene.env` (gitignored).
 6. Multi-platform: prefer env vars + documented defaults in `config/test.env.example`; avoid host-specific paths in Rust/Python/PS1 under `crates/` and `scripts/`.
 
 If the check fails, fix the finding or unstage the file — do not bypass with `--no-verify` unless the user explicitly requests it.

@@ -4,6 +4,7 @@
 .DS_Store
 test_model_api_key.txt
 config/test.env
+config/local-hygiene.env
 config/smr.yaml
 dist/.test-keys-from-env.txt
 
