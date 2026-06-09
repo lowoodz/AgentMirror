@@ -28,9 +28,10 @@ vm_ssh_init() {
   fi
   VM_HOST="$SMR_WINDOWS_HOST"
   VM_USER="$SMR_WINDOWS_USER"
-  VM_SSH="${VM_USER}@${VM_HOST}"
+  # Use SSH Host alias only — User/IdentityFile come from ~/.ssh/config (user@host breaks Host matching).
+  VM_SSH="$VM_HOST"
   VM_BACKEND=ssh
-  VM_SSH_CTRL="${TMPDIR:-/tmp}/smr-vm-ctrl-${VM_USER}@${VM_HOST}"
+  VM_SSH_CTRL="${TMPDIR:-/tmp}/smr-vm-ctrl-${VM_HOST}"
   VM_SSH_MASTER_OPTS=(
     -o BatchMode=yes
     -o ConnectTimeout=20
@@ -61,8 +62,18 @@ vm_ssh_require() {
   [[ "${VM_SSH_CONNECTED:-}" == 1 ]] && return 0
   if ! ssh "${VM_SSH_MASTER_OPTS[@]}" "$VM_SSH" "echo ok" >/dev/null 2>&1; then
     vm_ssh_close
-    echo "ERROR: cannot SSH to $VM_SSH — start UTM guest and verify ~/.ssh/config Host ${VM_HOST}" >&2
+    echo "ERROR: cannot SSH to Host ${VM_HOST} (user ${VM_USER}) — start UTM guest and verify ~/.ssh/config" >&2
     exit 1
+  fi
+  local remote_user
+  remote_user="$(ssh "${VM_SSH_MUX_OPTS[@]}" "$VM_SSH" "cmd.exe /c echo %USERNAME%" 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ -n "$remote_user" && "$remote_user" != "$VM_USER" ]]; then
+    VM_USER="$remote_user"
+    if [[ "${SMR_GUEST_STAGING:-}" == *windows-user* || -z "${SMR_GUEST_STAGING:-}" ]]; then
+      GUEST_STAGING="C:/Users/${VM_USER}/smr-staging"
+      SMR_GUEST_STAGING="$GUEST_STAGING"
+    fi
+    export VM_USER GUEST_STAGING SMR_GUEST_STAGING
   fi
   VM_SSH_CONNECTED=1
   vm_ssh_mkdir "$GUEST_STAGING"
