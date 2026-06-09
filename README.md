@@ -214,7 +214,7 @@ Redact sensitive data before it reaches the model, so secrets (private data) are
 - **Content rules** — full-text or fragment match for secrets, phrases, extensionless sensitive strings
 - **Reversible tokens** — with `pipeline.dlp_reversible: true` (default), secrets are replaced by session tokens (`[[smr:…]]`) before they reach the model. **Only tool-call / tool-result fields are restored** on the response path; ordinary assistant text is not auto-restored. Per-session vault is capped at 4096 unique secrets (overflow falls back to irreversible redaction).
 - **File rules** — disk-backed index (Bloom + SQLite + byte verify) for large corpora; incremental rebuild on file changes
-- **SessionGuard** — when a tool mentions a protected file, redaction continues for the next *N* requests (`trigger_window`)
+- **SessionGuard** — when a tool mentions a protected file, redaction continues for the next *N* requests (`trigger_window`). Supports absolute paths, shell `cd <dir> && … "relative"`, and JSON `cwd`/`path` patterns common in agents
 - Built-in credential presets (`sk-`, `AKIA`, `ghp_`, …) optional
 
 ### Operation safety

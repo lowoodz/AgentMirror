@@ -212,7 +212,7 @@ OpenClaw 经 LLM-SafeRoute 发出的请求与 IDE、SDK 一样，都会走相同
 - **内容规则** — 全文/片段匹配密钥、短语及无后缀敏感串
 - **可逆脱敏** — `pipeline.dlp_reversible: true`（默认）时，敏感内容在上游模型侧替换为会话 token（`[[smr:…]]`）。**仅 tool-call / tool-result 字段**在响应路径还原；普通 assistant 文本不会自动还原。每 session vault 最多 4096 条唯一 secret，超出后回退为不可逆脱敏。
 - **文件规则** — 大语料磁盘索引（Bloom + SQLite + 字节校验），变更增量重建
-- **SessionGuard** — tool 提及受保护文件后，后续 *N* 次请求持续脱敏（`trigger_window`）
+- **SessionGuard** — tool 提及受保护文件后，后续 *N* 次请求持续脱敏（`trigger_window`）。支持绝对路径、`exec` 中 `cd <dir> && … "相对路径"`、以及 JSON 的 `cwd`/`path` 等常见 Agent 写法
 - 可选内置凭证前缀模板（`sk-`、`AKIA`、`ghp_` 等）
 
 ### 操作安全

@@ -27,6 +27,7 @@ struct StatusResponse {
     provider_url: String,
     models: Vec<PublicModelInfo>,
     file_index_ready: bool,
+    file_index_rebuilding: bool,
     save_traffic_bodies: bool,
     traffic_request_capture: String,
 }
@@ -105,6 +106,7 @@ async fn api_status(State(s): State<HttpState>) -> Json<StatusResponse> {
         provider_url,
         models,
         file_index_ready: snap.dlp.is_file_index_ready(),
+        file_index_rebuilding: snap.dlp.is_file_index_rebuilding(),
         save_traffic_bodies: cfg.logging.save_traffic_bodies,
         traffic_request_capture: match cfg.logging.traffic_request_capture {
             TrafficRequestCapture::BeforeDlp => "before_dlp",

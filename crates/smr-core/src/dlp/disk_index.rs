@@ -143,16 +143,18 @@ impl FileIndexManager {
             if !alive.load(Ordering::Acquire) {
                 return;
             }
-            {
-                let guard = inner.write();
-                guard.ready.store(false, Ordering::Release);
-                guard.rebuilding.store(true, Ordering::Release);
-            }
             let build_result = build_all_rules(&index_root, &rules_vec);
             if !alive.load(Ordering::Acquire) {
                 return;
             }
             if let Ok(state) = build_result {
+                let mut guard = inner.write();
+                guard.rules = state.rules;
+                guard.snapshots = state.snapshots;
+                guard.rebuilding.store(false, Ordering::Release);
+                guard.ready.store(true, Ordering::Release);
+            } else if let Ok(state) = hydrate_existing_state(&index_root, &rules_vec) {
+                tracing::warn!("file index build failed on startup; loaded previous on-disk generation");
                 let mut guard = inner.write();
                 guard.rules = state.rules;
                 guard.snapshots = state.snapshots;
@@ -171,23 +173,80 @@ impl FileIndexManager {
         self.inner.read().ready.load(Ordering::Acquire)
     }
 
-    pub fn rules(&self) -> Vec<IndexedRule> {
-        self.inner.read().rules.clone()
+    pub fn is_rebuilding(&self) -> bool {
+        self.inner.read().rebuilding.load(Ordering::Acquire)
     }
 
-    pub fn rebuild_sync(&self, rules: &[FileRule]) -> Result<()> {
-        {
-            let guard = self.inner.write();
+    fn mark_rebuilding(&self) {
+        let mut guard = self.inner.write();
+        guard.rebuilding.store(true, Ordering::Release);
+        if guard.snapshots.is_empty() {
             guard.ready.store(false, Ordering::Release);
-            guard.rebuilding.store(true, Ordering::Release);
         }
-        let state = build_all_rules(&self.index_root, rules)?;
+    }
+
+    fn apply_built_state(&self, state: BuiltState) {
         let mut guard = self.inner.write();
         guard.rules = state.rules;
         guard.snapshots = state.snapshots;
         guard.rebuilding.store(false, Ordering::Release);
         guard.ready.store(true, Ordering::Release);
-        Ok(())
+    }
+
+    fn finish_rebuild_failed(&self) {
+        let mut guard = self.inner.write();
+        guard.rebuilding.store(false, Ordering::Release);
+        if !guard.snapshots.is_empty() {
+            guard.ready.store(true, Ordering::Release);
+        }
+    }
+
+    fn mark_rebuilding_inner(inner: &Arc<RwLock<IndexState>>) {
+        let mut guard = inner.write();
+        guard.rebuilding.store(true, Ordering::Release);
+        if guard.snapshots.is_empty() {
+            guard.ready.store(false, Ordering::Release);
+        }
+    }
+
+    fn apply_built_state_inner(inner: &Arc<RwLock<IndexState>>, state: BuiltState) {
+        let mut guard = inner.write();
+        guard.rules = state.rules;
+        guard.snapshots = state.snapshots;
+        guard.rebuilding.store(false, Ordering::Release);
+        guard.ready.store(true, Ordering::Release);
+    }
+
+    fn finish_rebuild_failed_inner(inner: &Arc<RwLock<IndexState>>) {
+        let mut guard = inner.write();
+        guard.rebuilding.store(false, Ordering::Release);
+        if !guard.snapshots.is_empty() {
+            guard.ready.store(true, Ordering::Release);
+        }
+    }
+
+    pub fn rules(&self) -> Vec<IndexedRule> {
+        self.inner.read().rules.clone()
+    }
+
+    pub fn rebuild_sync(&self, rules: &[FileRule]) -> Result<()> {
+        self.mark_rebuilding();
+        match build_all_rules(&self.index_root, rules) {
+            Ok(state) => {
+                self.apply_built_state(state);
+                Ok(())
+            }
+            Err(err) => {
+                if let Ok(state) = hydrate_existing_state(&self.index_root, rules) {
+                    tracing::warn!(error = %err, "file index rebuild failed; kept previous generation");
+                    self.apply_built_state(state);
+                    Ok(())
+                } else {
+                    self.finish_rebuild_failed();
+                    Err(err)
+                }
+            }
+        }
     }
 
     pub fn scan_and_sanitize(
@@ -304,23 +363,21 @@ impl FileIndexManager {
                 if inner.read().rebuilding.load(Ordering::Acquire) {
                     continue;
                 }
-                {
-                    let guard = inner.write();
-                    guard.ready.store(false, Ordering::Release);
-                    guard.rebuilding.store(true, Ordering::Release);
+                if !alive.load(Ordering::Acquire) {
+                    break;
                 }
+                Self::mark_rebuilding_inner(&inner);
                 let build_result = build_all_rules(&index_root, &rules_owned);
                 if !alive.load(Ordering::Acquire) {
                     break;
                 }
                 if let Ok(state) = build_result {
-                    let mut guard = inner.write();
-                    guard.rules = state.rules;
-                    guard.snapshots = state.snapshots;
-                    guard.rebuilding.store(false, Ordering::Release);
-                    guard.ready.store(true, Ordering::Release);
+                    Self::apply_built_state_inner(&inner, state);
+                } else if let Ok(state) = hydrate_existing_state(&index_root, &rules_owned) {
+                    tracing::warn!("file index watcher rebuild failed; kept previous generation");
+                    Self::apply_built_state_inner(&inner, state);
                 } else {
-                    inner.write().rebuilding.store(false, Ordering::Release);
+                    Self::finish_rebuild_failed_inner(&inner);
                 }
             }
         });
@@ -345,6 +402,34 @@ fn build_all_rules(index_root: &Path, rules: &[FileRule]) -> Result<BuiltState> 
         });
         let snapshot = build_rule_index(index_root, rule)?;
         snapshots.insert(rule.id.clone(), Arc::new(snapshot));
+    }
+    Ok(BuiltState {
+        rules: indexed_rules,
+        snapshots,
+    })
+}
+
+/// Load the last successful on-disk generation without rebuilding (fallback after failed rebuild).
+fn hydrate_existing_state(index_root: &Path, rules: &[FileRule]) -> Result<BuiltState> {
+    let _lock = index_build_lock();
+    let mut indexed_rules = Vec::new();
+    let mut snapshots = std::collections::HashMap::new();
+    for rule in rules.iter().filter(|r| r.enabled) {
+        let normalized_path = rule.path.to_string_lossy().replace('\\', "/");
+        let rule_base = index_root.join(sanitize_id(&rule.id));
+        let Some(prev_gen) = load_previous_generation(&rule_base)? else {
+            continue;
+        };
+        let file_paths = collect_files(rule)?;
+        let snapshot = load_rule_snapshot(rule, &rule_base, &prev_gen, &file_paths)?;
+        indexed_rules.push(IndexedRule {
+            rule: rule.clone(),
+            normalized_path,
+        });
+        snapshots.insert(rule.id.clone(), Arc::new(snapshot));
+    }
+    if snapshots.is_empty() {
+        anyhow::bail!("no on-disk file index generation available");
     }
     Ok(BuiltState {
         rules: indexed_rules,

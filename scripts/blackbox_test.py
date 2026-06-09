@@ -554,6 +554,7 @@ def run_all_scenarios(report: Report, secrets_dir: Path) -> None:
     scenario_preset_credentials(report)
     warm_file_index(BASE)
     scenario_file_session_guard(report, secrets_dir)
+    scenario_exec_cd_relative_file_dlp(report, secrets_dir)
     scenario_file_scoped_sibling_not_scrubbed(report, secrets_dir)
     scenario_directory_only_no_file_dlp(report, secrets_dir)
     scenario_most_specific_child_file_scoped(report, secrets_dir)
@@ -783,6 +784,52 @@ def scenario_file_session_guard(report: Report, secrets_dir: Path) -> None:
         ok,
         f"trigger_status={code1}, dlp={dlp}, leaked={leaked}",
         ms1 + ms2,
+    )
+
+
+def scenario_exec_cd_relative_file_dlp(report: Report, secrets_dir: Path) -> None:
+    """exec with `cd <protected-dir> && … relative-file` must trigger file DLP on tool output."""
+    story = "Agent：文件路径 DLP"
+    dir_str = str(secrets_dir).replace("\\", "/")
+    session = "blackbox-exec-cd-relative"
+    command = f'cd "{dir_str}" && cat "project.txt"'
+    request = {
+        "model": "glm-4-flash",
+        "messages": [
+            {"role": "user", "content": "Read via shell"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "exec",
+                            "arguments": json.dumps({"command": command}),
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": FILE_SECRET},
+        ],
+        "max_tokens": 8,
+    }
+    code, text, ms = http(
+        "POST",
+        f"{BASE}/v1/chat/completions",
+        body=request,
+        headers={"X-SMR-Session-Id": session},
+    )
+    audit = latest_audit(BASE)
+    dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
+    ok = code == 200 and dlp > 0
+    report.add(
+        story,
+        "exec_cd_relative_file_dlp",
+        ok,
+        f"status={code}, dlp={dlp}",
+        ms,
     )
 
 

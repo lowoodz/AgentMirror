@@ -4,6 +4,7 @@ mod content;
 mod disk_index;
 mod doc_extract;
 mod file;
+mod shell_paths;
 mod fragment;
 mod normalize;
 mod rg;
@@ -68,6 +69,10 @@ impl DlpEngine {
 
     pub fn is_file_index_ready(&self) -> bool {
         self.file.is_index_ready()
+    }
+
+    pub fn is_file_index_rebuilding(&self) -> bool {
+        self.file.is_index_rebuilding()
     }
 
     /// Register file-path session triggers from tool calls (call before ops may rewrite arguments).
@@ -388,6 +393,89 @@ mod file_session_tests {
         assert!(
             dlp.sessions().active_snapshot(session).is_none(),
             "directory-only mention must not activate file DLP"
+        );
+    }
+
+    #[test]
+    fn exec_cd_relative_path_triggers_and_redacts_tool_result() {
+        let tmp = TempDir::new().unwrap();
+        let secret = "P".repeat(65);
+        let zone = tmp.path().join("protected-zone");
+        fs::create_dir_all(&zone).unwrap();
+        let probe = zone.join("thesis.txt");
+        fs::write(&probe, &secret).unwrap();
+
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            pipeline: PipelineConfig {
+                dlp_enabled: true,
+                ..Default::default()
+            },
+            logging: LoggingConfig::default(),
+            fallback_groups: Default::default(),
+            content_rules: vec![],
+            file_rules: vec![FileRule {
+                id: "zone".into(),
+                path: zone.clone(),
+                enabled: true,
+                recursive: true,
+                trigger_window: 15,
+                match_mode: MatchMode::Full,
+                min_fragment_len: None,
+                min_fragment_ratio: None,
+                formats: vec!["txt".into()],
+                index: Default::default(),
+            }],
+            operation_rules: vec![],
+            path_protection_rules: vec![],
+        };
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        dlp.reload(&config).unwrap();
+        for _ in 0..300 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(dlp.is_file_index_ready());
+
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+        let session = "exec-cd-session";
+        let command = format!(r#"cd "{zone_str}" && cat "thesis.txt""#);
+        let request = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "read thesis"},
+                {"role": "assistant", "content": null, "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": serde_json::json!({ "command": command }).to_string()
+                    }
+                }]},
+                {"role": "tool", "tool_call_id": "c1", "content": secret.clone()}
+            ]
+        });
+
+        let extracted = extract_texts(&request).unwrap();
+        let (repl, count) = dlp.process_request(session, &extracted, &request, false)
+            .unwrap();
+
+        assert!(count > 0, "expected file DLP replacements on tool result");
+        let tool_sanitized = repl
+            .iter()
+            .find(|(item, _)| item.text == secret)
+            .map(|(_, text)| text.as_str())
+            .or_else(|| {
+                repl.iter()
+                    .find(|(item, text)| *text != item.text)
+                    .map(|(_, text)| text.as_str())
+            })
+            .unwrap_or("");
+        assert!(
+            !tool_sanitized.contains(&secret),
+            "tool result should be redacted: {tool_sanitized}"
         );
     }
 }

@@ -6,6 +6,7 @@ use anyhow::Result;
 use crate::config::FileRule;
 use crate::dlp::disk_index::{FileIndexManager, filter_most_specific_indexed, IndexedRule};
 use crate::dlp::session::ActiveFileContent;
+use crate::dlp::shell_paths::{extract_json_path_fields, extract_shell_resolved_paths};
 
 pub struct FileDlp {
     index: FileIndexManager,
@@ -24,6 +25,10 @@ impl FileDlp {
 
     pub fn is_index_ready(&self) -> bool {
         self.index.is_ready()
+    }
+
+    pub fn is_index_rebuilding(&self) -> bool {
+        self.index.is_rebuilding()
     }
 
     pub fn check_path_triggers_in_tool_text(
@@ -96,7 +101,7 @@ pub fn extract_triggered_files(tool_text: &str, rule: &FileRule) -> Vec<String> 
     }
 
     let mut out = HashSet::new();
-    for candidate in extract_absolute_path_candidates(tool_text) {
+    for candidate in extract_all_path_candidates(tool_text, &rule_base) {
         if !path_under_rule(&candidate, &rule_base) {
             continue;
         }
@@ -106,6 +111,26 @@ pub fn extract_triggered_files(tool_text: &str, rule: &FileRule) -> Vec<String> 
         out.insert(normalize_existing_path(&candidate));
     }
     out.into_iter().collect()
+}
+
+fn extract_all_path_candidates(tool_text: &str, rule_base: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    out.extend(extract_absolute_path_candidates(tool_text));
+    out.extend(extract_shell_resolved_paths(tool_text));
+    out.extend(extract_json_path_fields(tool_text, rule_base));
+    out.sort();
+    out.dedup();
+    out
+}
+
+pub(crate) fn expand_tilde_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}/{rest}");
+        }
+    }
+    trimmed.to_string()
 }
 
 fn extract_absolute_path_candidates(tool_text: &str) -> Vec<String> {
@@ -263,11 +288,11 @@ pub fn path_basename(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn normalize_path_str(path: &str) -> String {
+pub(crate) fn normalize_path_str(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-fn normalize_existing_path(path: &str) -> String {
+pub(crate) fn normalize_existing_path(path: &str) -> String {
     canonicalize_if_exists(&trim_trailing_path_escapes(path))
 }
 
@@ -304,6 +329,40 @@ mod tests {
     use crate::dlp::disk_index::{filter_most_specific_rules, IndexedRule};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn extracts_doc_via_cd_and_relative_path_in_exec() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join("protected-zone");
+        fs::create_dir_all(&zone).unwrap();
+        let doc = zone.join("thesis.doc");
+        fs::write(&doc, b"legacy doc").unwrap();
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "docs".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 15,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["doc".into(), "pdf".into()],
+            index: FileIndexOptions::default(),
+        };
+        let command = format!(
+            r#"cd "{zone_str}" && textutil -convert txt -output /tmp/out.txt "thesis.doc" 2>&1 && cat /tmp/out.txt | head -500"#
+        );
+        let tool = serde_json::json!({ "command": command }).to_string();
+        let files = extract_triggered_files(&tool, &rule);
+        assert_eq!(files.len(), 1, "files={files:?}");
+        let expected = fs::canonicalize(&doc)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(paths_equivalent(&files[0], &expected), "got {}", files[0]);
+    }
 
     #[test]
     fn extracts_doc_path_from_exec_command() {

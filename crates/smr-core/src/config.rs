@@ -220,7 +220,7 @@ pub enum ContentCategory {
 }
 
 /// Tunables for disk-backed file index (large corpora, e.g. 10GB+).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct FileIndexOptions {
     #[serde(default = "default_index_chunk_size")]
     pub chunk_size: usize,
@@ -319,7 +319,7 @@ fn default_scan_charset_skip_threshold() -> f64 {
     0.5
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct FileRule {
     pub id: String,
     pub path: PathBuf,

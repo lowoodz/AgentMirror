@@ -53,6 +53,25 @@ impl AppEngines {
             config,
         })
     }
+
+    pub fn from_existing_dlp(config: AppConfig, dlp: Arc<DlpEngine>) -> Result<Self> {
+        let config_arc = Arc::new(config.clone());
+        let ops_enabled = config.pipeline.ops_active();
+        Ok(Self {
+            dlp,
+            ops: Arc::new(if ops_enabled {
+                OperationSecurity::new(
+                    &config.operation_rules,
+                    &config.path_protection_rules,
+                    config.pipeline.operation_security_mode,
+                )?
+            } else {
+                OperationSecurity::new(&[], &[], config.pipeline.operation_security_mode)?
+            }),
+            router: Arc::new(Router::new(config_arc)),
+            config,
+        })
+    }
 }
 
 pub struct SharedApp {
@@ -97,11 +116,19 @@ impl SharedApp {
         let inner = self.inner.read();
         let sessions = inner.dlp.sessions().clone();
         let vault = inner.dlp.vault().clone();
+        let file_rules_unchanged = inner.config.file_rules == config.file_rules;
+        let reused_dlp = if file_rules_unchanged {
+            Some(inner.dlp.clone())
+        } else {
+            None
+        };
         drop(inner);
-        let engines =
-            AppEngines::from_config_with_sessions_and_vault(config.clone(), sessions, vault)?;
-        // FileDlp::new already kicks off an async index build for `config.file_rules`.
-        // Avoid rebuild_sync here — it blocked PUT /api/config for minutes on large corpora.
+
+        let engines = if let Some(dlp) = reused_dlp {
+            AppEngines::from_existing_dlp(config.clone(), dlp)?
+        } else {
+            AppEngines::from_config_with_sessions_and_vault(config.clone(), sessions, vault)?
+        };
         *self.inner.write() = engines;
         Ok(())
     }
