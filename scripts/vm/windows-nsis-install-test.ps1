@@ -140,7 +140,7 @@ if (-not $userInfo) {
 }
 Log "Interactive user: $($userInfo.Name) ($($userInfo.Home))"
 
-Get-Process smr, SafeRoute -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process smr, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
 $Setup = Get-ChildItem $StageDir -Filter "*-setup.exe" -ErrorAction SilentlyContinue |
@@ -259,7 +259,7 @@ if (-not $healthOk) {
 }
 Log "Health OK"
 
-Get-Process SafeRoute -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process smr, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
 if (Test-Path $UninstallPs1) {

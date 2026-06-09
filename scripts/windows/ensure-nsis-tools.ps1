@@ -12,6 +12,57 @@ function Write-NsisLog($msg) {
     }
 }
 
+function Get-NsisTreeFromRoot([string]$Root) {
+    if (-not $Root -or -not (Test-Path $Root)) { return $null }
+    $direct = Join-Path $Root "NSIS"
+    if (Test-Path (Join-Path $direct "makensis.exe")) {
+        return $direct
+    }
+    $makensis = Get-ChildItem $Root -Recurse -Filter "makensis.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($makensis) {
+        if ($makensis.Directory.Name -ieq "Bin") {
+            return $makensis.Directory.Parent.FullName
+        }
+        return $makensis.Directory.FullName
+    }
+    return $null
+}
+
+function Copy-NsisTree([string]$SourceRoot, [string]$DestRoot) {
+    $src = Get-NsisTreeFromRoot $SourceRoot
+    if (-not $src) { return $false }
+    New-Item -ItemType Directory -Force -Path $DestRoot | Out-Null
+    $destNsis = Join-Path $DestRoot "NSIS"
+    if (Test-Path $destNsis) { Remove-Item $destNsis -Recurse -Force -ErrorAction SilentlyContinue }
+    Copy-Item -LiteralPath $src -Destination $destNsis -Recurse -Force
+    Write-NsisLog "Seeded NSIS cache: $src -> $destNsis"
+    return $true
+}
+
+function Seed-TauriNsisCaches {
+    $systemTauri = "C:\WINDOWS\system32\config\systemprofile\AppData\Local\tauri"
+    $userTauri = "$env:LOCALAPPDATA\tauri"
+    $sources = @($userTauri, $systemTauri)
+
+    if (-not (Get-NsisTreeFromRoot $userTauri)) {
+        foreach ($src in $sources) {
+            if ($src -eq $userTauri) { continue }
+            if (Copy-NsisTree $src $userTauri) { break }
+        }
+    }
+
+    if ($BuildRoot) {
+        $localTools = Join-Path $BuildRoot "target\.tauri"
+        if (-not (Get-NsisTreeFromRoot $localTools)) {
+            foreach ($src in @($userTauri, $systemTauri)) {
+                if (Copy-NsisTree $src $localTools) { break }
+            }
+        }
+    }
+}
+
+Seed-TauriNsisCaches
+
 $searchRoots = @()
 if ($BuildRoot) {
     $searchRoots += Join-Path $BuildRoot "target\.tauri"

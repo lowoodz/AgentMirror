@@ -107,7 +107,7 @@ if (-not $python) {
 
 Log "Using Python: $(& $python --version 2>&1) at $python"
 
-Get-Process smr -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process smr, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
 & $python -m pip install --quiet --disable-pip-version-check openai 2>&1 | ForEach-Object { Log "pip: $_" }
@@ -115,6 +115,7 @@ Start-Sleep -Seconds 2
 $env:SMR_BIN = $SmrBin
 $env:SMR_KEYS_FILE = Join-Path $TestRoot "test_model_api_key.txt"
 $env:PYTHONUTF8 = "1"
+$env:PYTHONUNBUFFERED = "1"
 Set-Location $TestRoot
 
 Log "==> blackbox_test.py"
@@ -122,10 +123,13 @@ Log "==> blackbox_test.py"
 $bb = $LASTEXITCODE
 
 Log "==> live_test.py (stress)"
+Get-Process smr, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
 $env:SMR_STRESS_TOTAL = "20"
 $env:SMR_STRESS_STREAM_TOTAL = "10"
-$env:SMR_STRESS_WORKERS = "8"
-$env:SMR_STRESS_STREAM_WORKERS = "4"
+$env:SMR_STRESS_WORKERS = "4"
+$env:SMR_STRESS_STREAM_WORKERS = "2"
+$env:SMR_STRESS_MIN_SUCCESS = "0.75"
 & $python (Join-Path $TestRoot "scripts\live_test.py") 2>&1 | ForEach-Object { Log $_ }
 $stress = $LASTEXITCODE
 

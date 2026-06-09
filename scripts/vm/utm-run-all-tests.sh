@@ -10,6 +10,15 @@ source "${ROOT}/scripts/vm/vm-ssh.sh"
 
 vm_ssh_require
 
+stop_guest_smr() {
+  echo "==> Stop guest SMR / free :8080"
+  bash "${ROOT}/scripts/vm/stop-guest-smr.sh" || {
+    echo "WARNING: stop-guest-smr failed; continuing anyway" >&2
+  }
+}
+
+stop_guest_smr
+
 echo "========== Phase 1: Functional install test ($VM_SSH) =========="
 FUNC_OK=0
 if bash "${ROOT}/scripts/vm/utm-run-test.sh"; then
@@ -17,6 +26,8 @@ if bash "${ROOT}/scripts/vm/utm-run-test.sh"; then
 else
   echo "Functional test did not fully pass; continuing with blackbox/stress..." >&2
 fi
+
+stop_guest_smr
 
 echo ""
 echo "========== Phase 1b: NSIS install/uninstall smoke =========="
@@ -31,6 +42,8 @@ if compgen -G "${ROOT}/dist/SafeRoute_*_x64-setup.exe" > /dev/null || compgen -G
 else
   echo "Skip NSIS test (no *-setup.exe in dist/)" >&2
 fi
+
+stop_guest_smr
 
 echo ""
 echo "========== Phase 2–3: Blackbox + stress =========="

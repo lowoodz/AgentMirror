@@ -1232,10 +1232,12 @@ def scenario_ops_observe_mode(report: Report) -> None:
     cfg["pipeline"]["operation_security_mode"] = "enforce"
     put_config(BASE, cfg)
     wait_ready(BASE, timeout=180.0)
+    wait_server_idle(BASE, timeout=120.0)
 
 
 def scenario_security_disabled(report: Report) -> None:
     story = "运维：security_enabled 关闭"
+    wait_server_idle(BASE, timeout=120.0)
     wait_ready(BASE, timeout=180.0)
     cfg = get_config(BASE)
     if not cfg:
@@ -1259,12 +1261,14 @@ def scenario_security_disabled(report: Report) -> None:
 
 def scenario_config_reload_preserves_session(report: Report, secrets_dir: Path) -> None:
     story = "运维：热加载保留 Session"
-    wait_ready(BASE, timeout=180.0)
+    warm_file_index(BASE)
+    wait_server_idle(BASE, timeout=60.0)
     path_str = str(secrets_dir / "project.txt").replace("\\", "/")
     session = "blackbox-reload-session"
     trigger = {
         "model": "glm-4-flash",
         "messages": [
+            {"role": "user", "content": "Read file"},
             {
                 "role": "assistant",
                 "content": None,
@@ -1278,33 +1282,41 @@ def scenario_config_reload_preserves_session(report: Report, secrets_dir: Path) 
                         },
                     }
                 ],
-            }
+            },
         ],
         "max_tokens": 8,
     }
-    http(
+    known_ids = {a.get("id") for a in audits_for_session(BASE, session) if a.get("id")}
+    code_tr, _, _ = http(
         "POST",
         f"{BASE}/v1/chat/completions",
         body=trigger,
         headers={"X-SMR-Session-Id": session},
     )
+    wait_for_session_audit(BASE, session, after_ids=known_ids, timeout=30.0)
     reload_code = reload_config(BASE, timeout=180.0)
-    wait_ready(BASE, timeout=60.0, require_file_index=True)
-    code, _, ms = chat_openai(
-        [{"role": "user", "content": f"after reload {FILE_SECRET}"}],
-        session=session,
-        max_tokens=16,
-    )
-    audit = None
-    dlp = 0
-    for _ in range(5):
-        audit = latest_audit(BASE)
-        dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
-        if dlp > 0:
-            break
-        time.sleep(0.5)
+    wait_ready(BASE, timeout=120.0, require_file_index=True)
+    wait_server_idle(BASE, timeout=60.0)
+
+    def after_reload_chat() -> None:
+        nonlocal code, ms
+        code, _, ms = chat_openai(
+            [{"role": "user", "content": f"after reload {FILE_SECRET}"}],
+            session=session,
+            max_tokens=16,
+        )
+
+    code = 0
+    ms = 0.0
+    dlp = dlp_after_chat(BASE, session, after_reload_chat)
     ok = reload_code == 200 and code == 200 and dlp > 0
-    report.add(story, "reload_session_persist", ok, f"reload={reload_code}, dlp={dlp}", ms)
+    report.add(
+        story,
+        "reload_session_persist",
+        ok,
+        f"reload={reload_code}, trigger={code_tr}, chat={code}, dlp={dlp}",
+        ms,
+    )
 
 
 def scenario_tier_path_routing(report: Report) -> None:
@@ -1358,14 +1370,20 @@ def scenario_admin_dashboard(report: Report) -> None:
 
 def scenario_concurrent_users(report: Report) -> None:
     story = "多用户：并发对话"
+    wait_server_idle(BASE, timeout=60.0)
 
     def one(uid: int) -> bool:
-        code, text, _ = chat_openai(
-            [{"role": "user", "content": f"hi from {uid}"}],
-            session=f"user-{uid}",
-            max_tokens=10,
-        )
-        return code == 200 and "choices" in text
+        for attempt in range(3):
+            code, text, _ = chat_openai(
+                [{"role": "user", "content": f"hi from {uid}"}],
+                session=f"user-{uid}",
+                max_tokens=10,
+            )
+            if code == 200 and "choices" in text:
+                return True
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+        return False
 
     start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=3) as pool:

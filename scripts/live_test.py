@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_common import KEYS_FILE, parse_keys, start_smr, stop_smr, wait_ready, http
+from test_common import KEYS_FILE, parse_keys, start_smr, stop_smr, wait_ready, wait_server_idle, http
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("SMR_STRESS_PORT", "18081"))
@@ -190,6 +190,8 @@ def main() -> int:
     workers = int(os.environ.get("SMR_STRESS_WORKERS", "12"))
     stream_total = int(os.environ.get("SMR_STRESS_STREAM_TOTAL", "15"))
     stream_workers = int(os.environ.get("SMR_STRESS_STREAM_WORKERS", "5"))
+    min_success = float(os.environ.get("SMR_STRESS_MIN_SUCCESS", "0.9"))
+    stream_min_success = float(os.environ.get("SMR_STRESS_STREAM_MIN_SUCCESS", "0.85"))
     soak_sec = float(os.environ.get("SMR_STRESS_SOAK_SEC", "0"))  # 0 = skip
 
     try:
@@ -201,15 +203,16 @@ def main() -> int:
 
         print(f"==> Stress tests @ {BASE}")
         proc = start_smr(cfg_file)
-        time.sleep(1.0)
-        if not wait_ready(BASE, require_file_index=False):
+        time.sleep(2.0)
+        if not wait_ready(BASE, timeout=120.0, require_file_index=False):
             report.add("startup", False, "health timeout")
             print_report(report)
             return 1
+        wait_server_idle(BASE, timeout=60.0)
         report.add("startup", True, "ready")
 
         print(f"==> Non-streaming concurrent ({total} req, {workers} workers)")
-        run_pool(report, "concurrent_chat", total, workers, stream=False, min_success=0.9)
+        run_pool(report, "concurrent_chat", total, workers, stream=False, min_success=min_success)
 
         print(f"==> Streaming concurrent ({stream_total} req, {stream_workers} workers)")
         run_pool(
@@ -218,7 +221,7 @@ def main() -> int:
             stream_total,
             stream_workers,
             stream=True,
-            min_success=0.85,
+            min_success=stream_min_success,
         )
 
         if soak_sec > 0:

@@ -98,8 +98,10 @@ impl SharedApp {
         let sessions = inner.dlp.sessions().clone();
         let vault = inner.dlp.vault().clone();
         drop(inner);
-        let engines = AppEngines::from_config_with_sessions_and_vault(config.clone(), sessions, vault)?;
-        engines.dlp.reload(&config)?;
+        let engines =
+            AppEngines::from_config_with_sessions_and_vault(config.clone(), sessions, vault)?;
+        // FileDlp::new already kicks off an async index build for `config.file_rules`.
+        // Avoid rebuild_sync here — it blocked PUT /api/config for minutes on large corpora.
         *self.inner.write() = engines;
         Ok(())
     }

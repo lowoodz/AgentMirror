@@ -72,8 +72,19 @@ if (Test-Path $KeysPath) {
     Log "Keys file present"
 }
 
-# Stop prior smr
-Get-Process smr -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Stop prior listeners so we bind our own smr (not a leftover tray GUI).
+foreach ($name in @("smr", "SafeRoute", "smr-gui")) {
+    Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    }
+}
+Start-Sleep -Seconds 2
+$conn8080 = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue
+foreach ($c in $conn8080) {
+    if ($c.OwningProcess) {
+        Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+    }
+}
 Start-Sleep -Seconds 1
 
 function Write-Utf8NoBom($Path, $Value) {
@@ -111,6 +122,8 @@ if ($proc.HasExited) {
     Log "ERROR: smr exited early code=$($proc.ExitCode)"
     if (Test-Path $SmrErr) { Get-Content $SmrErr | ForEach-Object { Log "stderr: $_" } }
     if (Test-Path $SmrLog) { Get-Content $SmrLog | ForEach-Object { Log "stdout: $_" } }
+    Log "SUMMARY: 0/12 PASSED"
+    exit 1
 }
 
 function Wait-Ready {

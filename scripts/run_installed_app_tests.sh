@@ -143,8 +143,18 @@ mac_installed_app_test() {
 
 echo "Installed-app test run: $(date)" | tee "$SUMMARY"
 
+mac_pid=""
+win_pid=""
+mac_rc=0
+win_rc=0
+
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  run_step "macOS-installed-app" mac_installed_app_test
+  (
+    set +e
+    mac_installed_app_test 2>&1 | tee "${LOG_DIR}/${STAMP}-macOS-installed-app.log"
+    echo $? > "${LOG_DIR}/${STAMP}-macOS-installed-app.rc"
+  ) &
+  mac_pid=$!
 else
   echo ">>> SKIP macOS: not on Darwin" | tee -a "$SUMMARY"
 fi
@@ -154,12 +164,39 @@ source "${ROOT}/scripts/vm/vm-ssh.sh"
 vm_ssh_init
 if [[ "${SMR_SKIP_VM_TESTS:-0}" != "1" ]] && ssh "${VM_SSH_OPTS[@]}" "$VM_SSH" "echo ok" >/dev/null 2>&1; then
   if [[ -s "${ROOT}/dist/windows-desktop/SafeRoute.exe" ]]; then
-    run_step "windows-utm-installed-app" bash "${ROOT}/scripts/vm/utm-run-app-blackbox.sh"
+    (
+      set +e
+      bash "${ROOT}/scripts/vm/utm-run-app-blackbox.sh" 2>&1 | tee "${LOG_DIR}/${STAMP}-windows-utm-installed-app.log"
+      echo $? > "${LOG_DIR}/${STAMP}-windows-utm-installed-app.rc"
+    ) &
+    win_pid=$!
   else
     echo ">>> SKIP Windows app test: missing dist/windows-desktop/SafeRoute.exe" | tee -a "$SUMMARY"
   fi
 else
   echo ">>> SKIP Windows UTM app test (SSH ${VM_SSH:-$SMR_WINDOWS_USER@$SMR_WINDOWS_HOST} unavailable)" | tee -a "$SUMMARY"
+fi
+
+if [[ -n "$mac_pid" ]]; then
+  wait "$mac_pid" || mac_rc=$?
+  mac_rc=$(cat "${LOG_DIR}/${STAMP}-macOS-installed-app.rc" 2>/dev/null || echo "$mac_rc")
+  if [[ "$mac_rc" -eq 0 ]]; then
+    echo ">>> macOS-installed-app: PASSED" | tee -a "$SUMMARY"
+  else
+    echo ">>> macOS-installed-app: FAILED" | tee -a "$SUMMARY"
+    failures=$((failures + 1))
+  fi
+fi
+
+if [[ -n "$win_pid" ]]; then
+  wait "$win_pid" || win_rc=$?
+  win_rc=$(cat "${LOG_DIR}/${STAMP}-windows-utm-installed-app.rc" 2>/dev/null || echo "$win_rc")
+  if [[ "$win_rc" -eq 0 ]]; then
+    echo ">>> windows-utm-installed-app: PASSED" | tee -a "$SUMMARY"
+  else
+    echo ">>> windows-utm-installed-app: FAILED" | tee -a "$SUMMARY"
+    failures=$((failures + 1))
+  fi
 fi
 
 echo ""

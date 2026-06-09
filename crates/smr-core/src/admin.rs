@@ -188,8 +188,10 @@ async fn api_put_config(
     State(s): State<HttpState>,
     Json(config): Json<AppConfig>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    s.app
-        .save_config(&config)
+    let app = s.app.clone();
+    tokio::task::spawn_blocking(move || app.save_config(&config))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::OK)
 }
@@ -219,8 +221,10 @@ async fn api_audits(
 }
 
 async fn api_reload(State(s): State<HttpState>) -> Result<StatusCode, (StatusCode, String)> {
-    s.app
-        .reload()
+    let app = s.app.clone();
+    tokio::task::spawn_blocking(move || app.reload())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(StatusCode::OK)
 }

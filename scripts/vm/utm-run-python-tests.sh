@@ -30,7 +30,7 @@ vm_scp_to "$PY_PS1" "$PY_PS1_GUEST"
 echo "========== Blackbox + stress on guest =========="
 vm_ssh_bg "cmd.exe /c \"set SMR_GUEST_STAGING=${GUEST_STAGING}&& powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${GUEST_STAGING}/windows-run-python-tests.ps1\""
 
-DEADLINE=$((SECONDS + 2400))
+DEADLINE=$((SECONDS + 7200))
 while (( SECONDS < DEADLINE )); do
   sleep 30
   vm_scp_from "$PY_LOG" "${ROOT}/dist/windows-utm-python-test.log" 2>/dev/null || true

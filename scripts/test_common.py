@@ -253,7 +253,7 @@ def dump_yaml(obj: object, indent: int = 0) -> str:
     return _yaml_scalar(obj)
 
 
-def put_config(base: str, config: dict, *, timeout: float = 120.0) -> int:
+def put_config(base: str, config: dict, *, timeout: float = 300.0) -> int:
     attach_path = _attach_config_path()
     if attach_path:
         attach_timeout = max(timeout, 300.0)
@@ -265,26 +265,28 @@ def put_config(base: str, config: dict, *, timeout: float = 120.0) -> int:
             return 0
         return code
     code = 0
-    for attempt in range(5):
-        wait_server_idle(base, timeout=min(30.0, timeout / 4))
+    for attempt in range(8):
+        wait_server_idle(base, timeout=min(60.0, timeout / 5))
         code, _, _ = http("PUT", f"{base}/api/config", body=config, timeout=timeout)
         if code == 200:
-            return code
-        time.sleep(1.5 * (attempt + 1))
+            if wait_ready(base, timeout=min(timeout, 240.0)):
+                return code
+        time.sleep(2.0 * (attempt + 1))
     return code
 
 
 def reload_config(base: str, *, timeout: float = 180.0) -> int:
     attach = _attach_config_path() is not None
-    idle_timeout = 120.0 if attach else 30.0
+    idle_timeout = 120.0 if attach else 60.0
     http_timeout = max(timeout, 300.0) if attach else timeout
     code = 0
-    for attempt in range(8 if attach else 5):
+    for attempt in range(8 if attach else 6):
         wait_server_idle(base, timeout=min(idle_timeout, http_timeout / 4))
         code, _, _ = http("PUT", f"{base}/api/reload", timeout=http_timeout)
         if code == 200:
-            return code
-        time.sleep(1.5 * (attempt + 1))
+            if wait_ready(base, timeout=min(http_timeout, 240.0)):
+                return code
+        time.sleep(2.0 * (attempt + 1))
     return code
 
 
