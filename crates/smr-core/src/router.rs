@@ -504,6 +504,9 @@ fn should_drop_forward_header(name: &str) -> bool {
         || n == "accept-encoding"
         || n == "te"
         || n == "user-agent"
+        || n == "authorization"
+        || n == "x-api-key"
+        || n == "anthropic-version"
         || n.starts_with("x-smr-")
         || n.starts_with("x-stainless-")
         || n.starts_with("openai-")
@@ -617,7 +620,40 @@ mod tests {
             outgoing.get("content-type").and_then(|v| v.to_str().ok()),
             Some("application/json")
         );
-        assert!(outgoing.get("authorization").is_some());
+        assert_eq!(
+            outgoing
+                .get("authorization")
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer sk-test")
+        );
+    }
+
+    #[test]
+    fn drops_client_auth_before_anthropic_upstream_key() {
+        use crate::config::ModelEndpoint;
+
+        let mut incoming = HeaderMap::new();
+        incoming.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer openclaw-placeholder"),
+        );
+        incoming.insert("content-type", HeaderValue::from_static("application/json"));
+        let mut outgoing = HeaderMap::new();
+        let endpoint = ModelEndpoint {
+            id: "ds".into(),
+            base_url: "https://api.deepseek.com/anthropic".into(),
+            model: "deepseek-v4-flash".into(),
+            api_key: Some("sk-real-key".into()),
+            api_key_env: None,
+            timeout_secs: 30,
+            protocol: None,
+        };
+        copy_forward_headers(&incoming, &mut outgoing, &endpoint, ApiProtocol::Anthropic).unwrap();
+        assert_eq!(
+            outgoing.get("x-api-key").and_then(|v| v.to_str().ok()),
+            Some("sk-real-key")
+        );
+        assert!(outgoing.get("authorization").is_none());
     }
 
     #[test]
