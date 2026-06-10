@@ -122,8 +122,9 @@ impl Router {
     ) -> Result<RouteResult> {
         let mut last_error: Option<RouteAttempt> = None;
         let mut chain: Vec<String> = Vec::new();
+        let ordered = order_endpoints_for_client(group, opts.client_protocol);
 
-        for (idx, endpoint) in group.iter().enumerate() {
+        for (idx, endpoint) in ordered.iter().enumerate() {
             chain.push(endpoint.model.clone());
             match self.forward_once(endpoint, &req, opts.wants_stream).await {
                 Ok(attempt) if should_fallback_status(attempt.status) => {
@@ -131,6 +132,8 @@ impl Router {
                         model = %endpoint.model,
                         status = %attempt.status,
                         attempt = idx + 1,
+                        client = ?opts.client_protocol,
+                        upstream = ?endpoint.resolve_protocol(),
                         "fallback triggered (status)"
                     );
                     last_error = Some(attempt);
@@ -300,7 +303,28 @@ pub fn convert_response_body(
 }
 
 fn should_fallback_status(status: StatusCode) -> bool {
-    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504)
+    matches!(
+        status.as_u16(),
+        401 | 403 | 404 | 408 | 429 | 500 | 502 | 503 | 504
+    )
+}
+
+/// Prefer upstream endpoints whose native API matches the detected client protocol.
+fn order_endpoints_for_client(
+    group: &[ModelEndpoint],
+    client: ApiProtocol,
+) -> Vec<ModelEndpoint> {
+    let mut native = Vec::new();
+    let mut converted = Vec::new();
+    for ep in group {
+        if ep.resolve_protocol() == client {
+            native.push(ep.clone());
+        } else {
+            converted.push(ep.clone());
+        }
+    }
+    native.extend(converted);
+    native
 }
 
 fn is_malformed_success(status: &StatusCode, headers: &HeaderMap, body: &Bytes) -> bool {
@@ -626,5 +650,61 @@ mod tests {
             &out_headers,
             &decoded
         ));
+    }
+
+    #[test]
+    fn should_fallback_on_model_not_found() {
+        assert!(should_fallback_status(StatusCode::NOT_FOUND));
+        assert!(should_fallback_status(StatusCode::UNAUTHORIZED));
+        assert!(should_fallback_status(StatusCode::FORBIDDEN));
+        assert!(!should_fallback_status(StatusCode::OK));
+        assert!(should_fallback_status(StatusCode::SERVICE_UNAVAILABLE));
+    }
+
+    #[test]
+    fn orders_native_protocol_endpoints_first() {
+        use crate::config::ModelEndpoint;
+
+        let openai = ModelEndpoint {
+            id: "openai".into(),
+            base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-chat".into(),
+            api_key: None,
+            api_key_env: None,
+            timeout_secs: 30,
+            protocol: None,
+        };
+        let anthropic = ModelEndpoint {
+            id: "anthropic".into(),
+            base_url: "https://api.deepseek.com/anthropic".into(),
+            model: "deepseek-v4-flash".into(),
+            api_key: None,
+            api_key_env: None,
+            timeout_secs: 30,
+            protocol: None,
+        };
+        let group = vec![anthropic.clone(), openai.clone()];
+        let ordered = order_endpoints_for_client(&group, ApiProtocol::OpenAi);
+        assert_eq!(ordered[0].id, "openai");
+        assert_eq!(ordered[1].id, "anthropic");
+        let ordered = order_endpoints_for_client(&group, ApiProtocol::Anthropic);
+        assert_eq!(ordered[0].id, "anthropic");
+        assert_eq!(ordered[1].id, "openai");
+    }
+
+    #[test]
+    fn deepseek_anthropic_base_infers_protocol() {
+        use crate::config::ModelEndpoint;
+
+        let ep = ModelEndpoint {
+            id: "ds".into(),
+            base_url: "https://api.deepseek.com/anthropic".into(),
+            model: "deepseek-v4-flash".into(),
+            api_key: None,
+            api_key_env: None,
+            timeout_secs: 30,
+            protocol: None,
+        };
+        assert_eq!(ep.resolve_protocol(), ApiProtocol::Anthropic);
     }
 }

@@ -148,7 +148,8 @@ pub struct ModelEndpoint {
     pub api_key_env: Option<String>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
-    /// Optional explicit API protocol: `openai` or `anthropic`. When omitted, inferred from base_url.
+    /// Optional explicit API protocol: `openai` or `anthropic`. When omitted, inferred from
+    /// `base_url` (anthropic.com, `/anthropic` path suffix, etc.).
     #[serde(default)]
     pub protocol: Option<String>,
 }
@@ -180,10 +181,16 @@ impl ModelEndpoint {
         }
         let url = self.base_url.to_ascii_lowercase();
         if url.contains("anthropic.com") {
-            ApiProtocol::Anthropic
-        } else {
-            ApiProtocol::OpenAi
+            return ApiProtocol::Anthropic;
         }
+        // Vendor anthropic-compatible bases, e.g. https://api.deepseek.com/anthropic
+        if url.ends_with("/anthropic")
+            || url.contains("/anthropic/")
+            || url.contains("/anthropic/v1")
+        {
+            return ApiProtocol::Anthropic;
+        }
+        ApiProtocol::OpenAi
     }
 }
 

@@ -200,6 +200,171 @@ async fn malformed_json_triggers_fallback() {
     assert!(serde_json::from_slice::<serde_json::Value>(&extract_body_bytes(resp_body)).is_ok());
 }
 
+async fn spawn_not_found_upstream() -> String {
+    use axum::http::StatusCode;
+
+    async fn handler() -> StatusCode {
+        StatusCode::NOT_FOUND
+    }
+
+    let app = Router::new().route("/v1/chat/completions", post(handler));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.ok(); });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn upstream_404_triggers_fallback_to_next_model() {
+    let bad = spawn_not_found_upstream().await;
+    let good = spawn_mock_upstream(false).await;
+
+    let mut groups = HashMap::new();
+    groups.insert(
+        "high".to_string(),
+        vec![
+            ModelEndpoint {
+                id: "bad".into(),
+                base_url: bad,
+                model: "missing-model".into(),
+                api_key: Some("k".into()),
+                api_key_env: None,
+                timeout_secs: 5,
+                protocol: None,
+            },
+            ModelEndpoint {
+                id: "good".into(),
+                base_url: good,
+                model: "mock-model".into(),
+                api_key: Some("k".into()),
+                api_key_env: None,
+                timeout_secs: 10,
+                protocol: None,
+            },
+        ],
+    );
+
+    let mut config = test_config("http://127.0.0.1:9");
+    config.fallback_groups = groups;
+
+    let (_app, proxy) = make_app(config);
+
+    let body = serde_json::json!({
+        "model": "saferoute-high",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+
+    let (status, _, resp_body) = proxy
+        .handle_api_request(ProxyRequest {
+            session_id: "sess-404-fallback",
+            fallback_group: Some("high"),
+            method: Method::POST,
+            path: "/v1/chat/completions",
+            query: None,
+            headers,
+            body: Bytes::from(serde_json::to_vec(&body).unwrap()),
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        status.is_success(),
+        "expected fallback after 404, got {status}"
+    );
+    assert!(serde_json::from_slice::<serde_json::Value>(&extract_body_bytes(resp_body)).is_ok());
+}
+
+#[tokio::test]
+async fn openai_client_prefers_openai_upstream_in_mixed_group() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let anthropic_hits = Arc::new(AtomicUsize::new(0));
+    let anthropic_hits_capture = anthropic_hits.clone();
+    async fn anthropic_handler(hits: Arc<AtomicUsize>) -> Json<serde_json::Value> {
+        hits.fetch_add(1, Ordering::SeqCst);
+        Json(serde_json::json!({
+            "id": "msg_mock",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-mock",
+            "content": [{"type": "text", "text": "anthropic"}],
+            "stop_reason": "end_turn"
+        }))
+    }
+
+    let anthropic_app = Router::new().route(
+        "/v1/messages",
+        post({
+            let hits = anthropic_hits_capture.clone();
+            move || anthropic_handler(hits.clone())
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let anthropic_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, anthropic_app).await.ok(); });
+    let anthropic_base = format!("http://{anthropic_addr}/anthropic");
+
+    let openai = spawn_mock_upstream(false).await;
+
+    let mut groups = HashMap::new();
+    groups.insert(
+        "high".to_string(),
+        vec![
+            ModelEndpoint {
+                id: "anthropic-first".into(),
+                base_url: anthropic_base,
+                model: "claude-mock".into(),
+                api_key: Some("k".into()),
+                api_key_env: None,
+                timeout_secs: 10,
+                protocol: None,
+            },
+            ModelEndpoint {
+                id: "openai-second".into(),
+                base_url: openai,
+                model: "mock-model".into(),
+                api_key: Some("k".into()),
+                api_key_env: None,
+                timeout_secs: 10,
+                protocol: None,
+            },
+        ],
+    );
+
+    let mut config = test_config("http://127.0.0.1:9");
+    config.fallback_groups = groups;
+    let (_app, proxy) = make_app(config);
+
+    let body = serde_json::json!({
+        "model": "saferoute-high",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+
+    let (status, _, _) = proxy
+        .handle_api_request(ProxyRequest {
+            session_id: "sess-protocol-order",
+            fallback_group: Some("high"),
+            method: Method::POST,
+            path: "/v1/chat/completions",
+            query: None,
+            headers,
+            body: Bytes::from(serde_json::to_vec(&body).unwrap()),
+        })
+        .await
+        .unwrap();
+
+    assert!(status.is_success());
+    assert_eq!(
+        anthropic_hits.load(Ordering::SeqCst),
+        0,
+        "OpenAI client should hit OpenAI-native upstream first"
+    );
+}
+
 #[tokio::test]
 async fn file_session_dlp_via_proxy() {
     let tmp = tempfile::TempDir::new().unwrap();
