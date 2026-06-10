@@ -25,8 +25,8 @@ use crate::dlp::charset::{
 };
 use crate::dlp::doc_extract;
 use crate::dlp::file::{
-    basename_trigger_match, path_basename, path_trigger_match, paths_equivalent,
-    strip_verbatim_path_prefix,
+    basename_trigger_match, file_under_working_dir, path_basename, path_trigger_match,
+    paths_equivalent, strip_verbatim_path_prefix,
 };
 use crate::dlp::fragment::{file_fragment_meets_threshold, file_min_fragment_len};
 use crate::dlp::normalize::{normalize_with_map, Normalized};
@@ -348,6 +348,40 @@ impl FileIndexManager {
             }
         }
         out
+    }
+
+    /// Match indexed files under shell working dirs when their basename appears in tool args.
+    pub fn resolve_triggered_files_under_working_dirs(
+        &self,
+        rule_id: &str,
+        working_dirs: &[String],
+        tool_text: &str,
+        formats: &[String],
+    ) -> Vec<String> {
+        if working_dirs.is_empty() {
+            return Vec::new();
+        }
+        let guard = self.inner.read();
+        let Some(snapshot) = guard.snapshots.get(rule_id) else {
+            return Vec::new();
+        };
+        let mut out = HashSet::new();
+        for indexed in snapshot.indexed_paths.iter() {
+            if !matches_format(Path::new(indexed), formats) {
+                continue;
+            }
+            if !working_dirs
+                .iter()
+                .any(|dir| file_under_working_dir(indexed, dir))
+            {
+                continue;
+            }
+            let base = path_basename(indexed);
+            if basename_trigger_match(&base, tool_text) {
+                out.insert(indexed.clone());
+            }
+        }
+        out.into_iter().collect()
     }
 
     fn spawn_watcher(&self, rules: &[FileRule]) {

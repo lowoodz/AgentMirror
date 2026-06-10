@@ -8,6 +8,7 @@ use crate::dlp::disk_index::{FileIndexManager, filter_most_specific_indexed, Ind
 use crate::dlp::session::ActiveFileContent;
 use crate::dlp::shell_paths::{
     extract_json_path_fields, extract_parent_child_combinations, extract_shell_resolved_paths,
+    extract_shell_working_directories,
 };
 
 pub struct FileDlp {
@@ -42,14 +43,32 @@ impl FileDlp {
         let rules = self.index.rules();
         let mut pending: Vec<(FileRule, Vec<String>)> = Vec::new();
         for indexed in &rules {
+            // 1) Absolute / concrete file paths (quoted paths, shell-resolved, JSON fields, …).
             let candidates = extract_triggered_files(tool_text, &indexed.rule);
             let mut resolved = self
                 .index
                 .resolve_triggered_files(&indexed.rule.id, &candidates);
-            if resolved.is_empty() && indexed.rule.path.is_dir() {
-                resolved = self
-                    .index
-                    .resolve_triggered_files_by_basename(&indexed.rule.id, tool_text);
+            if indexed.rule.path.is_dir() {
+                // 2) Shell working dirs (cd/cwd/absolute dir under rule) + basename in tool args.
+                let work_dirs = extract_working_directories_for_rule(tool_text, &indexed.rule);
+                if !work_dirs.is_empty() {
+                    for path in self.index.resolve_triggered_files_under_working_dirs(
+                        &indexed.rule.id,
+                        &work_dirs,
+                        tool_text,
+                        &indexed.rule.formats,
+                    ) {
+                        if !resolved.iter().any(|p| paths_equivalent(p, &path)) {
+                            resolved.push(path);
+                        }
+                    }
+                }
+                // 3) Last resort: basename anywhere in tool text (no cd / no absolute file path).
+                if resolved.is_empty() {
+                    resolved = self
+                        .index
+                        .resolve_triggered_files_by_basename(&indexed.rule.id, tool_text);
+                }
             }
             if resolved.is_empty() {
                 continue;
@@ -103,6 +122,41 @@ pub fn path_trigger_match(normalized_path: &str, tool_text: &str) -> bool {
             || !is_path_token_char(tool_text.as_bytes()[after_pos]);
         before_ok && after_ok
     })
+}
+
+/// Shell `cd` targets and other directory paths under `rule.path` mentioned in tool args.
+pub fn extract_working_directories_for_rule(tool_text: &str, rule: &FileRule) -> Vec<String> {
+    let rule_base = resolve_rule_base(&normalize_path_str(&rule.path.to_string_lossy()));
+    let mut out = HashSet::new();
+
+    for dir in extract_shell_working_directories(tool_text) {
+        if path_under_rule(&dir, &rule_base) {
+            out.insert(normalize_existing_path(&dir));
+        }
+    }
+
+    for candidate in extract_absolute_path_candidates(tool_text) {
+        if !path_under_rule(&candidate, &rule_base) {
+            continue;
+        }
+        if Path::new(&candidate).extension().is_some() {
+            continue;
+        }
+        out.insert(normalize_existing_path(&candidate));
+    }
+
+    if path_trigger_match(&rule_base, tool_text) {
+        out.insert(normalize_existing_path(&rule_base));
+    }
+
+    out.into_iter().collect()
+}
+
+/// True when `file_path` is inside `working_dir` (or the same path).
+pub fn file_under_working_dir(file_path: &str, working_dir: &str) -> bool {
+    let file = normalize_trigger_path(file_path);
+    let dir = normalize_trigger_path(working_dir);
+    paths_equivalent(&file, &dir) || file.starts_with(&format!("{dir}/"))
 }
 
 /// Extract concrete file paths from tool text that fall under `rule.path`.
@@ -306,11 +360,11 @@ pub fn path_basename(path: &str) -> String {
 
 /// Match an indexed file basename mentioned in chat/tool text (case-insensitive).
 pub fn basename_trigger_match(basename: &str, text: &str) -> bool {
-    let base = basename.trim();
+    let base = basename.trim().to_ascii_lowercase();
     if base.len() < 10 {
         return false;
     }
-    text.to_ascii_lowercase().contains(base)
+    text.to_ascii_lowercase().contains(&base)
 }
 
 pub(crate) fn normalize_path_str(path: &str) -> String {
@@ -796,5 +850,123 @@ mod tests {
         let matched = filter_most_specific_rules(&rules, tool);
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].id, "parent");
+    }
+
+    #[test]
+    fn working_directories_from_cd_in_openclaw_exec() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join("Table-NLP");
+        std::fs::create_dir_all(&zone).unwrap();
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "table-nlp".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 15,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["pdf".into()],
+            index: FileIndexOptions::default(),
+        };
+        let pdf_name =
+            "Aibaba, Question Directed Graph Attention Network for Numerical Reasoning over Text.pdf";
+        let command = format!(
+            r#"cd "{zone_str}" && python3 -c "import subprocess; subprocess.run(['pdftotext', '-layout', '{pdf_name}', '-'])"#
+        );
+        let tool = serde_json::json!({ "command": command }).to_string();
+        let dirs = extract_working_directories_for_rule(&tool, &rule);
+        assert!(
+            dirs.iter()
+                .any(|d| paths_equivalent(d, &zone_str) || d.contains("Table-NLP")),
+            "dirs={dirs:?}"
+        );
+    }
+
+    #[test]
+    fn absolute_path_triggers_without_cd_or_basename_working_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join("Table-NLP");
+        std::fs::create_dir_all(&zone).unwrap();
+        let pdf_name =
+            "Aibaba, Question Directed Graph Attention Network for Numerical Reasoning over Text.pdf";
+        let pdf = zone.join(pdf_name);
+        std::fs::write(&pdf, b"%PDF-1.4 stub").unwrap();
+        let pdf_str = pdf.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "table-nlp".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 15,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["pdf".into()],
+            index: FileIndexOptions::default(),
+        };
+        let tool = format!(r#"{{"command":"pdftotext \"{pdf_str}\" - 2>&1 | head -300"}}"#);
+        let files = extract_triggered_files(&tool, &rule);
+        assert_eq!(files.len(), 1, "absolute path should trigger directly, files={files:?}");
+        let expected = std::fs::canonicalize(&pdf)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert!(
+            paths_equivalent(&files[0], &expected),
+            "got {}",
+            files[0]
+        );
+    }
+
+    #[test]
+    fn activates_pdf_when_cd_parent_and_basename_in_python_exec() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join("Table-NLP");
+        std::fs::create_dir_all(&zone).unwrap();
+        let pdf_name =
+            "Aibaba, Question Directed Graph Attention Network for Numerical Reasoning over Text.pdf";
+        let pdf = zone.join(pdf_name);
+        std::fs::write(&pdf, format!("Numerical reasoning over texts, such as addition, subtraction, sorting and counting, is a challenging machine reading comprehension task.\n{}", "X".repeat(120))).unwrap();
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "table-nlp".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 15,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["pdf".into(), "txt".into()],
+            index: FileIndexOptions::default(),
+        };
+        let fdlp = FileDlp::new(std::slice::from_ref(&rule)).expect("file dlp");
+        fdlp.reload(std::slice::from_ref(&rule)).expect("index reload");
+        for _ in 0..400 {
+            if fdlp.is_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(fdlp.is_index_ready());
+
+        let command = format!(
+            r#"cd "{zone_str}" && python3 -c "import subprocess; subprocess.run(['pdftotext', '-layout', '{pdf_name}', '-'])"#
+        );
+        let tool = serde_json::json!({ "command": command }).to_string();
+        let activated = std::cell::RefCell::new(Vec::<String>::new());
+        fdlp.check_path_triggers_in_tool_text("sess", &tool, |_, _, files| {
+            activated.borrow_mut().extend(files.iter().cloned());
+        });
+        let activated = activated.into_inner();
+        assert!(
+            activated.iter().any(|p| p.contains("Aibaba")),
+            "expected Aibaba pdf activated, got {activated:?}"
+        );
     }
 }

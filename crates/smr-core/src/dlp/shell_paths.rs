@@ -246,6 +246,48 @@ fn is_unquoted_abs_path_char(b: u8) -> bool {
         || b" #+()[]@!$&';=~".contains(&b)
 }
 
+/// Working directories implied by shell `cd`/`pushd` and JSON `cwd` fields in tool payloads.
+pub fn extract_shell_working_directories(tool_text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in parse_json_values(tool_text) {
+        let initial_cwd = cwd_from_json(&value).map(|s| PathBuf::from(normalize_existing_path(&s)));
+        if let Some(cwd) = initial_cwd.as_ref() {
+            out.push(normalize_existing_path(&cwd.to_string_lossy()));
+        }
+        if let Some(cmd) = command_from_json(&value) {
+            out.extend(working_directories_from_shell_command(&cmd, initial_cwd.as_deref()));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn working_directories_from_shell_command(command: &str, initial_cwd: Option<&Path>) -> Vec<String> {
+    let mut cwd = initial_cwd.map(|p| p.to_path_buf());
+    let mut dirs = Vec::new();
+    for statement in split_shell_statements(command) {
+        let trimmed = statement.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(target) = parse_cd_target(trimmed) {
+            cwd = Some(resolve_path_against(cwd.as_deref(), &target));
+            if let Some(ref c) = cwd {
+                dirs.push(normalize_existing_path(&c.to_string_lossy()));
+            }
+            continue;
+        }
+        if let Some(target) = parse_pushd_target(trimmed) {
+            cwd = Some(resolve_path_against(cwd.as_deref(), &target));
+            if let Some(ref c) = cwd {
+                dirs.push(normalize_existing_path(&c.to_string_lossy()));
+            }
+        }
+    }
+    dirs
+}
+
 /// Paths implied by shell `cd` / JSON `cwd` + relative file references in tool text.
 pub fn extract_shell_resolved_paths(tool_text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -666,6 +708,16 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn extract_shell_working_directories_finds_cd_target() {
+        let tool = r#"{"command":"cd /tmp/Table-NLP && python3 -c \"print('hi')\""}"#;
+        let dirs = extract_shell_working_directories(tool);
+        assert!(
+            dirs.iter().any(|d| d.contains("Table-NLP")),
+            "dirs={dirs:?}"
+        );
+    }
 
     #[test]
     fn parent_child_combines_comma_filename() {
