@@ -58,6 +58,27 @@ function Invoke-InteractiveTask {
         [int]$TimeoutSec = 180
     )
     if (Test-Path $DoneMarker) { Remove-Item $DoneMarker -Force -ErrorAction SilentlyContinue }
+
+    function Wait-ForDoneMarker {
+        param([int]$TimeoutSec)
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            if (Test-Path $DoneMarker) {
+                return [int](Get-Content $DoneMarker -Raw).Trim()
+            }
+            Start-Sleep -Seconds 2
+        }
+        return $null
+    }
+
+    # SSH runs as the target user; schtasks /IT needs a logged-on desktop and often times out headless.
+    if ($env:USERNAME -ieq $UserInfo.Name) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath
+        $rc = Wait-ForDoneMarker -TimeoutSec $TimeoutSec
+        if ($null -ne $rc) { return $rc }
+        throw "Direct task failed: $TaskName (no done marker)"
+    }
+
     schtasks /Delete /TN $TaskName /F 2>$null | Out-Null
     $tr = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
     $createOut = schtasks /Create /TN $TaskName /TR $tr /SC ONCE /ST 00:00 /RU $UserInfo.Name /IT /F 2>&1
@@ -65,16 +86,9 @@ function Invoke-InteractiveTask {
         throw "schtasks /Create failed for ${TaskName}: $createOut"
     }
     schtasks /Run /TN $TaskName | Out-Null
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-Path $DoneMarker) {
-            $codeText = (Get-Content $DoneMarker -Raw).Trim()
-            schtasks /Delete /TN $TaskName /F 2>$null | Out-Null
-            return [int]$codeText
-        }
-        Start-Sleep -Seconds 2
-    }
+    $rc = Wait-ForDoneMarker -TimeoutSec $TimeoutSec
     schtasks /Delete /TN $TaskName /F 2>$null | Out-Null
+    if ($null -ne $rc) { return $rc }
     throw "Interactive task timeout: $TaskName"
 }
 
@@ -84,11 +98,11 @@ function Resolve-AppExe {
         [string]$UserHome
     )
     @(
+        (Join-Path $LocalAppData "SafeRoute\smr-gui.exe"),
+        (Join-Path $LocalAppData "SafeRoute\SafeRoute.exe"),
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\SafeRoute.exe"),
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\smr-gui.exe"),
-        (Join-Path $LocalAppData "Programs\SafeRoute\SafeRoute.exe"),
-        (Join-Path $LocalAppData "SafeRoute\SafeRoute.exe"),
-        (Join-Path $LocalAppData "SafeRoute\smr-gui.exe")
+        (Join-Path $LocalAppData "Programs\SafeRoute\SafeRoute.exe")
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
 

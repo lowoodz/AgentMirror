@@ -48,26 +48,36 @@ else
   cargo build --release --target "${TARGET}" -p smr-cli
 fi
 
+echo "==> Stage bundled document tools (poppler pdftotext) for Windows"
+DOC_TOOLS="${ROOT}/resources/doc-tools"
+if [[ ! -f "${DOC_TOOLS}/windows-x64/bin/pdftotext.exe" ]]; then
+  bash "${ROOT}/scripts/vendor/prefetch-poppler-windows.sh" "${DOC_TOOLS}"
+fi
+
 BIN="${ROOT}/target/${TARGET}/release/smr.exe"
 OUT="${ROOT}/dist"
 mkdir -p "${OUT}"
 
 VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
 PKG="smr-${VERSION}-windows-x86_64"
-
-cp "${BIN}" "${OUT}/smr.exe"
-cp config/smr.example.yaml "${OUT}/smr.example.yaml"
-cp README.md "${OUT}/README.md"
-cp scripts/install.ps1 "${OUT}/install.ps1"
-cp scripts/uninstall.ps1 "${OUT}/uninstall.ps1"
-cp scripts/verify.ps1 "${OUT}/verify.ps1"
+STAGE="${OUT}/stage-windows-x86_64"
+rm -rf "${STAGE}"
+mkdir -p "${STAGE}"
+cp "${BIN}" "${STAGE}/smr.exe"
+cp config/smr.example.yaml "${STAGE}/smr.example.yaml"
+cp README.md "${STAGE}/README.md"
+cp scripts/install.ps1 "${STAGE}/install.ps1"
+cp scripts/uninstall.ps1 "${STAGE}/uninstall.ps1"
+cp scripts/verify.ps1 "${STAGE}/verify.ps1"
+cp -R "${DOC_TOOLS}/windows-x64" "${STAGE}/tools"
+echo "==> Bundled doc tools in ${PKG} (from ${DOC_TOOLS}/windows-x64)"
 
 ZIP="${OUT}/${PKG}.zip"
 rm -f "${ZIP}"
-(
-  cd "${OUT}"
-  zip -q "${PKG}.zip" smr.exe smr.example.yaml README.md install.ps1 uninstall.ps1 verify.ps1
-)
+( cd "${STAGE}" && zip -qr "${ZIP}" . )
+rm -rf "${STAGE}"
+
+cp "${BIN}" "${OUT}/smr.exe"
 
 echo "==> Package: ${ZIP}"
 echo "==> Binary:  ${OUT}/smr.exe"
