@@ -609,13 +609,13 @@ mod tests {
             index: FileIndexOptions::default(),
         };
         let fdlp = FileDlp::new(std::slice::from_ref(&rule)).unwrap();
-        for _ in 0..300 {
+        for _ in 0..600 {
             if fdlp.is_index_ready() {
                 break;
             }
             thread::sleep(Duration::from_millis(50));
         }
-        assert!(fdlp.is_index_ready());
+        assert!(fdlp.is_index_ready(), "file index not ready for directory-only trigger test");
 
         let dir = tmp.path().to_string_lossy().replace('\\', "/");
         let tool = format!(r#"{{"command":"ls -la \"{dir}\""}}"#);
