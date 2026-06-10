@@ -1,14 +1,12 @@
 use bytes::Bytes;
 use smr_protocol::{extract_texts, inject_response_texts, parse_json_body, serialize_json_body};
 
-use crate::config::OperationSecurityMode;
 use crate::ops::OperationSecurity;
 
 /// Scan SSE chunks and patch tool_calls when operation security triggers.
 pub fn process_sse_response(
     body: &Bytes,
     ops: &OperationSecurity,
-    mode: OperationSecurityMode,
 ) -> anyhow::Result<(Bytes, u32, u32)> {
     let text = String::from_utf8_lossy(body);
     let mut modified = false;
@@ -32,7 +30,7 @@ pub fn process_sse_response(
                 let (replacements, b, o) = ops.process_fields_with_mode(&extracted)?;
                 blocks += b;
                 observes += o;
-                if !replacements.is_empty() && mode == OperationSecurityMode::Enforce {
+                if !replacements.is_empty() {
                     inject_response_texts(&mut json, &replacements)?;
                     let patched = String::from_utf8(serialize_json_body(&json)?)?;
                     new_body.push_str("data: ");

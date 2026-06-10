@@ -14,6 +14,7 @@ pipeline:
   dlp_enabled: true
   dlp_reversible: true  # tokenize secrets for upstream models; restore in tool-call args to client
   operation_security_mode: observe  # observe | enforce
+  path_protection_mode: observe  # observe | enforce (defaults to operation_security_mode if omitted)
   builtin_credential_presets: true
 
 logging:

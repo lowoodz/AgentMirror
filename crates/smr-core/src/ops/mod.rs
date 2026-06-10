@@ -9,7 +9,8 @@ use path_protection::{level_label, PathProtection};
 pub struct OperationSecurity {
     rules: Vec<CompiledRule>,
     path_protection: PathProtection,
-    mode: OperationSecurityMode,
+    operation_mode: OperationSecurityMode,
+    path_protection_mode: OperationSecurityMode,
 }
 
 struct CompiledRule {
@@ -22,11 +23,23 @@ enum Matcher {
     Regex(Regex),
 }
 
+enum SecurityMatch {
+    Operation {
+        payload: String,
+        rule_id: String,
+    },
+    PathProtection {
+        payload: String,
+        rule_id: String,
+    },
+}
+
 impl OperationSecurity {
     pub fn new(
         rules: &[OperationRule],
         path_rules: &[PathProtectionRule],
-        mode: OperationSecurityMode,
+        operation_mode: OperationSecurityMode,
+        path_protection_mode: OperationSecurityMode,
     ) -> anyhow::Result<Self> {
         let mut compiled = Vec::new();
         for rule in rules.iter().filter(|r| r.enabled) {
@@ -43,7 +56,8 @@ impl OperationSecurity {
         Ok(Self {
             rules: compiled,
             path_protection: PathProtection::new(path_rules),
-            mode,
+            operation_mode,
+            path_protection_mode,
         })
     }
 
@@ -71,15 +85,28 @@ impl OperationSecurity {
         let mut blocks = 0u32;
         let mut observes = 0u32;
         for item in extracted {
-            if let Some(blocked) = self.check_text(&item.text) {
-                if self.mode == OperationSecurityMode::Enforce {
-                    replacements.push((item.clone(), blocked));
+            if let Some(matched) = self.check_text(&item.text) {
+                let (enforce, rule_id, observe_kind) = match &matched {
+                    SecurityMatch::Operation { rule_id, .. } => (
+                        self.operation_mode == OperationSecurityMode::Enforce,
+                        rule_id.as_str(),
+                        "operation security",
+                    ),
+                    SecurityMatch::PathProtection { rule_id, .. } => (
+                        self.path_protection_mode == OperationSecurityMode::Enforce,
+                        rule_id.as_str(),
+                        "path protection",
+                    ),
+                };
+                if enforce {
+                    replacements.push((item.clone(), matched.payload()));
                     blocks += 1;
                 } else {
                     observes += 1;
                     tracing::warn!(
-                        rule_id = %self.last_matched_rule_id(&item.text).unwrap_or_default(),
-                        "operation security observe: dangerous output detected"
+                        rule_id = %rule_id,
+                        kind = observe_kind,
+                        "security observe: policy match detected"
                     );
                 }
             }
@@ -87,23 +114,17 @@ impl OperationSecurity {
         Ok((replacements, blocks, observes))
     }
 
-    fn last_matched_rule_id(&self, text: &str) -> Option<String> {
-        for compiled in &self.rules {
-            if self.matches_rule(text, compiled) {
-                return Some(compiled.rule.id.clone());
-            }
-        }
-        None
-    }
-
-    fn check_text(&self, text: &str) -> Option<String> {
+    fn check_text(&self, text: &str) -> Option<SecurityMatch> {
         for compiled in &self.rules {
             if self.matches_rule(text, compiled) {
                 let msg = format!(
                     "[SMR BLOCKED] 操作「{:?}: {}」已被安全策略拦截。规则 ID: {}",
                     compiled.rule.operation, compiled.rule.object.pattern, compiled.rule.id
                 );
-                return Some(wrap_blocked_payload(text, &msg, compiled.rule.operation));
+                return Some(SecurityMatch::Operation {
+                    payload: wrap_blocked_payload(text, &msg, compiled.rule.operation),
+                    rule_id: compiled.rule.id.clone(),
+                });
             }
         }
 
@@ -114,7 +135,10 @@ impl OperationSecurity {
                 path,
                 rule_id
             );
-            return Some(wrap_blocked_payload(text, &msg, OperationType::CommandExec));
+            return Some(SecurityMatch::PathProtection {
+                payload: wrap_blocked_payload(text, &msg, OperationType::CommandExec),
+                rule_id,
+            });
         }
 
         None
@@ -132,6 +156,14 @@ impl OperationSecurity {
             OperationType::CommandExec => is_command_exec(text),
             OperationType::ApiCall => is_api_call(text),
             OperationType::NetworkAccess => is_network_access(text),
+        }
+    }
+}
+
+impl SecurityMatch {
+    fn payload(self) -> String {
+        match self {
+            Self::Operation { payload, .. } | Self::PathProtection { payload, .. } => payload,
         }
     }
 }
@@ -205,7 +237,7 @@ mod tests {
                 is_regex: false,
             },
         }];
-        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce, OperationSecurityMode::Enforce).unwrap();
         let extracted = vec![ExtractedText {
             pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
                 message_index: 0,
@@ -229,7 +261,7 @@ mod tests {
                 is_regex: false,
             },
         }];
-        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce, OperationSecurityMode::Enforce).unwrap();
         let extracted = vec![ExtractedText {
             pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
                 message_index: 0,
@@ -253,7 +285,7 @@ mod tests {
                 is_regex: false,
             },
         }];
-        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce, OperationSecurityMode::Enforce).unwrap();
         let extracted = vec![ExtractedText {
             pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
                 message_index: 0,
@@ -277,7 +309,7 @@ mod tests {
                 is_regex: true,
             },
         }];
-        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce, OperationSecurityMode::Enforce).unwrap();
         let extracted = vec![ExtractedText {
             pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
                 message_index: 0,
@@ -301,7 +333,7 @@ mod tests {
                 is_regex: false,
             },
         }];
-        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce).unwrap();
+        let ops = OperationSecurity::new(&rules, &[], OperationSecurityMode::Enforce, OperationSecurityMode::Enforce).unwrap();
         let extracted = vec![ExtractedText {
             pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
                 message_index: 0,
@@ -326,7 +358,7 @@ mod tests {
                 path: PathBuf::from("/secure/vault"),
                 level: PathProtectionLevel::DenyAccess,
             }],
-            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce, OperationSecurityMode::Enforce,
         )
         .unwrap();
         let extracted = vec![ExtractedText {
@@ -337,6 +369,52 @@ mod tests {
             text: r#"{"path":"/secure/vault/secret.txt"}"#.into(),
         }];
         let out = ops.process_fields(&extracted).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].1.contains("路径防护"));
+    }
+
+    #[test]
+    fn path_protection_enforces_while_operation_rules_observe() {
+        use crate::config::{PathProtectionLevel, PathProtectionRule};
+        use std::path::PathBuf;
+
+        let ops = OperationSecurity::new(
+            &[OperationRule {
+                id: "block-rm".into(),
+                enabled: true,
+                operation: OperationType::CommandExec,
+                object: OperationObject {
+                    pattern: "rm -rf".into(),
+                    is_regex: false,
+                },
+            }],
+            &[PathProtectionRule {
+                id: "vault".into(),
+                enabled: true,
+                path: PathBuf::from("/secure/vault"),
+                level: PathProtectionLevel::DenyAccess,
+            }],
+            OperationSecurityMode::Observe,
+            OperationSecurityMode::Enforce,
+        )
+        .unwrap();
+        let rm = vec![ExtractedText {
+            pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
+                message_index: 0,
+                tool_index: 0,
+            },
+            text: r#"{"command":"rm -rf /"}"#.into(),
+        }];
+        assert!(ops.process_fields(&rm).unwrap().is_empty());
+
+        let path = vec![ExtractedText {
+            pointer: smr_protocol::TextPointer::OpenAiToolCallArguments {
+                message_index: 0,
+                tool_index: 0,
+            },
+            text: r#"{"path":"/secure/vault/secret.txt"}"#.into(),
+        }];
+        let out = ops.process_fields(&path).unwrap();
         assert_eq!(out.len(), 1);
         assert!(out[0].1.contains("路径防护"));
     }

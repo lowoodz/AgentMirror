@@ -45,9 +45,15 @@ impl AppEngines {
                     &config.operation_rules,
                     &config.path_protection_rules,
                     config.pipeline.operation_security_mode,
+                    config.pipeline.effective_path_protection_mode(),
                 )?
             } else {
-                OperationSecurity::new(&[], &[], config.pipeline.operation_security_mode)?
+                OperationSecurity::new(
+                    &[],
+                    &[],
+                    config.pipeline.operation_security_mode,
+                    config.pipeline.effective_path_protection_mode(),
+                )?
             }),
             router: Arc::new(Router::new(config_arc)),
             config,
@@ -64,9 +70,15 @@ impl AppEngines {
                     &config.operation_rules,
                     &config.path_protection_rules,
                     config.pipeline.operation_security_mode,
+                    config.pipeline.effective_path_protection_mode(),
                 )?
             } else {
-                OperationSecurity::new(&[], &[], config.pipeline.operation_security_mode)?
+                OperationSecurity::new(
+                    &[],
+                    &[],
+                    config.pipeline.operation_security_mode,
+                    config.pipeline.effective_path_protection_mode(),
+                )?
             }),
             router: Arc::new(Router::new(config_arc)),
             config,
@@ -145,13 +157,15 @@ impl SharedApp {
     }
 
     pub fn save_config(&self, config: &AppConfig) -> Result<()> {
+        let mut config = config.clone();
+        config.pipeline.normalize_modes();
         config.validate()?;
         if let Some(parent) = self.config_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let yaml = serde_yaml::to_string(config)?;
+        let yaml = serde_yaml::to_string(&config)?;
         std::fs::write(&self.config_path, yaml)?;
-        self.replace_engines(config.clone())?;
+        self.replace_engines(config)?;
         self.events.push(EventKind::ConfigReload, "config saved", None);
         Ok(())
     }

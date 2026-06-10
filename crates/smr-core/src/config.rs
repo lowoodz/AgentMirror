@@ -49,6 +49,9 @@ pub struct PipelineConfig {
     #[serde(default = "default_true")]
     pub dlp_reversible: bool,
     pub operation_security_mode: OperationSecurityMode,
+    /// When omitted in older configs, mirrors `operation_security_mode` on load.
+    #[serde(default)]
+    pub path_protection_mode: Option<OperationSecurityMode>,
     #[serde(default = "default_true")]
     pub builtin_credential_presets: bool,
 }
@@ -60,6 +63,7 @@ impl Default for PipelineConfig {
             dlp_enabled: true,
             dlp_reversible: true,
             operation_security_mode: OperationSecurityMode::Observe,
+            path_protection_mode: None,
             builtin_credential_presets: true,
         }
     }
@@ -72,6 +76,17 @@ impl PipelineConfig {
 
     pub fn ops_active(&self) -> bool {
         self.security_enabled
+    }
+
+    pub fn effective_path_protection_mode(&self) -> OperationSecurityMode {
+        self.path_protection_mode
+            .unwrap_or(self.operation_security_mode)
+    }
+
+    pub fn normalize_modes(&mut self) {
+        if self.path_protection_mode.is_none() {
+            self.path_protection_mode = Some(self.operation_security_mode);
+        }
     }
 }
 
@@ -430,6 +445,7 @@ impl AppConfig {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)?;
         let mut config: AppConfig = serde_yaml::from_str(&text)?;
+        config.pipeline.normalize_modes();
         let before = config.logging.traffic_max_body_bytes;
         config.logging.normalize_traffic_limit();
         config.validate()?;

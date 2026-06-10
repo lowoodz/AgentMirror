@@ -17,6 +17,7 @@ struct StatusResponse {
     security_enabled: bool,
     dlp_enabled: bool,
     operation_mode: String,
+    path_protection_mode: String,
     config_path: String,
     proxy_url: String,
     proxy_url_high: String,
@@ -124,6 +125,11 @@ async fn api_status(State(s): State<HttpState>) -> Json<StatusResponse> {
         security_enabled: cfg.pipeline.security_enabled,
         dlp_enabled: cfg.pipeline.dlp_enabled,
         operation_mode: format!("{:?}", cfg.pipeline.operation_security_mode).to_lowercase(),
+        path_protection_mode: format!(
+            "{:?}",
+            cfg.pipeline.effective_path_protection_mode()
+        )
+        .to_lowercase(),
         config_path: s.app.config_path.display().to_string(),
         proxy_url: provider_url.clone(),
         proxy_url_high,

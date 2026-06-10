@@ -90,10 +90,7 @@ pub struct SseResponseTransformStream<S> {
     line_buf: Vec<u8>,
     session_id: String,
     dlp: Option<std::sync::Arc<crate::dlp::DlpEngine>>,
-    ops: Option<(
-        std::sync::Arc<crate::ops::OperationSecurity>,
-        crate::config::OperationSecurityMode,
-    )>,
+    ops: Option<std::sync::Arc<crate::ops::OperationSecurity>>,
     protocol: Option<(ApiProtocol, ApiProtocol)>,
 }
 
@@ -135,14 +132,12 @@ impl<S> SseResponseTransformStream<S> {
                     }
                 }
 
-                if let Some((ops, mode)) = &self.ops {
+                if let Some(ops) = &self.ops {
                     if let Ok(extracted) = smr_protocol::extract_texts(&json) {
                         let tool_only = smr_protocol::filter_tool_related(&json, &extracted);
                         if let Ok((replacements, _, _)) = ops.process_fields_with_mode(&tool_only)
                         {
-                            if !replacements.is_empty()
-                                && *mode == crate::config::OperationSecurityMode::Enforce
-                            {
+                            if !replacements.is_empty() {
                                 let _ =
                                     smr_protocol::inject_response_texts(&mut json, &replacements);
                             }
@@ -167,10 +162,7 @@ impl<S> SseResponseTransformStream<S> {
 pub struct SseTransformConfig {
     pub session_id: String,
     pub dlp: Option<std::sync::Arc<crate::dlp::DlpEngine>>,
-    pub ops: Option<(
-        std::sync::Arc<crate::ops::OperationSecurity>,
-        crate::config::OperationSecurityMode,
-    )>,
+    pub ops: Option<std::sync::Arc<crate::ops::OperationSecurity>>,
     pub protocol: Option<(ApiProtocol, ApiProtocol)>,
 }
 
@@ -211,22 +203,16 @@ pub struct SseOpsTransformStream<S> {
     inner: S,
     line_buf: Vec<u8>,
     ops: std::sync::Arc<crate::ops::OperationSecurity>,
-    mode: crate::config::OperationSecurityMode,
     blocks: std::sync::atomic::AtomicU32,
     observes: std::sync::atomic::AtomicU32,
 }
 
 impl<S> SseOpsTransformStream<S> {
-    pub fn new(
-        inner: S,
-        ops: std::sync::Arc<crate::ops::OperationSecurity>,
-        mode: crate::config::OperationSecurityMode,
-    ) -> Self {
+    pub fn new(inner: S, ops: std::sync::Arc<crate::ops::OperationSecurity>) -> Self {
         Self {
             inner,
             line_buf: Vec::new(),
             ops,
-            mode,
             blocks: std::sync::atomic::AtomicU32::new(0),
             observes: std::sync::atomic::AtomicU32::new(0),
         }
@@ -255,9 +241,7 @@ impl<S> SseOpsTransformStream<S> {
                             .fetch_add(b, std::sync::atomic::Ordering::Relaxed);
                         self.observes
                             .fetch_add(o, std::sync::atomic::Ordering::Relaxed);
-                        if !replacements.is_empty()
-                            && self.mode == crate::config::OperationSecurityMode::Enforce
-                        {
+                        if !replacements.is_empty() {
                             if smr_protocol::inject_response_texts(&mut json, &replacements).is_ok()
                             {
                                 if let Ok(bytes) = smr_protocol::serialize_json_body(&json) {

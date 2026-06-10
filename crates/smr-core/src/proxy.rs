@@ -225,10 +225,7 @@ impl ProxyService {
                                 None
                             },
                             ops: if snap.config.pipeline.ops_active() {
-                                Some((
-                                    snap.ops.clone(),
-                                    snap.config.pipeline.operation_security_mode,
-                                ))
+                                Some(snap.ops.clone())
                             } else {
                                 None
                             },
@@ -270,11 +267,8 @@ impl ProxyService {
                     && (is_sse_content_type(&resp_headers) || wants_stream)
                 {
                     let before = resp_body.clone();
-                    let (new_body, blocks, observes) = process_sse_response(
-                        &resp_body,
-                        &snap.ops,
-                        snap.config.pipeline.operation_security_mode,
-                    )?;
+                    let (new_body, blocks, observes) =
+                        process_sse_response(&resp_body, &snap.ops)?;
                     resp_body = new_body;
                     safety_blocks += blocks;
                     safety_observations += observes;
