@@ -628,7 +628,9 @@ mod tests {
             index: FileIndexOptions::default(),
         };
         let fdlp = FileDlp::new(std::slice::from_ref(&rule)).unwrap();
-        for _ in 0..300 {
+        fdlp.reload(std::slice::from_ref(&rule))
+            .expect("index reload");
+        for _ in 0..600 {
             if fdlp.is_index_ready() {
                 break;
             }
