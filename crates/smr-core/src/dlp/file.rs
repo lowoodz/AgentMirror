@@ -78,8 +78,16 @@ impl FileDlp {
         text: &str,
         active: &[ActiveFileContent],
         vault: Option<(&str, &crate::dlp::TokenVault)>,
+        whole_block_on_match: bool,
+        tool_output_block_message: &str,
     ) -> String {
-        self.index.scan_and_sanitize(text, active, vault)
+        self.index.scan_and_sanitize(
+            text,
+            active,
+            vault,
+            whole_block_on_match,
+            tool_output_block_message,
+        )
     }
 }
 

@@ -17,8 +17,8 @@ pub use file::FileDlp;
 pub use session::SessionGuard;
 pub use vault::TokenVault;
 
-use crate::config::AppConfig;
-use smr_protocol::{extract_tool_call_texts, is_model_input, is_tool_related, ExtractedText};
+use crate::config::{AppConfig, UiLanguage};
+use smr_protocol::{extract_tool_call_texts, is_model_input, is_tool_result_content, ExtractedText};
 
 pub struct DlpEngine {
     content: ContentDlp,
@@ -27,6 +27,7 @@ pub struct DlpEngine {
     vault: TokenVault,
     enabled: bool,
     reversible: bool,
+    ui_language: parking_lot::RwLock<UiLanguage>,
 }
 
 impl DlpEngine {
@@ -52,7 +53,19 @@ impl DlpEngine {
             vault,
             enabled,
             reversible,
+            ui_language: parking_lot::RwLock::new(config.server.ui_language),
         })
+    }
+
+    pub fn sync_runtime_config(&self, config: &AppConfig) {
+        *self.ui_language.write() = config.server.ui_language;
+    }
+
+    fn tool_output_block_message(&self) -> String {
+        self.ui_language
+            .read()
+            .file_tool_output_block_message()
+            .to_string()
     }
 
     pub fn vault(&self) -> &TokenVault {
@@ -64,6 +77,7 @@ impl DlpEngine {
     }
 
     pub fn reload(&self, config: &AppConfig) -> anyhow::Result<()> {
+        self.sync_runtime_config(config);
         self.file.reload(&config.file_rules)
     }
 
@@ -102,11 +116,13 @@ impl DlpEngine {
         let mut replacements = Vec::new();
         for item in extracted {
             let scan_files = is_model_input(item, request_json);
+            let whole_block = scan_files && is_tool_result_content(item, request_json);
             let sanitized = self.redact_for_model(
                 session_id,
                 &item.text,
                 session_active.as_deref(),
                 scan_files,
+                whole_block,
             )?;
             if sanitized != item.text {
                 replacements.push((item.clone(), sanitized));
@@ -134,14 +150,16 @@ impl DlpEngine {
         let mut replacements = Vec::new();
         for item in extracted {
             let scan_files = is_model_input(item, response_json);
-            let new_text = if self.reversible && is_tool_related(item, response_json) {
+            let new_text = if self.reversible && smr_protocol::is_tool_related(item, response_json) {
                 self.vault.restore(session_id, &item.text)
             } else {
+                let whole_block = scan_files && is_tool_result_content(item, response_json);
                 self.redact_for_model(
                     session_id,
                     &item.text,
                     session_active.as_deref(),
                     scan_files,
+                    whole_block,
                 )?
             };
             if new_text != item.text {
@@ -158,6 +176,7 @@ impl DlpEngine {
         text: &str,
         session_active: Option<&[session::ActiveFileContent]>,
         scan_files: bool,
+        whole_block_on_match: bool,
     ) -> anyhow::Result<String> {
         let sanitized = if self.reversible {
             self.content
@@ -167,6 +186,7 @@ impl DlpEngine {
         };
         if scan_files {
             if let Some(active) = session_active {
+                let block_message = self.tool_output_block_message();
                 Ok(self.sessions.sanitize_with_active(
                     &sanitized,
                     active,
@@ -176,6 +196,8 @@ impl DlpEngine {
                     } else {
                         None
                     },
+                    whole_block_on_match,
+                    &block_message,
                 ))
             } else {
                 Ok(sanitized)
@@ -241,7 +263,7 @@ mod reversible_tests;
 mod file_session_tests {
     use super::*;
     use crate::config::{
-        AppConfig, FileRule, LoggingConfig, MatchMode, PipelineConfig, ServerConfig,
+        AppConfig, FileRule, LoggingConfig, MatchMode, PipelineConfig, ServerConfig, UiLanguage,
     };
     use smr_protocol::extract_texts;
     use std::fs;
@@ -491,7 +513,10 @@ mod file_session_tests {
         let pdf_path = pdf.to_string_lossy().replace('\\', "/");
 
         let config = AppConfig {
-            server: ServerConfig::default(),
+            server: ServerConfig {
+                ui_language: UiLanguage::Zh,
+                ..Default::default()
+            },
             pipeline: PipelineConfig {
                 dlp_enabled: true,
                 ..Default::default()
@@ -554,11 +579,16 @@ mod file_session_tests {
         let (repl, count) = dlp.process_request(session, &extracted, &request, false)
             .unwrap();
         assert!(count > 0, "expected file DLP replacements");
+        let expected = UiLanguage::Zh.file_tool_output_block_message();
         let sanitized = repl
             .iter()
-            .find(|(item, text)| item.text.contains(&secret) && *text != item.text)
+            .find(|(item, text)| item.text.contains(&secret) && *text == expected)
             .map(|(_, text)| text.clone())
             .unwrap_or_else(|| repl.first().map(|(_, t)| t.clone()).unwrap_or_default());
+        assert_eq!(
+            sanitized, expected,
+            "tool output should be wholly replaced with block message, got: {sanitized}"
+        );
         assert!(
             !sanitized.contains(&secret),
             "tool result should be redacted: {sanitized}"

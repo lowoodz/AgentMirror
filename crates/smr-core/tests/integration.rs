@@ -40,6 +40,7 @@ fn test_config(upstream_base: &str) -> AppConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".into(),
             default_fallback_group: "high".into(),
+            ..Default::default()
         },
         pipeline: PipelineConfig {
             dlp_enabled: true,

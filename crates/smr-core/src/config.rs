@@ -24,10 +24,40 @@ pub struct AppConfig {
     pub path_protection_rules: Vec<PathProtectionRule>,
 }
 
+/// Admin UI / user-facing notice language (`server.ui_language` in config).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UiLanguage {
+    En,
+    Zh,
+}
+
+impl Default for UiLanguage {
+    fn default() -> Self {
+        Self::En
+    }
+}
+
+impl UiLanguage {
+    /// Whole-block replacement when file DLP matches tool output.
+    pub fn file_tool_output_block_message(self) -> &'static str {
+        match self {
+            Self::En => {
+                "You are attempting to read sensitive material. Stop immediately and do not retry."
+            }
+            Self::Zh => {
+                "你正在尝试读取敏感资料，请马上停止该行为，并且不要重复尝试。"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
     pub listen: String,
     pub default_fallback_group: String,
+    #[serde(default)]
+    pub ui_language: UiLanguage,
 }
 
 impl Default for ServerConfig {
@@ -35,6 +65,7 @@ impl Default for ServerConfig {
         Self {
             listen: "127.0.0.1:8080".to_string(),
             default_fallback_group: "high".to_string(),
+            ui_language: UiLanguage::default(),
         }
     }
 }

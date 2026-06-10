@@ -5,7 +5,8 @@ pub mod unified;
 
 pub use body::{
     extract_texts, extract_tool_call_texts, filter_model_input, filter_tool_related,
-    inject_response_texts, inject_texts, is_model_input, is_tool_related, parse_json_body,
+    inject_response_texts, inject_texts, is_model_input, is_tool_related, is_tool_result_content,
+    parse_json_body,
     serialize_json_body, ExtractedText, TextPointer,
 };
 pub use convert::{

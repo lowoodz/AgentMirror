@@ -41,6 +41,7 @@ const CURRENT_FILE: &str = "current.json";
 /// Bump when on-disk index layout or signature semantics change (forces rebuild).
 const INDEX_FORMAT: u32 = 2;
 const EXTRACTED_DIR: &str = "extracted";
+
 const LITERALS_FILE: &str = "literals.json";
 /// Haystack length at which ripgrep literal prefilter is enabled.
 const RG_PREFILTER_MIN_BYTES: usize = 8192;
@@ -267,6 +268,8 @@ impl FileIndexManager {
         text: &str,
         active: &[ActiveFileContent],
         vault: Option<(&str, &crate::dlp::TokenVault)>,
+        whole_block_on_match: bool,
+        tool_output_block_message: &str,
     ) -> String {
         let guard = self.inner.read();
         if !guard.ready.load(Ordering::Acquire) {
@@ -281,7 +284,15 @@ impl FileIndexManager {
                 continue;
             };
             let allowed: HashSet<String> = item.triggered_files.iter().cloned().collect();
-            result = scan_haystack(&result, &item.rule, snapshot, &allowed, vault);
+            result = scan_haystack(
+                &result,
+                &item.rule,
+                snapshot,
+                &allowed,
+                vault,
+                whole_block_on_match,
+                tool_output_block_message,
+            );
         }
         result
     }
@@ -1305,6 +1316,8 @@ fn scan_haystack(
     snapshot: &RuleSnapshot,
     allowed_paths: &HashSet<String>,
     vault: Option<(&str, &crate::dlp::TokenVault)>,
+    whole_block_on_match: bool,
+    tool_output_block_message: &str,
 ) -> String {
     if allowed_paths.is_empty() {
         return haystack.to_string();
@@ -1417,6 +1430,10 @@ fn scan_haystack(
 
     if byte_ranges.is_empty() {
         return haystack.to_string();
+    }
+
+    if whole_block_on_match {
+        return tool_output_block_message.to_string();
     }
 
     byte_ranges.sort_by_key(|r| r.0);
@@ -1817,7 +1834,7 @@ mod tests {
 
     impl ScanFixture {
         fn scan(&self, hay: &str) -> String {
-            scan_haystack(hay, &self.rule, &self.snapshot, &self.allowed, None)
+            scan_haystack(hay, &self.rule, &self.snapshot, &self.allowed, None, false, "")
         }
     }
 
@@ -2029,7 +2046,7 @@ mod tests {
         let snapshot = build_rule_index(&index_root, &rule).unwrap();
         let hay = format!("user pasted {secret_text} here");
         let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
-        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None);
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out.contains(&secret_text));
         assert_eq!(out.chars().count(), hay.chars().count());
     }
@@ -2064,7 +2081,7 @@ mod tests {
         let spaced: String = secret_text.chars().map(|c| format!("{c} ")).collect();
         let hay = format!("payload {spaced} tail");
         let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
-        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None);
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out.contains(&secret_text));
     }
 
@@ -2116,7 +2133,7 @@ mod tests {
         let modified = test_secret("ALPHA-SECRET-ONE-MODIFIED");
         let hay = format!("leak {modified} end");
         let allowed: HashSet<String> = snap3.indexed_paths.iter().cloned().collect();
-        let out = scan_haystack(&hay, &rule, &snap3, &allowed, None);
+        let out = scan_haystack(&hay, &rule, &snap3, &allowed, None, false, "");
         assert!(!out.contains(&modified));
     }
 
@@ -2154,7 +2171,7 @@ mod tests {
         let padding = "x".repeat(20_000);
         let hay = format!("{padding} {secret_text} {padding}");
         let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
-        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None);
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out.contains(&secret_text));
         assert_eq!(out.chars().count(), hay.chars().count());
     }
@@ -2194,11 +2211,11 @@ mod tests {
         let allowed: HashSet<String> = HashSet::from([triggered_path]);
 
         let hay_triggered = format!("leak {triggered_secret} here");
-        let out1 = scan_haystack(&hay_triggered, &rule, &snapshot, &allowed, None);
+        let out1 = scan_haystack(&hay_triggered, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out1.contains(&triggered_secret));
 
         let hay_other = format!("leak {other_secret} here");
-        let out2 = scan_haystack(&hay_other, &rule, &snapshot, &allowed, None);
+        let out2 = scan_haystack(&hay_other, &rule, &snapshot, &allowed, None, false, "");
         assert!(out2.contains(&other_secret));
     }
 
@@ -2233,11 +2250,11 @@ mod tests {
         let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
 
         let unrelated = "你好世界，这是与索引文件字符集几乎无关的中文内容。".repeat(20);
-        let out = scan_haystack(&unrelated, &rule, &snapshot, &allowed, None);
+        let out = scan_haystack(&unrelated, &rule, &snapshot, &allowed, None, false, "");
         assert_eq!(out, unrelated);
 
         let hay = format!("notes {secret_text} tail");
-        let out2 = scan_haystack(&hay, &rule, &snapshot, &allowed, None);
+        let out2 = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out2.contains(&secret_text));
     }
 
@@ -2322,7 +2339,7 @@ mod tests {
         );
 
         let t1 = std::time::Instant::now();
-        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None);
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         let scan_ms = t1.elapsed().as_millis();
 
         eprintln!(
@@ -2365,7 +2382,7 @@ mod tests {
 
         let hay = format!("context {fragment} tail");
         let t0 = std::time::Instant::now();
-        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None);
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         let scan_ms = t0.elapsed().as_millis();
 
         eprintln!(
@@ -2423,7 +2440,7 @@ mod tests {
         let hay = "Hello from an unrelated English-only model prompt. ".repeat(50_000);
 
         let t1 = std::time::Instant::now();
-        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None);
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         let scan_ms = t1.elapsed().as_millis();
 
         eprintln!(

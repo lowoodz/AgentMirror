@@ -124,6 +124,24 @@ pub fn filter_tool_related(body: &Value, extracted: &[ExtractedText]) -> Vec<Ext
         .collect()
 }
 
+/// Tool result bodies sent back to the model (OpenAI `role: tool`, Anthropic `tool_result`).
+pub fn is_tool_result_content(extracted: &ExtractedText, body: &Value) -> bool {
+    match &extracted.pointer {
+        TextPointer::OpenAiMessageString { message_index }
+        | TextPointer::OpenAiMessageContent { message_index } => {
+            message_role(body, *message_index) == Some("tool")
+        }
+        TextPointer::AnthropicContentBlock {
+            message_index,
+            block_index,
+        } => anthropic_block(body, *message_index, *block_index)
+            .and_then(|b| b.get("type"))
+            .and_then(|t| t.as_str())
+            == Some("tool_result"),
+        _ => false,
+    }
+}
+
 /// Fields that are input to the model/agent (excludes assistant/model-generated text).
 pub fn is_model_input(extracted: &ExtractedText, body: &Value) -> bool {
     match &extracted.pointer {

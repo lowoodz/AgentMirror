@@ -141,6 +141,7 @@ impl SharedApp {
         } else {
             AppEngines::from_config_with_sessions_and_vault(config.clone(), sessions, vault)?
         };
+        engines.dlp.sync_runtime_config(&config);
         *self.inner.write() = engines;
         Ok(())
     }

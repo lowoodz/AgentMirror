@@ -127,8 +127,16 @@ impl SessionGuard {
         active: &[ActiveFileContent],
         file_dlp: &FileDlp,
         vault: Option<(&str, &crate::dlp::TokenVault)>,
+        whole_block_on_match: bool,
+        tool_output_block_message: &str,
     ) -> String {
-        file_dlp.scan_text(text, active, vault)
+        file_dlp.scan_text(
+            text,
+            active,
+            vault,
+            whole_block_on_match,
+            tool_output_block_message,
+        )
     }
 }
 
