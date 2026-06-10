@@ -19,6 +19,230 @@ const PATH_KEYS: &[&str] = &[
 
 const CWD_KEYS: &[&str] = &["cwd", "working_directory", "workingDirectory", "workdir", "workDir"];
 
+const MAX_PARENT_CANDIDATES: usize = 8;
+const MAX_CHILD_CANDIDATES: usize = 16;
+const MAX_PARENT_CHILD_PAIRS: usize = 64;
+
+/// Join directory-like parent paths with relative file tokens (fallback when no cd/cwd).
+pub fn extract_parent_child_combinations(tool_text: &str, rule_base: &str) -> Vec<String> {
+    let parents = collect_parent_candidates(tool_text, rule_base);
+    let children = collect_child_candidates(tool_text);
+    if parents.is_empty() || children.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut pairs = 0usize;
+    'outer: for parent in parents.iter().take(MAX_PARENT_CANDIDATES) {
+        for child in children.iter().take(MAX_CHILD_CANDIDATES) {
+            if pairs >= MAX_PARENT_CHILD_PAIRS {
+                break 'outer;
+            }
+            let joined = PathBuf::from(parent).join(child.as_str());
+            out.push(normalize_existing_path(&joined.to_string_lossy()));
+            pairs += 1;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_parent_candidates(tool_text: &str, rule_base: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if !rule_base.is_empty() {
+        out.push(normalize_existing_path(rule_base));
+    }
+    for quoted in extract_all_quoted_strings(tool_text) {
+        let expanded = expand_tilde_path(&quoted);
+        if looks_like_absolute_path(&expanded) && looks_like_directory_parent(&expanded) {
+            out.push(normalize_existing_path(&expanded));
+        }
+    }
+    out.extend(extract_unquoted_absolute_directory_paths(tool_text));
+    for abs in extract_unquoted_absolute_file_paths(tool_text) {
+        if let Some(parent) = PathBuf::from(&abs).parent() {
+            if !parent.as_os_str().is_empty() {
+                out.push(normalize_existing_path(&parent.to_string_lossy()));
+            }
+        }
+    }
+    for abs in extract_quoted_absolute_file_paths(tool_text) {
+        if let Some(parent) = PathBuf::from(&abs).parent() {
+            if !parent.as_os_str().is_empty() {
+                out.push(normalize_existing_path(&parent.to_string_lossy()));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_child_candidates(tool_text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for quoted in extract_all_quoted_strings(tool_text) {
+        if looks_like_absolute_path(&quoted) || looks_like_url(&quoted) {
+            continue;
+        }
+        if looks_like_json_artifact(&quoted) {
+            continue;
+        }
+        if looks_like_file_reference(&quoted) {
+            out.push(quoted);
+        }
+    }
+    for token in tokenize_shell_words(tool_text) {
+        if looks_like_absolute_path(&token) || token.starts_with('-') {
+            continue;
+        }
+        if looks_like_json_artifact(&token) {
+            continue;
+        }
+        if looks_like_file_reference(&token) {
+            out.push(token);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn looks_like_json_artifact(s: &str) -> bool {
+    s.contains('{')
+        || s.contains('}')
+        || s.contains(',')
+        || (s.contains(':') && !looks_like_windows_drive_path(s))
+}
+
+fn looks_like_windows_drive_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && matches!(b[2], b'/' | b'\\')
+}
+
+fn looks_like_directory_parent(s: &str) -> bool {
+    let t = s.trim().trim_end_matches('/');
+    if t.is_empty() {
+        return false;
+    }
+    Path::new(t).extension().is_none()
+}
+
+fn extract_unquoted_absolute_directory_paths(tool_text: &str) -> Vec<String> {
+    extract_unquoted_absolute_paths_with_filter(tool_text, |normalized| {
+        normalized.len() > 1 && looks_like_directory_parent(normalized)
+    })
+}
+
+fn extract_unquoted_absolute_file_paths(tool_text: &str) -> Vec<String> {
+    extract_unquoted_absolute_paths_with_filter(tool_text, |normalized| {
+        normalized.len() > 2
+            && normalized.contains('.')
+            && Path::new(normalized)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| !ext.is_empty())
+    })
+}
+
+fn extract_quoted_absolute_file_paths(tool_text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for quoted in extract_all_quoted_strings(tool_text) {
+        let expanded = expand_tilde_path(&quoted);
+        if !looks_like_absolute_path(&expanded) {
+            continue;
+        }
+        if Path::new(&expanded)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| !ext.is_empty())
+        {
+            out.push(normalize_existing_path(&expanded));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn extract_unquoted_absolute_paths_with_filter(
+    tool_text: &str,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let bytes = tool_text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    let mut in_quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_quote.is_some() {
+            if b == b'\\' && i + 1 < bytes.len() {
+                i += 2;
+                continue;
+            }
+            if Some(b) == in_quote {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' || b == b'\'' {
+            in_quote = Some(b);
+            i += 1;
+            continue;
+        }
+
+        let start = if i + 2 < bytes.len()
+            && bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1] == b':'
+            && matches!(bytes[i + 2], b'/' | b'\\')
+        {
+            Some(i)
+        } else if b == b'/' {
+            Some(i)
+        } else {
+            None
+        };
+
+        if let Some(start) = start {
+            let mut end = start;
+            while end < bytes.len() {
+                let b = bytes[end];
+                let drive_colon =
+                    end == start + 1 && b == b':' && bytes[start].is_ascii_alphabetic();
+                if is_unquoted_abs_path_char(b) || drive_colon {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            let normalized = normalize_path_str(&tool_text[start..end]);
+            if keep(&normalized) {
+                out.push(normalize_existing_path(&normalized));
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn is_unquoted_abs_path_char(b: u8) -> bool {
+    if !b.is_ascii() {
+        return true;
+    }
+    // Exclude `,` and `:` — common in JSON tool payloads, not in normal path segments.
+    b.is_ascii_alphanumeric()
+        || b"/\\._-".contains(&b)
+        || b" #+()[]@!$&';=~".contains(&b)
+}
+
 /// Paths implied by shell `cd` / JSON `cwd` + relative file references in tool text.
 pub fn extract_shell_resolved_paths(tool_text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -516,5 +740,72 @@ mod tests {
     fn ls_directory_does_not_emit_relative_file_paths() {
         let tool = r#"{"command":"ls -la \"/data/protected\""}"#;
         assert!(extract_shell_resolved_paths(tool).is_empty());
+    }
+
+    #[test]
+    fn parent_child_combines_split_json_fields() {
+        let tmp = TempDir::new().unwrap();
+        let zone = tmp.path().join("protected-zone");
+        fs::create_dir_all(&zone).unwrap();
+        let report = zone.join("report.pdf");
+        fs::write(&report, b"%PDF").unwrap();
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+
+        let tool = format!(r#"{{"directory":"{zone_str}","filename":"report.pdf"}}"#);
+        let paths = extract_parent_child_combinations(&tool, &zone_str);
+        assert_eq!(paths.len(), 1, "paths={paths:?}");
+        let expected = fs::canonicalize(&report)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert_eq!(normalize_path_str(&paths[0]), normalize_path_str(&expected));
+    }
+
+    #[test]
+    fn parent_child_nested_relative_file() {
+        let rule = "/data/protected";
+        let tool = r#"{"root":"/data/protected","target":"nested/report.pdf"}"#;
+        let paths = extract_parent_child_combinations(tool, rule);
+        assert_eq!(paths.len(), 1, "paths={paths:?}");
+        assert_eq!(paths[0], "/data/protected/nested/report.pdf");
+    }
+
+    #[test]
+    fn unquoted_scan_skips_slashes_inside_json_quotes() {
+        let tool = r#"{"target":"nested/report.pdf"}"#;
+        assert!(extract_unquoted_absolute_file_paths(tool).is_empty());
+    }
+
+    #[test]
+    fn parent_child_directory_only_has_no_children() {
+        let tool = r#"{"command":"ls -la \"/data/protected\""}"#;
+        assert!(extract_parent_child_combinations(tool, "/data/protected").is_empty());
+    }
+
+    #[test]
+    fn parent_child_respects_pair_limit() {
+        let mut parents = Vec::new();
+        for i in 0..20 {
+            parents.push(format!("/data/zone{i}"));
+        }
+        let mut children = Vec::new();
+        for i in 0..20 {
+            children.push(format!("file{i}.txt"));
+        }
+        let tool = format!(
+            "{} {}",
+            parents
+                .iter()
+                .map(|p| format!("\"{p}\""))
+                .collect::<Vec<_>>()
+                .join(" "),
+            children
+                .iter()
+                .map(|c| format!("\"{c}\""))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let paths = extract_parent_child_combinations(&tool, "");
+        assert!(paths.len() <= MAX_PARENT_CHILD_PAIRS, "len={}", paths.len());
     }
 }

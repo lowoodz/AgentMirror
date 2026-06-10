@@ -6,7 +6,9 @@ use anyhow::Result;
 use crate::config::FileRule;
 use crate::dlp::disk_index::{FileIndexManager, filter_most_specific_indexed, IndexedRule};
 use crate::dlp::session::ActiveFileContent;
-use crate::dlp::shell_paths::{extract_json_path_fields, extract_shell_resolved_paths};
+use crate::dlp::shell_paths::{
+    extract_json_path_fields, extract_parent_child_combinations, extract_shell_resolved_paths,
+};
 
 pub struct FileDlp {
     index: FileIndexManager,
@@ -118,6 +120,7 @@ fn extract_all_path_candidates(tool_text: &str, rule_base: &str) -> Vec<String> 
     out.extend(extract_absolute_path_candidates(tool_text));
     out.extend(extract_shell_resolved_paths(tool_text));
     out.extend(extract_json_path_fields(tool_text, rule_base));
+    out.extend(extract_parent_child_combinations(tool_text, rule_base));
     out.sort();
     out.dedup();
     out
@@ -485,6 +488,46 @@ mod tests {
         let files = extract_triggered_files(tool, &rule);
         assert_eq!(files.len(), 1);
         assert!(files[0].ends_with("/smr-app-test-secrets/project.txt"));
+    }
+
+    #[test]
+    fn split_dir_and_filename_json_activate_via_parent_child() {
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let zone = tmp.path().join("protected-zone");
+        fs::create_dir_all(&zone).unwrap();
+        let report = zone.join("report.txt");
+        fs::write(&report, "P".repeat(65)).unwrap();
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "split-fields".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 5,
+            match_mode: MatchMode::Full,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["txt".into()],
+            index: FileIndexOptions::default(),
+        };
+        let fdlp = FileDlp::new(std::slice::from_ref(&rule)).unwrap();
+        fdlp.reload(std::slice::from_ref(&rule)).expect("index reload");
+        assert!(fdlp.is_index_ready(), "file index did not become ready");
+
+        let tool = format!(r#"{{"directory":"{zone_str}","filename":"report.txt"}}"#);
+        let activated = std::sync::Mutex::new(Vec::<String>::new());
+        fdlp.check_path_triggers_in_tool_text("sess", &tool, |_, _, files| {
+            activated.lock().unwrap().extend(files.iter().cloned());
+        });
+        let resolved = activated.lock().unwrap().clone();
+        assert_eq!(
+            resolved.len(),
+            1,
+            "tool={tool:?} resolved={resolved:?}"
+        );
     }
 
     #[test]
