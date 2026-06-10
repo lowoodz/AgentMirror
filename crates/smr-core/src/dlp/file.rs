@@ -43,9 +43,14 @@ impl FileDlp {
         let mut pending: Vec<(FileRule, Vec<String>)> = Vec::new();
         for indexed in &rules {
             let candidates = extract_triggered_files(tool_text, &indexed.rule);
-            let resolved = self
+            let mut resolved = self
                 .index
                 .resolve_triggered_files(&indexed.rule.id, &candidates);
+            if resolved.is_empty() && indexed.rule.path.is_dir() {
+                resolved = self
+                    .index
+                    .resolve_triggered_files_by_basename(&indexed.rule.id, tool_text);
+            }
             if resolved.is_empty() {
                 continue;
             }
@@ -289,6 +294,15 @@ pub fn path_basename(path: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase()
+}
+
+/// Match an indexed file basename mentioned in chat/tool text (case-insensitive).
+pub fn basename_trigger_match(basename: &str, text: &str) -> bool {
+    let base = basename.trim();
+    if base.len() < 10 {
+        return false;
+    }
+    text.to_ascii_lowercase().contains(base)
 }
 
 pub(crate) fn normalize_path_str(path: &str) -> String {

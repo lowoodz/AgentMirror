@@ -109,6 +109,9 @@ fn collect_child_candidates(tool_text: &str) -> Vec<String> {
 }
 
 fn looks_like_json_artifact(s: &str) -> bool {
+    if looks_like_file_reference(s) {
+        return false;
+    }
     s.contains('{')
         || s.contains('}')
         || s.contains(',')
@@ -642,6 +645,9 @@ fn looks_like_file_reference(s: &str) -> bool {
     if t.is_empty() || t == "." || t == ".." {
         return false;
     }
+    if t.starts_with('{') || t.starts_with('[') {
+        return false;
+    }
     if t.contains("://") {
         return false;
     }
@@ -660,6 +666,19 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn parent_child_combines_comma_filename() {
+        let tmp = TempDir::new().unwrap();
+        let zone = tmp.path().join("Table-NLP");
+        fs::create_dir_all(&zone).unwrap();
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+        let fname = "Aibaba, Question Directed Graph Attention Network for Numerical Reasoning over Text.pdf";
+        let tool = format!(r#"{{"directory":"{zone_str}","filename":"{fname}"}}"#);
+        let paths = extract_parent_child_combinations(&tool, &zone_str);
+        assert_eq!(paths.len(), 1, "paths={paths:?}");
+        assert!(paths[0].ends_with("Numerical Reasoning over Text.pdf"));
+    }
 
     #[test]
     fn cd_then_quoted_relative_resolves_under_cwd() {

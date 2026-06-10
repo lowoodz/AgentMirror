@@ -478,4 +478,189 @@ mod file_session_tests {
             "tool result should be redacted: {tool_sanitized}"
         );
     }
+
+    #[test]
+    fn pdftotext_command_with_comma_path_triggers_and_redacts() {
+        let tmp = TempDir::new().unwrap();
+        let secret = "X".repeat(80);
+        let fname = "Aibaba, Question Directed Graph Attention Network for Numerical Reasoning over Text.pdf";
+        let zone = tmp.path().join("Table-NLP");
+        fs::create_dir_all(&zone).unwrap();
+        let pdf = zone.join(fname);
+        fs::write(&pdf, format!("{secret}\n\nChapter 1 body")).unwrap();
+        let pdf_path = pdf.to_string_lossy().replace('\\', "/");
+
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            pipeline: PipelineConfig {
+                dlp_enabled: true,
+                ..Default::default()
+            },
+            logging: LoggingConfig::default(),
+            fallback_groups: Default::default(),
+            content_rules: vec![],
+            file_rules: vec![FileRule {
+                id: "table-nlp".into(),
+                path: zone.clone(),
+                enabled: true,
+                recursive: true,
+                trigger_window: 15,
+                match_mode: MatchMode::Full,
+                min_fragment_len: None,
+                min_fragment_ratio: None,
+                formats: vec!["pdf".into(), "txt".into()],
+                index: Default::default(),
+            }],
+            operation_rules: vec![],
+            path_protection_rules: vec![],
+        };
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        dlp.reload(&config).unwrap();
+        for _ in 0..400 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(dlp.is_file_index_ready());
+
+        let session = "openclaw-pdftotext";
+        let command = format!(
+            r#"pdftotext -f 1 -l 20 "{pdf_path}" - 2>/dev/null | head -300"#
+        );
+        let request = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "read chapter 1"},
+                {"role": "assistant", "content": null, "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": serde_json::json!({ "command": command }).to_string()
+                    }
+                }]},
+                {"role": "tool", "tool_call_id": "c1", "content": format!("{secret}\nchapter one")}
+            ]
+        });
+
+        dlp.register_path_triggers(session, &request);
+        assert!(
+            dlp.sessions().active_snapshot(session).is_some(),
+            "pdftotext command path should activate file DLP"
+        );
+
+        let extracted = extract_texts(&request).unwrap();
+        let (repl, count) = dlp.process_request(session, &extracted, &request, false)
+            .unwrap();
+        assert!(count > 0, "expected file DLP replacements");
+        let sanitized = repl
+            .iter()
+            .find(|(item, text)| item.text.contains(&secret) && *text != item.text)
+            .map(|(_, text)| text.clone())
+            .unwrap_or_else(|| repl.first().map(|(_, t)| t.clone()).unwrap_or_default());
+        assert!(
+            !sanitized.contains(&secret),
+            "tool result should be redacted: {sanitized}"
+        );
+    }
+
+    /// Replays a captured OpenClaw traffic body against the live user config + file index.
+    #[test]
+    fn repro_openclaw_understanding_tables_traffic() {
+        use crate::config::AppConfig;
+        use crate::paths::{config_dir, default_config_path};
+        use std::path::PathBuf;
+
+        let traffic_path = config_dir().join("traffic/20260610T144445_request_in_fabcb12f.body");
+        if !traffic_path.exists() {
+            eprintln!("skip: traffic snapshot not found at {}", traffic_path.display());
+            return;
+        }
+        let config = AppConfig::load(&default_config_path()).expect("load smr.yaml");
+        let body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&traffic_path).unwrap()).unwrap();
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        dlp.reload(&config).unwrap();
+        for _ in 0..600 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            dlp.is_file_index_ready(),
+            "file index not ready for repro"
+        );
+
+        let session = "openclaw-traffic-repro";
+        dlp.register_path_triggers(session, &body);
+        let active = dlp.sessions().active_snapshot(session);
+        eprintln!("session active: {:?}", active.as_ref().map(|a| a.len()));
+        if let Some(a) = &active {
+            for item in a {
+                eprintln!(
+                    "  rule={} triggered_files={:?}",
+                    item.rule.id, item.triggered_files
+                );
+            }
+        }
+        assert!(
+            active.is_some(),
+            "expected path trigger from pdftotext exec in traffic body"
+        );
+
+        let extracted = extract_texts(&body).unwrap();
+        let tool_items: Vec<_> = extracted
+            .iter()
+            .filter(|e| {
+                smr_protocol::is_model_input(e, &body)
+                    && e.text.len() > 1000
+                    && e.text.contains("Understanding tables")
+            })
+            .collect();
+        eprintln!("model-input tool-like fields: {}", tool_items.len());
+
+        let (repl, count) = dlp.process_request(session, &extracted, &body, false).unwrap();
+        eprintln!("fragment mode dlp replacements count: {count}");
+
+        // Same traffic with Full match mode (isolates fragment/normalization issues).
+        let mut full_config = config.clone();
+        for rule in &mut full_config.file_rules {
+            if rule.id == "file-1781067561965" {
+                rule.match_mode = MatchMode::Full;
+                rule.min_fragment_len = None;
+                rule.min_fragment_ratio = None;
+            }
+        }
+        let dlp_full = DlpEngine::new(&full_config).unwrap();
+        dlp_full.reload(&full_config).unwrap();
+        for _ in 0..600 {
+            if dlp_full.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        dlp_full.register_path_triggers(session, &body);
+        let (repl_full, count_full) =
+            dlp_full.process_request(session, &extracted, &body, false).unwrap();
+        eprintln!("full mode dlp replacements count: {count_full}");
+        if count_full > 0 {
+            if let Some((item, text)) = repl_full.iter().find(|(i, _)| {
+                i.text.len() > 1000 && i.text.contains("Understanding tables")
+            }) {
+                eprintln!(
+                    "  full mode redacted len {} -> {}",
+                    item.text.len(),
+                    text.len()
+                );
+            }
+        }
+
+        assert!(
+            count > 0,
+            "expected fragment-mode DLP to redact PDF tool result (full mode count={count_full})"
+        );
+    }
 }

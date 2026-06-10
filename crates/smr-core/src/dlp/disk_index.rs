@@ -24,7 +24,10 @@ use crate::dlp::charset::{
     token_profile, TokenProfile,
 };
 use crate::dlp::doc_extract;
-use crate::dlp::file::{path_basename, path_trigger_match, paths_equivalent, strip_verbatim_path_prefix};
+use crate::dlp::file::{
+    basename_trigger_match, path_basename, path_trigger_match, paths_equivalent,
+    strip_verbatim_path_prefix,
+};
 use crate::dlp::fragment::{file_fragment_meets_threshold, file_min_fragment_len};
 use crate::dlp::normalize::{normalize_with_map, Normalized};
 use crate::dlp::sanitize::{sanitize_range, sanitize_whole};
@@ -35,13 +38,16 @@ pub const INDEX_READ_CAP: u64 = 16 * 1024 * 1024;
 
 const GEN_DIR: &str = "gen";
 const CURRENT_FILE: &str = "current.json";
+/// Bump when on-disk index layout or signature semantics change (forces rebuild).
+const INDEX_FORMAT: u32 = 2;
+const EXTRACTED_DIR: &str = "extracted";
 const LITERALS_FILE: &str = "literals.json";
 /// Haystack length at which ripgrep literal prefilter is enabled.
 const RG_PREFILTER_MIN_BYTES: usize = 8192;
 /// Bytes read per indexed file when building token fingerprints.
 const PATH_TOKEN_SAMPLE_BYTES: usize = 256 * 1024;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
 struct FileFingerprint {
     path: String,
     mtime_secs: u64,
@@ -56,9 +62,15 @@ struct FilesManifest {
 #[derive(Serialize, Deserialize)]
 struct CurrentPointer {
     generation: u64,
+    #[serde(default = "default_index_format")]
+    format: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+fn default_index_format() -> u32 {
+    1
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct RuleManifest {
     generation: u64,
     signatures: u64,
@@ -113,6 +125,7 @@ fn index_build_lock() -> std::sync::MutexGuard<'static, ()> {
 struct SigRow {
     hash: u64,
     path: String,
+    content_path: String,
     byte_offset: u64,
     byte_len: u32,
 }
@@ -310,6 +323,22 @@ impl FileIndexManager {
         out.into_iter().collect()
     }
 
+    /// When chat mentions only a filename (e.g. OpenClaw user query), map to indexed paths.
+    pub fn resolve_triggered_files_by_basename(&self, rule_id: &str, text: &str) -> Vec<String> {
+        let guard = self.inner.read();
+        let Some(snapshot) = guard.snapshots.get(rule_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for indexed in snapshot.indexed_paths.iter() {
+            let base = path_basename(indexed);
+            if basename_trigger_match(&base, text) {
+                out.push(indexed.clone());
+            }
+        }
+        out
+    }
+
     fn spawn_watcher(&self, rules: &[FileRule]) {
         let paths = dedupe_nested_watch_paths(
             rules
@@ -442,6 +471,16 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
     migrate_legacy_layout(&rule_base)?;
 
     let prev = load_previous_generation(&rule_base)?;
+
+    let file_paths = collect_files(rule)?;
+    let (unchanged, to_index, new_manifest) =
+        classify_file_changes(&file_paths, prev.as_ref().map(|p| &p.files))?;
+    if to_index.is_empty() {
+        if let Some(prev_gen) = &prev {
+            return load_rule_snapshot(rule, &rule_base, prev_gen, &file_paths);
+        }
+    }
+
     let generation = alloc_generation(&rule_base, prev.as_ref().map(|p| p.generation))?;
 
     let work_dir = rule_base.join(GEN_DIR).join(generation.to_string());
@@ -457,6 +496,7 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
         "CREATE TABLE signatures (
             sig_hash INTEGER NOT NULL,
             path TEXT NOT NULL,
+            content_path TEXT NOT NULL,
             byte_offset INTEGER NOT NULL,
             byte_len INTEGER NOT NULL
         );
@@ -464,14 +504,6 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
     )?;
     drop(conn);
 
-    let file_paths = collect_files(rule)?;
-    let (unchanged, to_index, new_manifest) =
-        classify_file_changes(&file_paths, prev.as_ref().map(|p| &p.files))?;
-    if to_index.is_empty() {
-        if let Some(prev_gen) = &prev {
-            return load_rule_snapshot(rule, &rule_base, prev_gen, &file_paths);
-        }
-    }
     let file_count = file_paths.len();
     let indexed_paths: Arc<HashSet<String>> = Arc::new(
         file_paths
@@ -496,7 +528,8 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
         );
     }
 
-    let _sig_added = index_file_batch(&db_path, &to_index, rule)?;
+    let extracted_root = rule_base.join(EXTRACTED_DIR);
+    let _sig_added = index_file_batch(&db_path, &to_index, rule, &extracted_root)?;
     let sig_count = count_signatures(&db_path)?;
 
     {
@@ -653,6 +686,9 @@ fn load_previous_generation(rule_base: &Path) -> Result<Option<PreviousGeneratio
     }
     let current: CurrentPointer =
         serde_json::from_str(&fs::read_to_string(&current_path).context("read current.json")?)?;
+    if current.format != INDEX_FORMAT {
+        return Ok(None);
+    }
     let work_dir = rule_base.join(GEN_DIR).join(current.generation.to_string());
     let db_path = work_dir.join("index.db");
     let files_path = work_dir.join("files.json");
@@ -703,7 +739,7 @@ fn fingerprint_file(path: &Path) -> Result<FileFingerprint> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     Ok(FileFingerprint {
-        path: path.to_string_lossy().replace('\\', "/"),
+        path: normalize_index_path(path),
         mtime_secs: modified.as_secs(),
         size: meta.len(),
     })
@@ -719,8 +755,8 @@ fn copy_signatures_from_db(new_db: &Path, old_db: &Path, paths: &[String]) -> Re
     let mut copied = 0u64;
     for path in paths {
         let n = conn.execute(
-            "INSERT INTO signatures (sig_hash, path, byte_offset, byte_len)
-             SELECT sig_hash, path, byte_offset, byte_len FROM old_db.signatures WHERE path = ?1",
+            "INSERT INTO signatures (sig_hash, path, content_path, byte_offset, byte_len)
+             SELECT sig_hash, path, content_path, byte_offset, byte_len FROM old_db.signatures WHERE path = ?1",
             params![path],
         )?;
         copied += n as u64;
@@ -729,7 +765,12 @@ fn copy_signatures_from_db(new_db: &Path, old_db: &Path, paths: &[String]) -> Re
     Ok(copied)
 }
 
-fn index_file_batch(db_path: &Path, files: &[PathBuf], rule: &FileRule) -> Result<u64> {
+fn index_file_batch(
+    db_path: &Path,
+    files: &[PathBuf],
+    rule: &FileRule,
+    extracted_root: &Path,
+) -> Result<u64> {
     if files.is_empty() {
         return Ok(0);
     }
@@ -749,12 +790,13 @@ fn index_file_batch(db_path: &Path, files: &[PathBuf], rule: &FileRule) -> Resul
             let tx = conn.unchecked_transaction()?;
             {
                 let mut stmt = tx.prepare(
-                    "INSERT INTO signatures (sig_hash, path, byte_offset, byte_len) VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO signatures (sig_hash, path, content_path, byte_offset, byte_len) VALUES (?1, ?2, ?3, ?4, ?5)",
                 )?;
                 for row in &batch {
                     stmt.execute(params![
                         row.hash as i64,
                         row.path,
+                        row.content_path,
                         row.byte_offset as i64,
                         row.byte_len as i64
                     ])?;
@@ -771,11 +813,12 @@ fn index_file_batch(db_path: &Path, files: &[PathBuf], rule: &FileRule) -> Resul
         let files_w = files_arc.clone();
         let batch_tx = batch_tx.clone();
         let rule_w = rule.clone();
+        let extracted_root = extracted_root.to_path_buf();
         file_workers.push(thread::spawn(move || {
             let mut idx = worker_id;
             while idx < files_w.len() {
                 let path = &files_w[idx];
-                if let Err(e) = index_one_file(path, &rule_w, &batch_tx) {
+                if let Err(e) = index_one_file(path, &rule_w, &extracted_root, &batch_tx) {
                     tracing::warn!(path = %path.display(), error = %e, "index file failed");
                 }
                 idx += workers;
@@ -802,7 +845,10 @@ fn count_signatures(db_path: &Path) -> Result<u64> {
 fn write_current_pointer(rule_base: &Path, generation: u64) -> Result<()> {
     fs::create_dir_all(rule_base)?;
     let tmp = rule_base.join(format!("{CURRENT_FILE}.tmp"));
-    let pointer = CurrentPointer { generation };
+    let pointer = CurrentPointer {
+        generation,
+        format: INDEX_FORMAT,
+    };
     fs::write(&tmp, serde_json::to_string(&pointer)?)?;
     fs::rename(tmp, rule_base.join(CURRENT_FILE))?;
     Ok(())
@@ -870,9 +916,14 @@ fn matches_format(path: &Path, formats: &[String]) -> bool {
         .unwrap_or(false)
 }
 
-fn index_one_file(path: &Path, rule: &FileRule, tx: &SyncSender<Vec<SigRow>>) -> Result<()> {
+fn index_one_file(
+    path: &Path,
+    rule: &FileRule,
+    extracted_root: &Path,
+    tx: &SyncSender<Vec<SigRow>>,
+) -> Result<()> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        index_one_file_impl(path, rule, tx)
+        index_one_file_impl(path, rule, extracted_root, tx)
     })) {
         Ok(result) => result,
         Err(_) => {
@@ -888,41 +939,103 @@ fn extract_text_safe(path: &Path) -> Option<String> {
         .flatten()
 }
 
-fn index_one_file_impl(path: &Path, rule: &FileRule, tx: &SyncSender<Vec<SigRow>>) -> Result<()> {
+fn uses_extracted_text_index(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "pdf" | "doc" | "docx" | "ppt" | "pptx"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn sidecar_path(extracted_root: &Path, original_path: &str) -> PathBuf {
+    let hash = xxh64(original_path.as_bytes(), 0);
+    extracted_root.join(format!("{hash:016x}.txt"))
+}
+
+struct IndexableBytes {
+    data: Vec<u8>,
+    is_extracted: bool,
+}
+
+/// Raw file bytes for plain text; extracted UTF-8 for PDF/Office when possible.
+fn indexable_bytes(path: &Path, require_extract: bool) -> Result<Option<IndexableBytes>> {
+    if require_extract {
+        if let Some(text) = extract_text_safe(path).filter(|t| !t.is_empty()) {
+            return Ok(Some(IndexableBytes {
+                data: text.into_bytes(),
+                is_extracted: true,
+            }));
+        }
+        // Real PDFs must be indexed from extracted text (pdftotext haystack). Misnamed/plain
+        // `.pdf` fixtures (no %PDF header) fall back to raw bytes for tests and edge cases.
+        if looks_like_pdf_file(path)? {
+            return Ok(None);
+        }
+    }
+    let size = fs::metadata(path)?.len();
+    if size == 0 {
+        return Ok(None);
+    }
+    let data = read_file_bytes(path, size)?;
+    if data.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(IndexableBytes {
+        data,
+        is_extracted: false,
+    }))
+}
+
+fn looks_like_pdf_file(path: &Path) -> Result<bool> {
+    let mut f = File::open(path)?;
+    let mut buf = [0u8; 5];
+    let n = f.read(&mut buf)?;
+    Ok(n >= 4 && &buf[..4] == b"%PDF")
+}
+
+fn index_one_file_impl(
+    path: &Path,
+    rule: &FileRule,
+    extracted_root: &Path,
+    tx: &SyncSender<Vec<SigRow>>,
+) -> Result<()> {
     let meta = fs::metadata(path)?;
     let size = meta.len();
     let path_str = normalize_index_path(path);
 
-    if size <= rule.index.max_full_file_bytes && rule.match_mode == MatchMode::Full {
-        let data = read_file_bytes(path, size)?;
-        if data.is_empty() {
+    if size <= INDEX_READ_CAP {
+        if let Some(bytes) = indexable_bytes(path, uses_extracted_text_index(path))? {
+            let (content_path, data) = if bytes.is_extracted {
+                fs::create_dir_all(extracted_root)?;
+                let sidecar = sidecar_path(extracted_root, &path_str);
+                fs::write(&sidecar, &bytes.data)?;
+                (
+                    sidecar.to_string_lossy().replace('\\', "/"),
+                    bytes.data,
+                )
+            } else {
+                (path_str.clone(), bytes.data)
+            };
+            let mut rows = Vec::new();
+            if rule.match_mode == MatchMode::Full && data.len() as u64 <= rule.index.max_full_file_bytes {
+                push_chunk_signatures(&data, 0, &path_str, &content_path, rule, &mut rows);
+            } else {
+                index_bytes_chunks(&data, 0, &path_str, &content_path, rule, &mut rows);
+            }
+            if !rows.is_empty() {
+                let _ = tx.send(rows);
+            }
             return Ok(());
         }
-        let mut rows = Vec::new();
-        push_chunk_signatures(&data, 0, &path_str, rule, &mut rows);
-        if !rows.is_empty() {
-            let _ = tx.send(rows);
-        }
-        return Ok(());
-    }
-
-    if size <= INDEX_READ_CAP {
-        if let Some(text) = extract_text_safe(path) {
-            if !text.is_empty() {
-                let bytes = text.into_bytes();
-                let mut rows = Vec::new();
-                index_bytes_chunks(&bytes, 0, &path_str, rule, &mut rows);
-                if !rows.is_empty() {
-                    let _ = tx.send(rows);
-                }
-                return Ok(());
-            }
-        }
-        let data = read_file_bytes(path, size)?;
-        let mut rows = Vec::new();
-        index_bytes_chunks(&data, 0, &path_str, rule, &mut rows);
-        if !rows.is_empty() {
-            let _ = tx.send(rows);
+        if uses_extracted_text_index(path) {
+            tracing::warn!(
+                path = %path.display(),
+                "document text extract failed; skipping file index"
+            );
         }
         return Ok(());
     }
@@ -954,7 +1067,7 @@ fn stream_index_file(path: &Path, path_str: &str, rule: &FileRule, tx: &SyncSend
         }
         carry.extend_from_slice(&read_buf[..n]);
         while carry.len() >= chunk_size {
-            push_chunk_signatures(&carry[..chunk_size], file_offset, path_str, rule, &mut batch);
+            push_chunk_signatures(&carry[..chunk_size], file_offset, path_str, path_str, rule, &mut batch);
             if batch.len() >= 5000 {
                 let _ = tx.send(std::mem::take(&mut batch));
             }
@@ -968,7 +1081,7 @@ fn stream_index_file(path: &Path, path_str: &str, rule: &FileRule, tx: &SyncSend
         }
     }
     if !carry.is_empty() {
-        push_chunk_signatures(&carry, file_offset, path_str, rule, &mut batch);
+        push_chunk_signatures(&carry, file_offset, path_str, path_str, rule, &mut batch);
     }
     if !batch.is_empty() {
         let _ = tx.send(batch);
@@ -976,14 +1089,28 @@ fn stream_index_file(path: &Path, path_str: &str, rule: &FileRule, tx: &SyncSend
     Ok(())
 }
 
-fn index_bytes_chunks(data: &[u8], base_offset: u64, path_str: &str, rule: &FileRule, rows: &mut Vec<SigRow>) {
+fn index_bytes_chunks(
+    data: &[u8],
+    base_offset: u64,
+    path_str: &str,
+    content_path: &str,
+    rule: &FileRule,
+    rows: &mut Vec<SigRow>,
+) {
     let chunk_size = rule.index.chunk_size;
     let overlap = rule.index.chunk_overlap;
     let step = chunk_size.saturating_sub(overlap).max(1);
     let mut offset = 0usize;
     while offset < data.len() {
         let end = (offset + chunk_size).min(data.len());
-        push_chunk_signatures(&data[offset..end], base_offset + offset as u64, path_str, rule, rows);
+        push_chunk_signatures(
+            &data[offset..end],
+            base_offset + offset as u64,
+            path_str,
+            content_path,
+            rule,
+            rows,
+        );
         if end >= data.len() {
             break;
         }
@@ -995,6 +1122,7 @@ fn push_chunk_signatures(
     chunk: &[u8],
     byte_offset: u64,
     path: &str,
+    content_path: &str,
     rule: &FileRule,
     rows: &mut Vec<SigRow>,
 ) {
@@ -1014,6 +1142,7 @@ fn push_chunk_signatures(
     rows.push(SigRow {
         hash: h0,
         path: path.to_string(),
+        content_path: content_path.to_string(),
         byte_offset: chunk_start,
         byte_len: chunk_len,
     });
@@ -1039,6 +1168,7 @@ fn push_chunk_signatures(
             rows.push(SigRow {
                 hash: xxh64(slice.as_bytes(), 0),
                 path: path.to_string(),
+                content_path: content_path.to_string(),
                 byte_offset: chunk_start,
                 byte_len: chunk_len,
             });
@@ -1500,7 +1630,7 @@ fn verify_normalized_match(
     rule: &FileRule,
 ) -> Option<(usize, usize)> {
     let mut stmt = conn
-        .prepare("SELECT path, byte_offset, byte_len FROM signatures WHERE sig_hash = ?1 LIMIT 16")
+        .prepare("SELECT path, content_path, byte_offset, byte_len FROM signatures WHERE sig_hash = ?1 LIMIT 16")
         .ok()?;
     let mut rows = stmt.query(params![hash as i64]).ok()?;
     while let Ok(Some(row)) = rows.next() {
@@ -1512,12 +1642,14 @@ fn verify_normalized_match(
         {
             continue;
         }
-        let chunk_start: i64 = row.get(1).unwrap_or(0);
-        let chunk_len: i32 = row.get(2).unwrap_or(0);
+        let content_path: String = row.get(1).unwrap_or_default();
+        let chunk_start: i64 = row.get(2).unwrap_or(0);
+        let chunk_len: i32 = row.get(3).unwrap_or(0);
         if chunk_len <= 0 {
             continue;
         }
-        let Some(raw_chunk) = read_literal_string(&path, chunk_start as u64, chunk_len as u32) else {
+        let read_path = if content_path.is_empty() { path.as_str() } else { content_path.as_str() };
+        let Some(raw_chunk) = read_literal_string(read_path, chunk_start as u64, chunk_len as u32) else {
             continue;
         };
         let index_norm = normalize_with_map(&raw_chunk);
@@ -1961,16 +2093,17 @@ mod tests {
             },
         };
 
-        let index_root = tmp.path().join("idx");
-        let snap1 = build_rule_index(&index_root, &rule).unwrap();
+        let index_root = TempDir::new().unwrap();
+        let snap1 = build_rule_index(index_root.path(), &rule).unwrap();
         let gen1 = snap1.generation;
 
-        let snap2 = build_rule_index(&index_root, &rule).unwrap();
+        let snap2 = build_rule_index(index_root.path(), &rule).unwrap();
         assert_eq!(snap2.generation, gen1, "unchanged files reuse prior snapshot");
 
         fs::write(&a, test_secret("ALPHA-SECRET-ONE-MODIFIED")).unwrap();
-        let snap3 = build_rule_index(&index_root, &rule).unwrap();
+        let snap3 = build_rule_index(index_root.path(), &rule).unwrap();
         let manifest_path = index_root
+            .path()
             .join("inc")
             .join(GEN_DIR)
             .join(snap3.generation.to_string())
