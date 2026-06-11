@@ -2,6 +2,7 @@ use bytes::Bytes;
 use smr_protocol::{extract_texts, inject_response_texts, parse_json_body, serialize_json_body};
 
 use crate::ops::OperationSecurity;
+use crate::sse_tool_ops::transform_buffered_sse_ops;
 
 /// Scan SSE chunks: DLP (response-side file/content redaction) and operation security.
 pub fn process_sse_response(
@@ -10,15 +11,30 @@ pub fn process_sse_response(
     dlp: Option<&crate::dlp::DlpEngine>,
     ops: Option<&OperationSecurity>,
 ) -> anyhow::Result<(Bytes, u32, u32, u32)> {
-    let text = String::from_utf8_lossy(body);
-    let mut modified = false;
-    let mut new_body = String::new();
+    let mut text = body.to_vec();
     let mut blocks = 0u32;
     let mut observes = 0u32;
     let mut dlp_count = 0u32;
+    let mut modified = false;
+
+    if ops.is_some() {
+        let body_str = String::from_utf8_lossy(&text);
+        let (transformed, gate_blocks) = transform_buffered_sse_ops(&body_str, ops);
+        if gate_blocks > 0 {
+            modified = true;
+            blocks += gate_blocks;
+        }
+        if transformed != body_str {
+            modified = true;
+            text = transformed.into_bytes();
+        }
+    }
+
+    let body_str = String::from_utf8_lossy(&text);
+    let mut new_body = String::new();
     let mut saw_first_token = false;
 
-    for line in text.lines() {
+    for line in body_str.lines() {
         if let Some(data) = line.strip_prefix("data: ") {
             if data.trim() == "[DONE]" {
                 new_body.push_str(line);
@@ -35,23 +51,6 @@ pub fn process_sse_response(
                     let (replacements, count) =
                         dlp.process_response(session_id, &json, &extracted)?;
                     dlp_count += count as u32;
-                    if !replacements.is_empty() {
-                        inject_response_texts(&mut json, &replacements)?;
-                        let patched = String::from_utf8(serialize_json_body(&json)?)?;
-                        new_body.push_str("data: ");
-                        new_body.push_str(&patched);
-                        new_body.push('\n');
-                        modified = true;
-                        continue;
-                    }
-                }
-
-                if let Some(ops) = ops {
-                    let extracted = extract_texts(&json)?;
-                    let tool_only = smr_protocol::filter_tool_related(&json, &extracted);
-                    let (replacements, b, o) = ops.process_fields_with_mode(&tool_only)?;
-                    blocks += b;
-                    observes += o;
                     if !replacements.is_empty() {
                         inject_response_texts(&mut json, &replacements)?;
                         let patched = String::from_utf8(serialize_json_body(&json)?)?;

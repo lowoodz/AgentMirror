@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::Bytes;
 use smr_protocol::{
-    detect_protocol, extract_texts, filter_tool_related, inject_response_texts, inject_texts,
+    detect_protocol, extract_texts, filter_ops_request_fields, filter_tool_related, inject_response_texts, inject_texts,
     parse_json_body, serialize_json_body, ApiProtocol,
 };
 use tracing::info;
@@ -113,9 +113,9 @@ impl ProxyService {
             }
 
             if snap.config.pipeline.ops_active() {
-                let tool_only = filter_tool_related(&json, &extracted);
+                let ops_fields = filter_ops_request_fields(&json, &extracted);
                 let (ops_replacements, blocks, observes) =
-                    snap.ops.process_fields_with_mode(&tool_only)?;
+                    snap.ops.process_fields_with_mode(&ops_fields)?;
                 safety_blocks += blocks;
                 safety_observations += observes;
                 if !ops_replacements.is_empty() {

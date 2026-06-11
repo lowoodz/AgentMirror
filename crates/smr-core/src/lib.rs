@@ -17,6 +17,7 @@ pub mod session_key;
 pub mod sse_stream;
 pub mod state;
 pub mod storage;
+pub mod sse_tool_ops;
 pub mod streaming;
 pub mod tool_bundle;
 pub mod traffic;

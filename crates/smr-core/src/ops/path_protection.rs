@@ -184,9 +184,82 @@ fn extract_paths(text: &str) -> (Vec<String>, bool, bool, bool) {
         }
     }
 
+    if looks_like_plain_shell_command(text) {
+        from_exec_command = true;
+        for token in extract_plain_absolute_paths(text) {
+            paths.push(token);
+            explicit_path = true;
+        }
+    }
+
     paths.sort();
     paths.dedup();
     (paths, explicit_path, write_payload, from_exec_command)
+}
+
+fn looks_like_plain_shell_command(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains(" ls ")
+        || lower.starts_with("ls ")
+        || lower.contains(" stat ")
+        || lower.starts_with("stat ")
+        || lower.contains(" cat ")
+        || lower.starts_with("cat ")
+        || lower.contains(" rm ")
+        || lower.starts_with("rm ")
+        || lower.contains(" read_file")
+        || lower.contains(" write_file")
+}
+
+fn extract_plain_absolute_paths(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let start = if i + 1 < bytes.len() && bytes[i] == b'/' {
+            Some(i)
+        } else if i + 2 < bytes.len()
+            && bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1] == b':'
+            && matches!(bytes[i + 2], b'/' | b'\\')
+        {
+            Some(i)
+        } else {
+            None
+        };
+
+        if let Some(start) = start {
+            let mut end = start;
+            while end < bytes.len() {
+                let b = bytes[end];
+                let drive_colon =
+                    end == start + 1 && b == b':' && bytes[start].is_ascii_alphabetic();
+                if b.is_ascii() {
+                    if b.is_ascii_alphanumeric()
+                        || b"/\\._-".contains(&b)
+                        || drive_colon
+                        || b" #+()[]@!$&',;=~".contains(&b)
+                    {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    end += 1;
+                }
+            }
+            let slice = &text[start..end];
+            if slice.len() > 2 && looks_like_path(slice.trim()) {
+                out.push(slice.trim().to_string());
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn has_write_payload(value: &serde_json::Value) -> bool {
@@ -424,6 +497,17 @@ mod tests {
         assert!(
             guard.check(&cmd).is_some(),
             "exec pdftotext on protected file should be blocked"
+        );
+    }
+
+    #[test]
+    fn deny_access_blocks_plain_user_ls_path() {
+        let base = "/data/test-vault";
+        let guard = PathProtection::new(&[rule("p1", base, PathProtectionLevel::DenyAccess)]);
+        let user = format!("ls {base}/report.md 查看文件大小");
+        assert!(
+            guard.check(&user).is_some(),
+            "plain user ls on protected path should be blocked"
         );
     }
 

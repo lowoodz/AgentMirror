@@ -85,33 +85,49 @@ impl OperationSecurity {
         let mut blocks = 0u32;
         let mut observes = 0u32;
         for item in extracted {
-            if let Some(matched) = self.check_text(&item.text) {
-                let (enforce, rule_id, observe_kind) = match &matched {
-                    SecurityMatch::Operation { rule_id, .. } => (
-                        self.operation_mode == OperationSecurityMode::Enforce,
-                        rule_id.as_str(),
-                        "operation security",
-                    ),
-                    SecurityMatch::PathProtection { rule_id, .. } => (
-                        self.path_protection_mode == OperationSecurityMode::Enforce,
-                        rule_id.as_str(),
-                        "path protection",
-                    ),
-                };
-                if enforce {
-                    replacements.push((item.clone(), matched.payload()));
+            if let Some((payload, enforced)) = self.check_and_enforce(&item.text) {
+                if enforced {
+                    replacements.push((item.clone(), payload));
                     blocks += 1;
                 } else {
                     observes += 1;
-                    tracing::warn!(
-                        rule_id = %rule_id,
-                        kind = observe_kind,
-                        "security observe: policy match detected"
-                    );
                 }
             }
         }
         Ok((replacements, blocks, observes))
+    }
+
+    /// Assembled streaming tool-call arguments (e.g. exec JSON). Returns blocked payload when enforce triggers.
+    pub fn enforce_tool_call(&self, arguments: &str) -> Option<String> {
+        self.check_and_enforce(arguments)
+            .filter(|(_, enforced)| *enforced)
+            .map(|(payload, _)| payload)
+    }
+
+    fn check_and_enforce(&self, text: &str) -> Option<(String, bool)> {
+        let matched = self.check_text(text)?;
+        let (enforce, rule_id, observe_kind) = match &matched {
+            SecurityMatch::Operation { rule_id, .. } => (
+                self.operation_mode == OperationSecurityMode::Enforce,
+                rule_id.as_str(),
+                "operation security",
+            ),
+            SecurityMatch::PathProtection { rule_id, .. } => (
+                self.path_protection_mode == OperationSecurityMode::Enforce,
+                rule_id.as_str(),
+                "path protection",
+            ),
+        };
+        if enforce {
+            Some((matched.payload(), true))
+        } else {
+            tracing::warn!(
+                rule_id = %rule_id,
+                kind = observe_kind,
+                "security observe: policy match detected"
+            );
+            Some((matched.payload(), false))
+        }
     }
 
     fn check_text(&self, text: &str) -> Option<SecurityMatch> {
@@ -175,6 +191,8 @@ fn is_command_exec(text: &str) -> bool {
         || lower.contains("shell")
         || lower.contains("\"command\"")
         || lower.contains("rm -rf")
+        || lower.contains("rm -f")
+        || lower.contains("rm -r")
         || lower.contains("sudo ")
 }
 
@@ -415,6 +433,35 @@ mod tests {
             text: r#"{"path":"/secure/vault/secret.txt"}"#.into(),
         }];
         let out = ops.process_fields(&path).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].1.contains("路径防护"));
+    }
+
+    #[test]
+    fn blocks_user_message_with_protected_path() {
+        use crate::config::{PathProtectionLevel, PathProtectionRule};
+        use std::path::PathBuf;
+
+        let ops = OperationSecurity::new(
+            &[],
+            &[PathProtectionRule {
+                id: "vault".into(),
+                enabled: true,
+                path: PathBuf::from("/data/vault"),
+                level: PathProtectionLevel::DenyAccess,
+            }],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        )
+        .unwrap();
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "ls /data/vault/secret.md 查看大小"}
+            ]
+        });
+        let extracted = smr_protocol::extract_texts(&body).unwrap();
+        let fields = smr_protocol::filter_ops_request_fields(&body, &extracted);
+        let out = ops.process_fields(&fields).unwrap();
         assert_eq!(out.len(), 1);
         assert!(out[0].1.contains("路径防护"));
     }

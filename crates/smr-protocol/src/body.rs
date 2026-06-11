@@ -124,6 +124,37 @@ pub fn filter_tool_related(body: &Value, extracted: &[ExtractedText]) -> Vec<Ext
         .collect()
 }
 
+/// Request-side operation/path scan: tool calls plus user-authored message text.
+pub fn filter_ops_request_fields(body: &Value, extracted: &[ExtractedText]) -> Vec<ExtractedText> {
+    extracted
+        .iter()
+        .filter(|e| is_tool_related(e, body) || is_user_message_content(e, body))
+        .cloned()
+        .collect()
+}
+
+fn is_user_message_content(extracted: &ExtractedText, body: &Value) -> bool {
+    match &extracted.pointer {
+        TextPointer::OpenAiMessageString { message_index }
+        | TextPointer::OpenAiMessageContent { message_index } => {
+            message_role(body, *message_index) == Some("user")
+        }
+        TextPointer::AnthropicContentBlock {
+            message_index,
+            block_index,
+        } => {
+            if message_role(body, *message_index) != Some("user") {
+                return false;
+            }
+            anthropic_block(body, *message_index, *block_index)
+                .and_then(|b| b.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("text")
+        }
+        _ => false,
+    }
+}
+
 /// Tool result bodies sent back to the model (OpenAI `role: tool`, Anthropic `tool_result`).
 pub fn is_tool_result_content(extracted: &ExtractedText, body: &Value) -> bool {
     match &extracted.pointer {
@@ -481,5 +512,19 @@ mod tests {
         let model_input = filter_model_input(&body, &extracted);
         assert_eq!(model_input.len(), 2);
         assert!(model_input.iter().all(|e| e.text == "hello" || e.text == "tool output"));
+    }
+
+    #[test]
+    fn ops_request_fields_include_user_messages() {
+        let body = json!({
+            "messages": [
+                {"role": "user", "content": "ls /tmp"},
+                {"role": "assistant", "content": "ok"}
+            ]
+        });
+        let extracted = extract_texts(&body).unwrap();
+        let ops_fields = filter_ops_request_fields(&body, &extracted);
+        assert_eq!(ops_fields.len(), 1);
+        assert_eq!(ops_fields[0].text, "ls /tmp");
     }
 }
