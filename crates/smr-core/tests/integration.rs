@@ -732,8 +732,10 @@ async fn provider_model_id_selects_fallback_group() {
 
 #[tokio::test]
 async fn universal_api_messages_path_alias() {
-    let upstream = spawn_mock_upstream(false).await;
-    let config = test_config(&upstream);
+    let upstream = spawn_mock_anthropic_upstream().await;
+    let mut config = test_config(&upstream);
+    config.fallback_groups.get_mut("high").unwrap()[0].protocol = Some("anthropic".into());
+    config.fallback_groups.get_mut("high").unwrap()[0].model = "claude-mock".into();
     let (app, proxy) = make_app(config);
 
     let body = serde_json::json!({

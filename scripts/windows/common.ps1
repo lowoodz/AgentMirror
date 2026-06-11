@@ -27,6 +27,11 @@ function Set-SmrBuildEnv {
     $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
     $env:CARGO_TARGET_DIR = Join-Path $Root "target"
     $env:PYTHONUTF8 = "1"
+    $homePrefix = if ($env:USERPROFILE) { "$($env:USERPROFILE)\" } else { "" }
+    if ($homePrefix) {
+        $extra = "--remap-path-prefix=$homePrefix=~/"
+        if ($env:RUSTFLAGS) { $env:RUSTFLAGS = "$env:RUSTFLAGS $extra" } else { $env:RUSTFLAGS = $extra }
+    }
     if ($env:CI -or $env:GITHUB_ACTIONS) {
         $env:CI = "true"
     }

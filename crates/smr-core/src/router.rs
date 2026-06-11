@@ -12,7 +12,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
-use smr_protocol::ApiProtocol;
+use smr_protocol::{convert_body, target_path, ApiProtocol};
 use tracing::{info, warn};
 
 use crate::config::{AppConfig, ModelEndpoint};
@@ -46,6 +46,9 @@ pub struct Router {
 pub struct ForwardOptions {
     pub wants_stream: bool,
     pub client_protocol: ApiProtocol,
+    /// When true (explicit `X-SMR-Fallback-Group`), route to endpoints whose upstream
+    /// protocol differs from the client and convert request/response bodies.
+    pub allow_cross_protocol: bool,
 }
 
 impl Default for ForwardOptions {
@@ -53,6 +56,7 @@ impl Default for ForwardOptions {
         Self {
             wants_stream: false,
             client_protocol: ApiProtocol::OpenAi,
+            allow_cross_protocol: false,
         }
     }
 }
@@ -122,7 +126,10 @@ impl Router {
     ) -> Result<RouteResult> {
         let mut last_error: Option<RouteAttempt> = None;
         let mut chain: Vec<String> = Vec::new();
-        let endpoints = filter_endpoints_for_client(group, opts.client_protocol);
+        let mut endpoints = filter_endpoints_for_client(group, opts.client_protocol);
+        if endpoints.is_empty() && opts.allow_cross_protocol {
+            endpoints = group.to_vec();
+        }
         if endpoints.is_empty() {
             return Err(anyhow!(
                 "fallback group '{group_name}' has no upstream with protocol {:?}",
@@ -155,7 +162,7 @@ impl Router {
                 Ok(attempt)
                     if opts.wants_stream
                         && is_sse(&attempt.headers)
-                        && matches!(attempt.body, RouteBody::Buffered(ref b) if !sse_has_first_token(b)) =>
+                        && matches!(attempt.body, RouteBody::Buffered(ref b) if sse_is_empty_for_fallback(b)) =>
                 {
                     warn!(model = %endpoint.model, "fallback triggered (stream: no first token)");
                     last_error = Some(attempt);
@@ -209,13 +216,16 @@ impl Router {
         req: &ForwardRequest<'_>,
         wants_stream: bool,
     ) -> Result<RouteAttempt> {
+        let client_protocol = req.protocol;
         let target_protocol = endpoint.resolve_protocol();
-        debug_assert_eq!(
-            req.protocol, target_protocol,
-            "forward_once called with protocol-mismatched endpoint"
-        );
         let mut path = req.path.to_string();
-        let body = patch_model_in_body(req.body.clone(), &endpoint.model)?;
+        let mut body = patch_model_in_body(req.body.clone(), &endpoint.model)?;
+        if client_protocol != target_protocol {
+            let json: Value = serde_json::from_slice(&body).context("cross-protocol request parse")?;
+            let converted = convert_body(&json, client_protocol, target_protocol);
+            body = Bytes::from(serde_json::to_vec(&converted)?);
+            path = target_path(&path, target_protocol == ApiProtocol::Anthropic);
+        }
 
         let base = endpoint.base_url.trim_end_matches('/');
         path = normalize_upstream_path(base, &path);
@@ -405,6 +415,21 @@ fn is_sse(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+/// True when a streaming response has no usable SSE payload (only `[DONE]` / blank lines).
+/// Tool-call-only streams are not empty — they must be buffered for ops gating, not fallback.
+pub fn sse_is_empty_for_fallback(body: &[u8]) -> bool {
+    for line in String::from_utf8_lossy(body).lines() {
+        let Some(data) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        let trimmed = data.trim();
+        if !trimmed.is_empty() && trimmed != "[DONE]" {
+            return false;
+        }
+    }
+    true
+}
+
 pub fn sse_has_first_token(body: &[u8]) -> bool {
     for line in String::from_utf8_lossy(body).lines() {
         let Some(data) = line.strip_prefix("data: ") else {
@@ -557,6 +582,16 @@ mod tests {
     #[test]
     fn no_token_in_empty_sse() {
         let body = b"data: [DONE]\n\n";
+        assert!(sse_is_empty_for_fallback(body));
+        assert!(!sse_has_first_token(body));
+    }
+
+    #[test]
+    fn tool_call_only_sse_is_not_empty_for_fallback() {
+        let body = br#"data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{}"}}]}}]}}
+data: [DONE]
+"#;
+        assert!(!sse_is_empty_for_fallback(body));
         assert!(!sse_has_first_token(body));
     }
 

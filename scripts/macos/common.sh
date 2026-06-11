@@ -18,6 +18,8 @@ smr_set_build_env() {
   export PATH="${HOME}/.cargo/bin:${PATH}"
   export CARGO_TARGET_DIR="${root}/target"
   export PYTHONUTF8=1
+  # Avoid embedding builder paths in release binary strings (panic/backtrace/linker metadata).
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${HOME}/=~/ --remap-path-prefix=${root}/=."
 }
 
 smr_stop_processes() {

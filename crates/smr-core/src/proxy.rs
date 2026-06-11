@@ -15,7 +15,7 @@ use crate::events::EventKind;
 use crate::provider;
 use crate::proxy_path;
 use crate::request::{ForwardRequest, ProxyBody, ProxyRequest, ProxyResponse};
-use crate::router::{ForwardOptions, RouteBody, RouteResult};
+use crate::router::{convert_response_body, ForwardOptions, RouteBody, RouteResult};
 use crate::sse_sanitize::sanitize_openai_client_json;
 use crate::sse_stream::SseTransformConfig;
 use crate::state::SharedApp;
@@ -75,6 +75,7 @@ impl ProxyService {
             .as_deref()
             .and_then(provider::resolve_group_from_model);
         let client_public_model = group_from_model.map(provider::public_model_id);
+        let explicit_fallback_group = fallback_group.is_some();
         let effective_fallback_group = fallback_group
             .map(|s| s.to_string())
             .or_else(|| group_from_model.map(|s| s.to_string()));
@@ -212,17 +213,19 @@ impl ProxyService {
                 ForwardOptions {
                     wants_stream,
                     client_protocol,
+                    allow_cross_protocol: explicit_fallback_group,
                 },
             )
             .await?;
 
         let endpoint_protocol = attempt.endpoint.resolve_protocol();
-        debug_assert_eq!(client_protocol, endpoint_protocol);
         let mut resp_headers = attempt.headers;
 
         let needs_stream_transform = wants_stream
             || snap.config.pipeline.dlp_active()
             || snap.config.pipeline.ops_active();
+
+        let cross_protocol = client_protocol != endpoint_protocol;
 
         let proxy_body = match attempt.body {
             RouteBody::SseStream(stream) => {
@@ -241,7 +244,11 @@ impl ProxyService {
                             } else {
                                 None
                             },
-                            protocol: None,
+                            protocol: if cross_protocol {
+                                Some((endpoint_protocol, client_protocol))
+                            } else {
+                                None
+                            },
                         },
                     )
                 } else {
@@ -354,6 +361,21 @@ impl ProxyService {
                     && attempt.status.is_success()
                     && !resp_body.is_empty()
                 {
+                    if cross_protocol {
+                        let resp_is_json = resp_headers
+                            .get(http::header::CONTENT_TYPE)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|v| v.contains("application/json"))
+                            .unwrap_or(false);
+                        if resp_is_json {
+                            resp_body = convert_response_body(
+                                &resp_body,
+                                endpoint_protocol,
+                                client_protocol,
+                            )?;
+                        }
+                    }
+
                     let resp_is_json = resp_headers
                         .get(http::header::CONTENT_TYPE)
                         .and_then(|v| v.to_str().ok())
