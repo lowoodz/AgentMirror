@@ -13,13 +13,19 @@ struct AccumulatedCall {
     arguments: String,
 }
 
-/// Holds partial OpenAI-style `delta.tool_calls` until `finish_reason: tool_calls`.
+/// Holds partial OpenAI-style `delta.tool_calls` until the stream is complete.
 #[derive(Default)]
 pub struct SseToolCallGate {
     active: bool,
     model: Option<String>,
-    buffered_lines: Vec<String>,
+    /// Tool-call SSE payloads (without `data: ` prefix), in arrival order.
+    tool_lines: Vec<String>,
+    /// Some providers emit `finish_reason: tool_calls` before tool deltas.
+    pending_finish: Option<String>,
     calls: BTreeMap<usize, AccumulatedCall>,
+    /// When the first args fragment does not start with `{`, fragments arrive tail-first
+    /// (DeepSeek) and clients prepend each chunk when assembling.
+    args_prepend_order: Option<bool>,
 }
 
 pub enum GateLineOutcome {
@@ -43,9 +49,8 @@ impl SseToolCallGate {
         };
         let trimmed = data.trim();
         if trimmed == "[DONE]" {
-            if self.active {
-                self.buffered_lines.push(trimmed.to_string());
-                return self.finalize(ops);
+            if self.active || self.pending_finish.is_some() {
+                return self.finalize(ops, true);
             }
             return GateLineOutcome::Forward(line.to_vec());
         }
@@ -60,33 +65,34 @@ impl SseToolCallGate {
             }
         }
 
-        let finish_tool_calls = json
-            .get("choices")
-            .and_then(|c| c.get(0))
+        let choice = json.get("choices").and_then(|c| c.get(0));
+        let finish_tool_calls = choice
             .and_then(|c| c.get("finish_reason"))
             .and_then(|v| v.as_str())
             == Some("tool_calls");
 
-        if let Some(delta) = json
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("delta"))
-        {
+        if let Some(delta) = choice.and_then(|c| c.get("delta")) {
             if delta.get("tool_calls").is_some() {
                 self.active = true;
                 self.merge_delta_tool_calls(delta);
-                self.buffered_lines.push(trimmed.to_string());
+                self.tool_lines.push(trimmed.to_string());
                 if finish_tool_calls {
-                    return self.finalize(ops);
+                    self.pending_finish = None;
+                    return self.finalize(ops, false);
                 }
                 return GateLineOutcome::Hold;
             }
         }
 
+        if finish_tool_calls && !self.active {
+            self.pending_finish = Some(trimmed.to_string());
+            return GateLineOutcome::Hold;
+        }
+
         if self.active {
-            self.buffered_lines.push(trimmed.to_string());
             if finish_tool_calls {
-                return self.finalize(ops);
+                self.pending_finish = None;
+                return self.finalize(ops, false);
             }
             return GateLineOutcome::Hold;
         }
@@ -120,37 +126,70 @@ impl SseToolCallGate {
                 .and_then(|f| f.get("arguments"))
                 .and_then(|v| v.as_str())
             {
-                entry.arguments.push_str(args);
+                merge_argument_fragment(entry, args, &mut self.args_prepend_order);
             }
         }
     }
 
-    fn finalize(&mut self, ops: Option<&OperationSecurity>) -> GateLineOutcome {
+    fn finalize(&mut self, ops: Option<&OperationSecurity>, append_done: bool) -> GateLineOutcome {
         let model = self.model.clone().unwrap_or_else(|| "unknown".into());
         let calls: Vec<_> = self.calls.values().cloned().collect();
-        let buffered = std::mem::take(&mut self.buffered_lines);
+        let mut tool_lines = std::mem::take(&mut self.tool_lines);
+        let pending_finish = self.pending_finish.take();
+        let prepend = self.args_prepend_order.unwrap_or(false);
         self.active = false;
         self.calls.clear();
+        self.args_prepend_order = None;
 
         if let Some(ops) = ops {
             for call in &calls {
                 if !call.arguments.is_empty() {
                     if let Some(blocked) = ops.enforce_tool_call(&call.arguments) {
-                        return GateLineOutcome::Release(emit_blocked_tool_stream(
-                            call, &blocked, &model,
-                        ));
+                        let mut out = emit_blocked_tool_stream(
+                            call,
+                            &blocked,
+                            &model,
+                        );
+                        if append_done {
+                            out.push(b"data: [DONE]\n".to_vec());
+                        }
+                        return GateLineOutcome::Release(out);
                     }
                 }
             }
         }
 
-        GateLineOutcome::Release(replay_lines(&buffered))
+        if prepend {
+            tool_lines.reverse();
+        }
+        let mut out = replay_lines(&tool_lines);
+        if let Some(finish) = pending_finish {
+            out.extend(replay_lines(&[finish]));
+        }
+        if append_done {
+            out.push(b"data: [DONE]\n".to_vec());
+        }
+        GateLineOutcome::Release(out)
     }
+}
 
-    fn reset(&mut self) {
-        self.active = false;
-        self.buffered_lines.clear();
-        self.calls.clear();
+fn merge_argument_fragment(
+    entry: &mut AccumulatedCall,
+    fragment: &str,
+    prepend_order: &mut Option<bool>,
+) {
+    if fragment.is_empty() {
+        return;
+    }
+    if entry.arguments.is_empty() {
+        *prepend_order = Some(!fragment.starts_with('{'));
+        entry.arguments.push_str(fragment);
+        return;
+    }
+    if prepend_order.unwrap_or(false) {
+        entry.arguments = format!("{fragment}{}", entry.arguments);
+    } else {
+        entry.arguments.push_str(fragment);
     }
 }
 
@@ -242,7 +281,8 @@ pub fn transform_buffered_sse_ops(body: &str, ops: Option<&OperationSecurity>) -
             }
             GateLineOutcome::Hold => {}
             GateLineOutcome::Release(lines) => {
-                if lines.len() <= 2 && lines.iter().any(|l| l.windows(11).any(|w| w == b"smr_blocked")) {
+                if lines.len() <= 3 && lines.iter().any(|l| l.windows(11).any(|w| w == b"smr_blocked"))
+                {
                     blocks += 1;
                 }
                 for l in lines {
@@ -273,6 +313,63 @@ mod tests {
             lines.push(format!("data: {c}"));
         }
         lines.join("\n") + "\n"
+    }
+
+    /// DeepSeek-style: finish_reason first, argument fragments tail-first (client prepends).
+    fn sample_deepseek_ls_stream(path: &str) -> String {
+        let cmd = format!(r#"{{"command":"ls {path}"}}"#);
+        let mut frags: Vec<String> = cmd.chars().map(|c| c.to_string()).collect();
+        frags.reverse();
+        let mut lines = vec![
+            r#"{"choices":[{"delta":{"content":""},"finish_reason":"tool_calls","index":0}]}"#.to_string(),
+        ];
+        for frag in frags {
+            lines.push(format!(
+                r#"{{"choices":[{{"delta":{{"tool_calls":[{{"function":{{"arguments":{}}},"index":0}}]}}}}]}}"#,
+                serde_json::to_string(&frag).unwrap()
+            ));
+        }
+        lines.push(r#"{"choices":[{"delta":{"tool_calls":[{"function":{"name":"exec"},"index":0}]}}]}"#.to_string());
+        lines
+            .into_iter()
+            .map(|c| format!("data: {c}"))
+            .chain(["data: [DONE]".to_string()])
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    }
+
+    fn assembled_tool_args(body: &str) -> String {
+        let mut args = String::new();
+        for line in body.lines() {
+            let Some(data) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            if data.trim() == "[DONE]" {
+                continue;
+            }
+            let Ok(json) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            for tc in json
+                .get("choices")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("delta"))
+                .and_then(|d| d.get("tool_calls"))
+                .and_then(|t| t.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(a) = tc
+                    .get("function")
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(|v| v.as_str())
+                {
+                    args.push_str(a);
+                }
+            }
+        }
+        args
     }
 
     #[test]
@@ -317,5 +414,62 @@ mod tests {
         let (out, blocks) = transform_buffered_sse_ops(&stream, Some(&ops));
         assert_eq!(blocks, 0);
         assert!(out.contains("stat /tmp/public"));
+    }
+
+    #[test]
+    fn deepseek_early_finish_releases_ls_in_client_order() {
+        let ops = OperationSecurity::new(
+            &[],
+            &[PathProtectionRule {
+                id: "vault".into(),
+                enabled: true,
+                path: PathBuf::from("/secure/vault"),
+                level: PathProtectionLevel::DenyAccess,
+            }],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        )
+        .unwrap();
+
+        let path = "/data/nlp/table-nlp";
+        let (out, blocks) =
+            transform_buffered_sse_ops(&sample_deepseek_ls_stream(path), Some(&ops));
+        assert_eq!(blocks, 0);
+        assert!(out.contains("finish_reason"));
+        assert!(out.contains("tool_calls"));
+        let args = assembled_tool_args(&out);
+        assert!(
+            args.contains("ls /data/nlp/table-nlp"),
+            "args={args:?}"
+        );
+        let finish_pos = out.find("finish_reason").unwrap_or(0);
+        let tool_pos = out.find(r#""arguments":"#).unwrap_or(usize::MAX);
+        assert!(
+            tool_pos < finish_pos,
+            "tool_call fragments must precede finish_reason for clients"
+        );
+    }
+
+    #[test]
+    fn deepseek_early_finish_blocks_protected_path() {
+        let ops = OperationSecurity::new(
+            &[],
+            &[PathProtectionRule {
+                id: "vault".into(),
+                enabled: true,
+                path: PathBuf::from("/secure/vault"),
+                level: PathProtectionLevel::DenyAccess,
+            }],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        )
+        .unwrap();
+
+        let (out, blocks) = transform_buffered_sse_ops(
+            &sample_deepseek_ls_stream("/secure/vault/secret"),
+            Some(&ops),
+        );
+        assert_eq!(blocks, 1);
+        assert!(out.contains("SMR BLOCKED"));
     }
 }
