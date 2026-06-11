@@ -15,7 +15,7 @@ use crate::events::EventKind;
 use crate::provider;
 use crate::proxy_path;
 use crate::request::{ForwardRequest, ProxyBody, ProxyRequest, ProxyResponse};
-use crate::router::{convert_response_body, ForwardOptions, RouteBody, RouteResult};
+use crate::router::{ForwardOptions, RouteBody, RouteResult};
 use crate::sse_stream::SseTransformConfig;
 use crate::state::SharedApp;
 use crate::streaming::{is_sse_content_type, process_sse_response, request_wants_stream};
@@ -206,11 +206,11 @@ impl ProxyService {
             .await?;
 
         let endpoint_protocol = attempt.endpoint.resolve_protocol();
+        debug_assert_eq!(client_protocol, endpoint_protocol);
         let resp_headers = attempt.headers;
 
-        let needs_stream_transform = snap.config.pipeline.dlp_active()
-            || snap.config.pipeline.ops_active()
-            || (client_protocol != endpoint_protocol);
+        let needs_stream_transform =
+            snap.config.pipeline.dlp_active() || snap.config.pipeline.ops_active();
 
         let proxy_body = match attempt.body {
             RouteBody::SseStream(stream) => {
@@ -229,11 +229,7 @@ impl ProxyService {
                             } else {
                                 None
                             },
-                            protocol: if client_protocol != endpoint_protocol {
-                                Some((endpoint_protocol, client_protocol))
-                            } else {
-                                None
-                            },
+                            protocol: None,
                         },
                     )
                 } else {
@@ -249,18 +245,6 @@ impl ProxyService {
                         &resp_body,
                         traffic_cfg.traffic_max_body_bytes,
                     );
-                }
-
-                if client_protocol != endpoint_protocol
-                    && !resp_body.is_empty()
-                    && attempt.status.is_success()
-                    && !is_sse_content_type(&resp_headers)
-                {
-                    if let Ok(converted) =
-                        convert_response_body(&resp_body, endpoint_protocol, client_protocol)
-                    {
-                        resp_body = converted;
-                    }
                 }
 
                 if (snap.config.pipeline.dlp_active() || snap.config.pipeline.ops_active())

@@ -135,6 +135,18 @@ fn is_modify_intent(lower: &str) -> bool {
         || lower.contains("\"cp ")
         || lower.contains("move(")
         || lower.contains("rename(")
+        || shell_redirect_intent(lower)
+}
+
+/// Shell output redirect (`echo x > path`, append `>>`, cmd `echo x>file`).
+fn shell_redirect_intent(lower: &str) -> bool {
+    lower.contains(" >> ")
+        || lower.contains(" > \"")
+        || lower.contains(" > '/")
+        || lower.contains(" > \"/")
+        || lower.contains(" > ")
+        || lower.contains(">\"")
+        || lower.contains("echo ") && lower.contains('>')
 }
 
 fn is_access_intent(lower: &str) -> bool {
@@ -459,6 +471,16 @@ mod tests {
         assert!(guard
             .check(r#"{"path":"/var/protected/app.conf","contents":"x"}"#)
             .is_some());
+    }
+
+    #[test]
+    fn deny_modify_blocks_echo_redirect() {
+        let guard = PathProtection::new(&[rule("p1", "/var/protected-modify", PathProtectionLevel::DenyModify)]);
+        let cmd = r#"{"command":"echo matrix-write-test > \"/var/protected-modify/marker.txt\""}"#;
+        assert!(
+            guard.check(cmd).is_some(),
+            "shell redirect write should be modify intent"
+        );
     }
 
     #[test]

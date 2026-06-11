@@ -42,11 +42,11 @@ impl ProxyBody {
         }
     }
 
-    pub fn wrap_sse_response(
-        stream: SsePassthroughStream,
-        config: SseTransformConfig,
-    ) -> Self {
-        ProxyBody::SseStream(Box::pin(SseResponseTransformStream::new(stream, config)))
+    pub fn wrap_sse_response(stream: SsePassthroughStream, config: SseTransformConfig) -> Self {
+        let (prefix, rest) = stream.into_transform_parts();
+        let inner = SsePassthroughStream::new(Bytes::new(), rest);
+        let transform = SseResponseTransformStream::new(inner, config).with_prefix(prefix);
+        ProxyBody::SseStream(Box::pin(transform))
     }
 }
 

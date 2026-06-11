@@ -23,7 +23,11 @@ function Invoke-NsisUninstall {
     foreach ($root in $roots) {
         foreach ($item in Get-ItemProperty $root -ErrorAction SilentlyContinue) {
             $name = [string]$item.DisplayName
-            if (-not $patterns.Any({ $name -match $_ })) { continue }
+            $matched = $false
+            foreach ($pat in $patterns) {
+                if ($name -match $pat) { $matched = $true; break }
+            }
+            if (-not $matched) { continue }
             $cmd = [string]$item.UninstallString
             if ([string]::IsNullOrWhiteSpace($cmd)) { continue }
             Write-UninstallLog "==> Running NSIS uninstaller: $name"

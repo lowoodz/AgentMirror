@@ -278,7 +278,7 @@ async fn upstream_404_triggers_fallback_to_next_model() {
 }
 
 #[tokio::test]
-async fn openai_client_prefers_openai_upstream_in_mixed_group() {
+async fn openai_client_skips_non_matching_upstream_protocol() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let anthropic_hits = Arc::new(AtomicUsize::new(0));
@@ -296,7 +296,7 @@ async fn openai_client_prefers_openai_upstream_in_mixed_group() {
     }
 
     let anthropic_app = Router::new().route(
-        "/v1/messages",
+        "/anthropic/v1/messages",
         post({
             let hits = anthropic_hits_capture.clone();
             move || anthropic_handler(hits.clone())
@@ -362,7 +362,7 @@ async fn openai_client_prefers_openai_upstream_in_mixed_group() {
     assert_eq!(
         anthropic_hits.load(Ordering::SeqCst),
         0,
-        "OpenAI client should hit OpenAI-native upstream first"
+        "OpenAI client should skip Anthropic upstreams in the fallback group"
     );
 }
 
@@ -787,13 +787,13 @@ async fn spawn_mock_anthropic_upstream() -> String {
 }
 
 #[tokio::test]
-async fn universal_api_converts_openai_client_to_anthropic_upstream() {
+async fn openai_client_rejects_anthropic_only_fallback_group() {
     let upstream = spawn_mock_anthropic_upstream().await;
     let mut config = test_config(&upstream);
     config.fallback_groups.get_mut("high").unwrap()[0].protocol = Some("anthropic".into());
     config.fallback_groups.get_mut("high").unwrap()[0].model = "claude-mock".into();
 
-    let (app, proxy) = make_app(config);
+    let (_app, proxy) = make_app(config);
 
     let body = serde_json::json!({
         "model": "saferoute-high",
@@ -802,9 +802,9 @@ async fn universal_api_converts_openai_client_to_anthropic_upstream() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
 
-    let (status, resp_headers, resp_body) = proxy
+    let result = proxy
         .handle_api_request(ProxyRequest {
-            session_id: "sess-universal-convert",
+            session_id: "sess-protocol-mismatch",
             fallback_group: None,
             method: Method::POST,
             path: "/v1/chat/completions",
@@ -812,22 +812,7 @@ async fn universal_api_converts_openai_client_to_anthropic_upstream() {
             headers,
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
         })
-        .await
-        .unwrap();
+        .await;
 
-    assert!(status.is_success());
-    let audits = app.storage.list_audits(20).unwrap();
-    let audit = audits
-        .iter()
-        .find(|a| a.session_id == "sess-universal-convert")
-        .expect("audit row");
-    assert_eq!(audit.protocol, "OpenAI");
-    let json: serde_json::Value = serde_json::from_slice(&extract_body_bytes(resp_body)).unwrap();
-    assert!(json.get("choices").is_some());
-    assert!(
-        json["choices"][0]["message"]["content"]
-            .as_str()
-            .is_some_and(|s| s.contains("anthropic"))
-    );
-    assert!(resp_headers.get("content-type").is_some());
+    assert!(result.is_err(), "OpenAI client must not route to Anthropic-only group");
 }

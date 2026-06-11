@@ -171,6 +171,14 @@ impl SseToolCallGate {
         }
         GateLineOutcome::Release(out)
     }
+
+    /// Release held tool-call deltas when the upstream SSE stream ends.
+    pub fn flush_eof(&mut self, ops: Option<&OperationSecurity>) -> GateLineOutcome {
+        if !self.active && self.pending_finish.is_none() && self.tool_lines.is_empty() {
+            return GateLineOutcome::Forward(Vec::new());
+        }
+        self.finalize(ops, true)
+    }
 }
 
 fn merge_argument_fragment(
@@ -447,6 +455,43 @@ mod tests {
         assert!(
             tool_pos < finish_pos,
             "tool_call fragments must precede finish_reason for clients"
+        );
+    }
+
+    #[test]
+    fn repro_captured_openclaw_traffic_reorders_prepend_fragments() {
+        use std::path::Path;
+
+        let path = Path::new(concat!(
+            env!("HOME"),
+            "/Library/Application Support/securemodelroute/traffic/20260611T131818_response_out_5488c621.body"
+        ));
+        if !path.exists() {
+            return;
+        }
+        let body = std::fs::read_to_string(path).expect("traffic snapshot");
+        let ops = OperationSecurity::new(
+            &[],
+            &[PathProtectionRule {
+                id: "vault".into(),
+                enabled: true,
+                path: PathBuf::from("/secure/vault"),
+                level: PathProtectionLevel::DenyAccess,
+            }],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        )
+        .unwrap();
+        let (out, blocks) = transform_buffered_sse_ops(&body, Some(&ops));
+        assert_eq!(blocks, 0);
+        assert!(
+            out.contains(r#""arguments":"{"#) || out.contains(r#""arguments":"{\"command\""#),
+            "expected forward-order tool args after gate release, got prepend tail first"
+        );
+        let args = assembled_tool_args(&out);
+        assert!(
+            args.contains("ls") && args.contains("Table-NLP"),
+            "assembled args should be valid ls command, got {args:?}"
         );
     }
 

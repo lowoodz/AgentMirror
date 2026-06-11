@@ -12,7 +12,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde_json::Value;
-use smr_protocol::{convert_body, ApiProtocol};
+use smr_protocol::ApiProtocol;
 use tracing::{info, warn};
 
 use crate::config::{AppConfig, ModelEndpoint};
@@ -122,9 +122,15 @@ impl Router {
     ) -> Result<RouteResult> {
         let mut last_error: Option<RouteAttempt> = None;
         let mut chain: Vec<String> = Vec::new();
-        let ordered = order_endpoints_for_client(group, opts.client_protocol);
+        let endpoints = filter_endpoints_for_client(group, opts.client_protocol);
+        if endpoints.is_empty() {
+            return Err(anyhow!(
+                "fallback group '{group_name}' has no upstream with protocol {:?}",
+                opts.client_protocol
+            ));
+        }
 
-        for (idx, endpoint) in ordered.iter().enumerate() {
+        for (idx, endpoint) in endpoints.iter().enumerate() {
             chain.push(endpoint.model.clone());
             match self.forward_once(endpoint, &req, opts.wants_stream).await {
                 Ok(attempt) if should_fallback_status(attempt.status) => {
@@ -204,24 +210,12 @@ impl Router {
         wants_stream: bool,
     ) -> Result<RouteAttempt> {
         let target_protocol = endpoint.resolve_protocol();
+        debug_assert_eq!(
+            req.protocol, target_protocol,
+            "forward_once called with protocol-mismatched endpoint"
+        );
         let mut path = req.path.to_string();
-        let mut body = patch_model_in_body(req.body.clone(), &endpoint.model)?;
-
-        if req.protocol != target_protocol && !body.is_empty() {
-            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
-                path = smr_protocol::target_path(&path, target_protocol == ApiProtocol::Anthropic);
-                let converted = convert_body(&json, req.protocol, target_protocol);
-                body = Bytes::from(serde_json::to_vec(&converted)?);
-                if req.protocol != target_protocol {
-                    info!(
-                        model = %endpoint.model,
-                        from = ?req.protocol,
-                        to = ?target_protocol,
-                        "converting request via unified body"
-                    );
-                }
-            }
-        }
+        let body = patch_model_in_body(req.body.clone(), &endpoint.model)?;
 
         let base = endpoint.base_url.trim_end_matches('/');
         path = normalize_upstream_path(base, &path);
@@ -309,22 +303,15 @@ fn should_fallback_status(status: StatusCode) -> bool {
     )
 }
 
-/// Prefer upstream endpoints whose native API matches the detected client protocol.
-fn order_endpoints_for_client(
+fn filter_endpoints_for_client(
     group: &[ModelEndpoint],
     client: ApiProtocol,
 ) -> Vec<ModelEndpoint> {
-    let mut native = Vec::new();
-    let mut converted = Vec::new();
-    for ep in group {
-        if ep.resolve_protocol() == client {
-            native.push(ep.clone());
-        } else {
-            converted.push(ep.clone());
-        }
-    }
-    native.extend(converted);
-    native
+    group
+        .iter()
+        .filter(|ep| ep.resolve_protocol() == client)
+        .cloned()
+        .collect()
 }
 
 fn is_malformed_success(status: &StatusCode, headers: &HeaderMap, body: &Bytes) -> bool {
@@ -446,9 +433,15 @@ fn sse_chunk_has_content(v: &Value) -> bool {
             {
                 return true;
             }
-            if c.get("delta").and_then(|d| d.get("tool_calls")).is_some() {
+            if c.get("delta")
+                .and_then(|d| d.get("reasoning_content"))
+                .and_then(|t| t.as_str())
+                .is_some_and(|s| !s.is_empty())
+            {
                 return true;
             }
+            // Do not treat tool_calls as a routing first token: DeepSeek emits them
+            // after reasoning and passthrough would leak untransformed fragments.
         }
     }
     if v.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
@@ -565,6 +558,18 @@ mod tests {
     fn no_token_in_empty_sse() {
         let body = b"data: [DONE]\n\n";
         assert!(!sse_has_first_token(body));
+    }
+
+    #[test]
+    fn tool_call_delta_is_not_sse_first_token() {
+        let body = br#"data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"}"}}]}}]}"#;
+        assert!(!sse_has_first_token(body));
+    }
+
+    #[test]
+    fn reasoning_content_is_sse_first_token() {
+        let body = br#"data: {"choices":[{"delta":{"reasoning_content":"The"}}]}"#;
+        assert!(sse_has_first_token(body));
     }
 
     #[test]
@@ -698,13 +703,13 @@ mod tests {
     }
 
     #[test]
-    fn orders_native_protocol_endpoints_first() {
+    fn filters_endpoints_by_client_protocol_preserving_yaml_order() {
         use crate::config::ModelEndpoint;
 
-        let openai = ModelEndpoint {
-            id: "openai".into(),
+        let openai_a = ModelEndpoint {
+            id: "openai-a".into(),
             base_url: "https://api.deepseek.com".into(),
-            model: "deepseek-chat".into(),
+            model: "deepseek-a".into(),
             api_key: None,
             api_key_env: None,
             timeout_secs: 30,
@@ -712,20 +717,30 @@ mod tests {
         };
         let anthropic = ModelEndpoint {
             id: "anthropic".into(),
-            base_url: "https://api.deepseek.com/anthropic".into(),
-            model: "deepseek-v4-flash".into(),
+            base_url: "https://open.bigmodel.cn/api/anthropic".into(),
+            model: "glm-4.7".into(),
+            api_key: None,
+            api_key_env: None,
+            timeout_secs: 30,
+            protocol: Some("anthropic".into()),
+        };
+        let openai_b = ModelEndpoint {
+            id: "openai-b".into(),
+            base_url: "https://api.example.com".into(),
+            model: "gpt-mock".into(),
             api_key: None,
             api_key_env: None,
             timeout_secs: 30,
             protocol: None,
         };
-        let group = vec![anthropic.clone(), openai.clone()];
-        let ordered = order_endpoints_for_client(&group, ApiProtocol::OpenAi);
-        assert_eq!(ordered[0].id, "openai");
-        assert_eq!(ordered[1].id, "anthropic");
-        let ordered = order_endpoints_for_client(&group, ApiProtocol::Anthropic);
-        assert_eq!(ordered[0].id, "anthropic");
-        assert_eq!(ordered[1].id, "openai");
+        let group = vec![anthropic.clone(), openai_a.clone(), openai_b.clone()];
+        let openai = filter_endpoints_for_client(&group, ApiProtocol::OpenAi);
+        assert_eq!(openai.len(), 2);
+        assert_eq!(openai[0].id, "openai-a");
+        assert_eq!(openai[1].id, "openai-b");
+        let anth = filter_endpoints_for_client(&group, ApiProtocol::Anthropic);
+        assert_eq!(anth.len(), 1);
+        assert_eq!(anth[0].id, "anthropic");
     }
 
     #[test]

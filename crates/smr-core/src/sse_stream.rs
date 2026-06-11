@@ -58,6 +58,10 @@ impl SsePassthroughStream {
             inner: rest,
         }
     }
+
+    pub fn into_transform_parts(mut self) -> (Bytes, Incoming) {
+        (self.prefix.take().unwrap_or_default(), self.inner)
+    }
 }
 
 impl Stream for SsePassthroughStream {
@@ -109,6 +113,14 @@ impl<S> SseResponseTransformStream<S> {
             tool_gate: SseToolCallGate::default(),
             pending_out: Vec::new(),
         }
+    }
+
+    /// Seed the line buffer with bytes already read for routing (passthrough prefix).
+    pub fn with_prefix(mut self, prefix: Bytes) -> Self {
+        if !prefix.is_empty() {
+            self.line_buf.extend_from_slice(&prefix);
+        }
+        self
     }
 
     fn pop_pending(&mut self) -> Option<Vec<u8>> {
@@ -211,10 +223,21 @@ impl<S: Stream<Item = Result<Bytes, std::convert::Infallible>> + Unpin> Stream
                     self.line_buf.extend_from_slice(&chunk);
                 }
                 Poll::Ready(other) => {
-                    if !self.line_buf.is_empty() {
-                        let tail = std::mem::take(&mut self.line_buf);
-                        if let Some(out) = self.process_line(&tail) {
+                    let this = self.as_mut().get_mut();
+                    if !this.line_buf.is_empty() {
+                        let tail = std::mem::take(&mut this.line_buf);
+                        if let Some(out) = this.process_line(&tail) {
                             return Poll::Ready(Some(Ok(Bytes::from(out))));
+                        }
+                    }
+                    if this.ops.is_some() {
+                        let ops_ref = this.ops.as_ref().map(|o| o.as_ref());
+                        let outcome = this.tool_gate.flush_eof(ops_ref);
+                        if let GateLineOutcome::Release(mut lines) = outcome {
+                            this.pending_out.append(&mut lines);
+                            if let Some(out) = this.pending_out.pop() {
+                                return Poll::Ready(Some(Ok(Bytes::from(out))));
+                            }
                         }
                     }
                     return Poll::Ready(other);
