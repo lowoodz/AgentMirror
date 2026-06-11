@@ -263,21 +263,43 @@ impl ProxyService {
                     }
                 }
 
-                if snap.config.pipeline.ops_active()
+                if (snap.config.pipeline.dlp_active() || snap.config.pipeline.ops_active())
                     && (is_sse_content_type(&resp_headers) || wants_stream)
                 {
                     let before = resp_body.clone();
-                    let (new_body, blocks, observes) =
-                        process_sse_response(&resp_body, &snap.ops)?;
+                    let (new_body, blocks, observes, sse_dlp) = process_sse_response(
+                        &resp_body,
+                        session_id,
+                        if snap.config.pipeline.dlp_active() {
+                            Some(&snap.dlp)
+                        } else {
+                            None
+                        },
+                        if snap.config.pipeline.ops_active() {
+                            Some(&snap.ops)
+                        } else {
+                            None
+                        },
+                    )?;
                     resp_body = new_body;
                     safety_blocks += blocks;
                     safety_observations += observes;
+                    dlp_count += sse_dlp;
                     if resp_body != before {
-                        events.push(
-                            EventKind::OpBlock,
-                            "blocked dangerous tool_call in SSE stream",
-                            None,
-                        );
+                        if sse_dlp > 0 {
+                            events.push(
+                                EventKind::DlpReplace,
+                                format!("sanitized {} SSE response field(s)", sse_dlp),
+                                None,
+                            );
+                        }
+                        if blocks > 0 {
+                            events.push(
+                                EventKind::OpBlock,
+                                "blocked dangerous tool_call in SSE stream",
+                                None,
+                            );
+                        }
                     }
                 } else if snap.config.pipeline.dlp_active() || snap.config.pipeline.ops_active() {
                     let resp_is_json = resp_headers

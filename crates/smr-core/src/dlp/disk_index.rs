@@ -1048,44 +1048,74 @@ fn index_one_file_impl(
     extracted_root: &Path,
     tx: &SyncSender<Vec<SigRow>>,
 ) -> Result<()> {
-    let meta = fs::metadata(path)?;
-    let size = meta.len();
     let path_str = normalize_index_path(path);
 
+    if uses_extracted_text_index(path) {
+        return index_extracted_document(path, &path_str, rule, extracted_root, tx);
+    }
+
+    let size = fs::metadata(path)?.len();
     if size <= INDEX_READ_CAP {
-        if let Some(bytes) = indexable_bytes(path, uses_extracted_text_index(path))? {
-            let (content_path, data) = if bytes.is_extracted {
-                fs::create_dir_all(extracted_root)?;
-                let sidecar = sidecar_path(extracted_root, &path_str);
-                fs::write(&sidecar, &bytes.data)?;
-                (
-                    sidecar.to_string_lossy().replace('\\', "/"),
-                    bytes.data,
-                )
-            } else {
-                (path_str.clone(), bytes.data)
-            };
-            let mut rows = Vec::new();
-            if rule.match_mode == MatchMode::Full && data.len() as u64 <= rule.index.max_full_file_bytes {
-                push_chunk_signatures(&data, 0, &path_str, &content_path, rule, &mut rows);
-            } else {
-                index_bytes_chunks(&data, 0, &path_str, &content_path, rule, &mut rows);
-            }
-            if !rows.is_empty() {
-                let _ = tx.send(rows);
-            }
-            return Ok(());
+        if let Some(bytes) = indexable_bytes(path, false)? {
+            let content_path = path_str.clone();
+            let data = bytes.data;
+            send_indexed_bytes(&path_str, &content_path, &data, rule, tx)?;
         }
-        if uses_extracted_text_index(path) {
+        return Ok(());
+    }
+
+    stream_index_file(path, &path_str, rule, tx)
+}
+
+/// PDF/Office: always index extracted UTF-8 (sidecar), never raw binary streams.
+fn index_extracted_document(
+    path: &Path,
+    path_str: &str,
+    rule: &FileRule,
+    extracted_root: &Path,
+    tx: &SyncSender<Vec<SigRow>>,
+) -> Result<()> {
+    let Some(bytes) = indexable_bytes(path, true)? else {
+        if looks_like_pdf_file(path)? {
             tracing::warn!(
                 path = %path.display(),
                 "document text extract failed; skipping file index"
             );
         }
         return Ok(());
-    }
+    };
 
-    stream_index_file(path, &path_str, rule, tx)
+    let (content_path, data) = if bytes.is_extracted {
+        fs::create_dir_all(extracted_root)?;
+        let sidecar = sidecar_path(extracted_root, path_str);
+        fs::write(&sidecar, &bytes.data)?;
+        (
+            sidecar.to_string_lossy().replace('\\', "/"),
+            bytes.data,
+        )
+    } else {
+        (path_str.to_string(), bytes.data)
+    };
+    send_indexed_bytes(path_str, &content_path, &data, rule, tx)
+}
+
+fn send_indexed_bytes(
+    path_str: &str,
+    content_path: &str,
+    data: &[u8],
+    rule: &FileRule,
+    tx: &SyncSender<Vec<SigRow>>,
+) -> Result<()> {
+    let mut rows = Vec::new();
+    if rule.match_mode == MatchMode::Full && data.len() as u64 <= rule.index.max_full_file_bytes {
+        push_chunk_signatures(data, 0, path_str, content_path, rule, &mut rows);
+    } else {
+        index_bytes_chunks(data, 0, path_str, content_path, rule, &mut rows);
+    }
+    if !rows.is_empty() {
+        let _ = tx.send(rows);
+    }
+    Ok(())
 }
 
 fn read_file_bytes(path: &Path, size: u64) -> Result<Vec<u8>> {
@@ -2290,6 +2320,54 @@ mod tests {
         let hay = format!("notes {secret_text} tail");
         let out2 = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out2.contains(&secret_text));
+    }
+
+    #[test]
+    fn oversized_document_indexes_extracted_text_not_raw_stream() {
+        use std::io::Write;
+
+        let tmp = TempDir::new().unwrap();
+        let zone = tmp.path().join("zone");
+        fs::create_dir_all(&zone).unwrap();
+        let pdf = zone.join("large-plain.pdf");
+        let secret = test_secret("OVERSIZED-DOC-INDEX-SECRET");
+        let mut f = fs::File::create(&pdf).unwrap();
+        write!(f, "{secret}\n").unwrap();
+        let pad_len = (INDEX_READ_CAP + 4096) as usize;
+        f.write_all(&vec![b'X'; pad_len]).unwrap();
+
+        let rule = FileRule {
+            id: "large-doc".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 5,
+            match_mode: MatchMode::Full,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+            formats: vec!["pdf".into()],
+            index: FileIndexOptions {
+                bloom_megabytes: 1,
+                build_workers: 1,
+                ..Default::default()
+            },
+        };
+
+        let index_root = tmp.path().join("idx");
+        let snapshot = build_rule_index(&index_root, &rule).unwrap();
+        assert!(
+            snapshot.indexed_paths.iter().any(|p| p.contains("large-plain.pdf")),
+            "expected oversized .pdf indexed via text path, paths={:?}",
+            snapshot.indexed_paths
+        );
+
+        let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
+        let hay = format!("notes {secret} tail");
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
+        assert!(
+            !out.contains(&secret),
+            "indexed secret should be redacted from haystack"
+        );
     }
 
     /// Local `test-data/` PDFs (not in git). Run: `cargo test -p smr-core large_pdf -- --ignored --nocapture`

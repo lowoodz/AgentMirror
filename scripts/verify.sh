@@ -35,6 +35,9 @@ echo "==> api status"
 status=$(curl -sf "http://127.0.0.1:${PORT}/api/status")
 [[ "$status" == *proxy_url* ]]
 
+echo "==> wait file index ready"
+bash "${ROOT}/scripts/wait-file-index-ready.sh" "http://127.0.0.1:${PORT}" 120
+
 [[ "$status" == *proxy_url_high* ]]
 [[ "$status" == *provider_url* ]]
 [[ "$status" == *saferoute-high* ]]

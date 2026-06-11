@@ -94,6 +94,9 @@ phase_clean() {
     return 0
   fi
   run_step "Stop processes" smr_stop_processes
+  if [[ "$KEEP_CONFIG" != true ]]; then
+    run_step "Backup user config" bash "${ROOT}/scripts/backup-user-config.sh" || true
+  fi
   local args=(bash "${ROOT}/scripts/uninstall.sh" --quiet)
   [[ "$KEEP_CONFIG" == true ]] && args+=(--keep-config)
   run_step "Uninstall previous install" "${args[@]}"
@@ -142,6 +145,9 @@ phase_install() {
   local smoke_args=()
   [[ "$WITH_APP" == false ]] && smoke_args+=(--cli-only)
   run_step "Install smoke from dist" bash "${ROOT}/scripts/macos/install-smoke.sh" "${smoke_args[@]}"
+  if [[ "$KEEP_CONFIG" != true ]] && [[ -e "${ROOT}/config/user-config-backup/latest" ]]; then
+    run_step "Restore user config" bash "${ROOT}/scripts/restore-user-config.sh"
+  fi
 }
 
 phase_installed() {

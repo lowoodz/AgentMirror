@@ -3,16 +3,19 @@ use smr_protocol::{extract_texts, inject_response_texts, parse_json_body, serial
 
 use crate::ops::OperationSecurity;
 
-/// Scan SSE chunks and patch tool_calls when operation security triggers.
+/// Scan SSE chunks: DLP (response-side file/content redaction) and operation security.
 pub fn process_sse_response(
     body: &Bytes,
-    ops: &OperationSecurity,
-) -> anyhow::Result<(Bytes, u32, u32)> {
+    session_id: &str,
+    dlp: Option<&crate::dlp::DlpEngine>,
+    ops: Option<&OperationSecurity>,
+) -> anyhow::Result<(Bytes, u32, u32, u32)> {
     let text = String::from_utf8_lossy(body);
     let mut modified = false;
     let mut new_body = String::new();
     let mut blocks = 0u32;
     let mut observes = 0u32;
+    let mut dlp_count = 0u32;
     let mut saw_first_token = false;
 
     for line in text.lines() {
@@ -26,18 +29,38 @@ pub fn process_sse_response(
                 if !saw_first_token && crate::router::sse_has_first_token(data.as_bytes()) {
                     saw_first_token = true;
                 }
-                let extracted = extract_texts(&json)?;
-                let (replacements, b, o) = ops.process_fields_with_mode(&extracted)?;
-                blocks += b;
-                observes += o;
-                if !replacements.is_empty() {
-                    inject_response_texts(&mut json, &replacements)?;
-                    let patched = String::from_utf8(serialize_json_body(&json)?)?;
-                    new_body.push_str("data: ");
-                    new_body.push_str(&patched);
-                    new_body.push('\n');
-                    modified = true;
-                    continue;
+
+                if let Some(dlp) = dlp {
+                    let extracted = extract_texts(&json)?;
+                    let (replacements, count) =
+                        dlp.process_response(session_id, &json, &extracted)?;
+                    dlp_count += count as u32;
+                    if !replacements.is_empty() {
+                        inject_response_texts(&mut json, &replacements)?;
+                        let patched = String::from_utf8(serialize_json_body(&json)?)?;
+                        new_body.push_str("data: ");
+                        new_body.push_str(&patched);
+                        new_body.push('\n');
+                        modified = true;
+                        continue;
+                    }
+                }
+
+                if let Some(ops) = ops {
+                    let extracted = extract_texts(&json)?;
+                    let tool_only = smr_protocol::filter_tool_related(&json, &extracted);
+                    let (replacements, b, o) = ops.process_fields_with_mode(&tool_only)?;
+                    blocks += b;
+                    observes += o;
+                    if !replacements.is_empty() {
+                        inject_response_texts(&mut json, &replacements)?;
+                        let patched = String::from_utf8(serialize_json_body(&json)?)?;
+                        new_body.push_str("data: ");
+                        new_body.push_str(&patched);
+                        new_body.push('\n');
+                        modified = true;
+                        continue;
+                    }
                 }
             }
         }
@@ -46,9 +69,9 @@ pub fn process_sse_response(
     }
 
     if modified {
-        Ok((Bytes::from(new_body), blocks, observes))
+        Ok((Bytes::from(new_body), blocks, observes, dlp_count))
     } else {
-        Ok((body.clone(), blocks, observes))
+        Ok((body.clone(), blocks, observes, dlp_count))
     }
 }
 

@@ -33,7 +33,7 @@ Options (forwarded to release-cycle where applicable):
   --skip-installed    Skip post-install tray / UTM app blackbox
   --skip-vm           Skip utm-run-all-tests (also sets SMR_SKIP_VM_TESTS=1)
   --package-only      Stop after package + verify
-  --keep-config       Keep smr.yaml on uninstall
+  --keep-config       Keep smr.yaml on uninstall (skip auto backup/restore)
   --log PATH          Log file (default: dist/macos-release-full.log)
 
 Windows native full cycle:

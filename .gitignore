@@ -6,6 +6,7 @@ test_model_api_key.txt
 config/test.env
 config/local-hygiene.env
 config/smr.yaml
+config/user-config-backup/
 dist/.test-keys-from-env.txt
 
 # Local-only docs (not published to GitHub)

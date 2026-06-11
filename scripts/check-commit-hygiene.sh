@@ -30,6 +30,7 @@ log_fail() {
 FORBIDDEN_PATHS=(
   config/test.env
   config/smr.yaml
+  config/user-config-backup/
   config/local-hygiene.env
   test_model_api_key.txt
   dist/.test-keys-from-env.txt
