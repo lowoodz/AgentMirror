@@ -43,7 +43,7 @@ python3 "${ROOT}/scripts/generate_openclaw_matrix_config.py" \
   --output "${HOST_WORK}/smr.yaml" \
   --env-file "${HOST_WORK}/windows.env"
 
-for f in openclaw_security_matrix_test.py openclaw_matrix_common.py test_common.py; do
+for f in openclaw_security_matrix_test.py openclaw_matrix_common.py test_common.py patch_openclaw_saferoute.py generate_openclaw_saferoute_config.py; do
   vm_scp_to "${ROOT}/scripts/${f}" "${GUEST_WORK}/${f}"
 done
 vm_scp_to "${HOST_WORK}/smr.yaml" "${GUEST_WORK}/smr.yaml"
@@ -72,10 +72,13 @@ rm -f "$LOG_LOCAL"
 vm_ssh "cmd.exe /c \"set SMR_GUEST_STAGING=${GUEST_STAGING}&& set SMR_GUEST_WORK=${GUEST_WORK}&& powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${REMOTE_PS} ${KEEP_FLAG}\"" \
   2>&1 | tee "$LOG_LOCAL"
 
-if grep -q "Summary: 10/10 passed" "$LOG_LOCAL"; then
-  echo "==> Windows OpenClaw matrix PASSED"
-  exit 0
+if grep -qE "Summary: [0-9]+/[0-9]+ passed" "$LOG_LOCAL"; then
+  if grep -q "Summary: 10/10 passed" "$LOG_LOCAL"; then
+    echo "==> Windows OpenClaw matrix PASSED (strict E2E)"
+    exit 0
+  fi
+  echo "==> Windows OpenClaw matrix FAILED (see log)" >&2
+  exit 1
 fi
-grep -qE "Summary: [0-9]+/10 passed" "$LOG_LOCAL" && exit 1
 echo "==> Windows OpenClaw matrix did not complete cleanly" >&2
 exit 1

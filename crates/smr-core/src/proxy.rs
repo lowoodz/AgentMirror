@@ -16,9 +16,13 @@ use crate::provider;
 use crate::proxy_path;
 use crate::request::{ForwardRequest, ProxyBody, ProxyRequest, ProxyResponse};
 use crate::router::{ForwardOptions, RouteBody, RouteResult};
+use crate::sse_sanitize::sanitize_openai_client_json;
 use crate::sse_stream::SseTransformConfig;
 use crate::state::SharedApp;
-use crate::streaming::{is_sse_content_type, process_sse_response, request_wants_stream};
+use crate::streaming::{
+    force_upstream_non_stream, is_sse_content_type, openai_chat_completion_to_sse,
+    process_sse_response, request_has_tools, request_wants_stream,
+};
 
 pub struct ProxyService {
     app: Arc<SharedApp>,
@@ -81,7 +85,8 @@ impl ProxyService {
             .map(|v| v.contains("application/json"))
             .unwrap_or(false);
 
-        let wants_stream = is_json && request_wants_stream(body);
+        let mut wants_stream = is_json && request_wants_stream(body);
+        let client_wants_stream = wants_stream;
         let mut client_protocol = ApiProtocol::OpenAi;
         let mut forward_body = body.to_vec();
         let traffic_cfg = &snap.config.logging;
@@ -151,6 +156,12 @@ impl ProxyService {
                 }
             }
 
+            // Buffer upstream JSON for tool calls; re-emit as client SSE after sanitize/ops.
+            if client_wants_stream && request_has_tools(&json) {
+                force_upstream_non_stream(&mut json);
+                wants_stream = false;
+            }
+
             forward_body = serialize_json_body(&json)?;
         } else if is_json {
             let json = serde_json::json!({});
@@ -207,10 +218,11 @@ impl ProxyService {
 
         let endpoint_protocol = attempt.endpoint.resolve_protocol();
         debug_assert_eq!(client_protocol, endpoint_protocol);
-        let resp_headers = attempt.headers;
+        let mut resp_headers = attempt.headers;
 
-        let needs_stream_transform =
-            snap.config.pipeline.dlp_active() || snap.config.pipeline.ops_active();
+        let needs_stream_transform = wants_stream
+            || snap.config.pipeline.dlp_active()
+            || snap.config.pipeline.ops_active();
 
         let proxy_body = match attempt.body {
             RouteBody::SseStream(stream) => {
@@ -333,6 +345,31 @@ impl ProxyService {
                                         None,
                                     );
                                 }
+                            }
+                        }
+                    }
+                }
+
+                if client_protocol == ApiProtocol::OpenAi
+                    && attempt.status.is_success()
+                    && !resp_body.is_empty()
+                {
+                    let resp_is_json = resp_headers
+                        .get(http::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v.contains("application/json"))
+                        .unwrap_or(false);
+                    if resp_is_json {
+                        if let Ok(mut json) = parse_json_body(&resp_body) {
+                            let _ = sanitize_openai_client_json(&mut json);
+                            if client_wants_stream {
+                                resp_body = openai_chat_completion_to_sse(&json)?;
+                                resp_headers.insert(
+                                    http::header::CONTENT_TYPE,
+                                    http::HeaderValue::from_static("text/event-stream"),
+                                );
+                            } else {
+                                resp_body = Bytes::from(serialize_json_body(&json)?);
                             }
                         }
                     }

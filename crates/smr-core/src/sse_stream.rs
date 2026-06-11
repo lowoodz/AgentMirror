@@ -9,6 +9,7 @@ use hyper::body::Incoming;
 use smr_protocol::{convert_sse_chunk, ApiProtocol};
 
 use crate::router::sse_has_first_token;
+use crate::sse_sanitize::sanitize_openai_client_sse_chunk;
 use crate::sse_tool_ops::{GateLineOutcome, SseToolCallGate};
 
 pub enum SseCollectResult {
@@ -130,6 +131,10 @@ impl<S> SseResponseTransformStream<S> {
     fn transform_forward_json(&self, mut json: serde_json::Value) -> Option<Vec<u8>> {
         if let Some((from, to)) = self.protocol {
             json = convert_sse_chunk(&json, from, to);
+        }
+
+        if !sanitize_openai_client_sse_chunk(&mut json) {
+            return None;
         }
 
         if let Some(dlp) = &self.dlp {

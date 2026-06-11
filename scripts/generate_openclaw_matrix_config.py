@@ -19,15 +19,26 @@ from openclaw_matrix_common import (  # noqa: E402
     safe_matrix_root,
     write_env_file,
 )
-from test_common import parse_keys  # noqa: E402
+from test_common import parse_high_group  # noqa: E402
 
 
 def render_config(paths: dict[str, str]) -> str:
-    glm, ds = parse_keys()
     dlp_path = paths["dlp_dir"]
     access = paths["path_deny_access"]
     modify = paths["path_deny_modify"]
     delete = paths["path_deny_delete"]
+
+    endpoint_lines: list[str] = []
+    for ep in parse_high_group():
+        endpoint_lines.append(
+            f"""    - id: {ep["id"]}
+      base_url: "{ep["base_url"]}"
+      model: "{ep["model"]}"
+      protocol: {ep["protocol"]}
+      api_key: "{ep["api_key"]}"
+      timeout_secs: 120"""
+        )
+    high_block = "\n".join(endpoint_lines)
 
     return f"""server:
   listen: "127.0.0.1:8080"
@@ -50,17 +61,7 @@ logging:
 
 fallback_groups:
   high:
-    - id: glm-primary
-      base_url: "https://open.bigmodel.cn/api/anthropic"
-      model: "glm-4.7"
-      protocol: anthropic
-      api_key: "{glm}"
-      timeout_secs: 120
-    - id: deepseek-fallback
-      base_url: "https://api.deepseek.com"
-      model: "deepseek-v4-flash"
-      api_key: "{ds}"
-      timeout_secs: 120
+{high_block}
 
 content_rules: []
 

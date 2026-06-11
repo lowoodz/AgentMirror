@@ -87,6 +87,65 @@ def parse_keys(path: Path | None = None) -> tuple[str, str]:
     return glm_m.group(1), ds_m.group(1)
 
 
+def _infer_endpoint_protocol(base_url: str) -> str | None:
+    if "/anthropic" in base_url.lower():
+        return "anthropic"
+    return "openai"
+
+
+def _endpoint_id(model: str, index: int) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-") or "model"
+    return slug if index == 0 else f"{slug}-{index + 1}"
+
+
+def parse_high_group(path: Path | None = None) -> list[dict[str, str]]:
+    """Return ordered 'high' fallback endpoints (base_url, model, api_key, protocol, id)."""
+    keys_path = path or KEYS_FILE
+    if keys_path.is_file():
+        text = keys_path.read_text(encoding="utf-8")
+        block_m = re.search(r'"high"\s*:\s*\[(.*?)\]', text, re.S)
+        if block_m:
+            endpoints: list[dict[str, str]] = []
+            for index, obj_m in enumerate(re.finditer(r"\{[^{}]+\}", block_m.group(1), re.S)):
+                obj = obj_m.group(0)
+                base_m = re.search(r'"base_url"\s*:\s*"([^"]+)"', obj)
+                model_m = re.search(r'"model"\s*:\s*"([^"]+)"', obj)
+                key_m = re.search(r'"api_key"\s*:\s*"([^"]+)"', obj)
+                if not (base_m and model_m and key_m):
+                    continue
+                base_url = base_m.group(1)
+                model = model_m.group(1)
+                endpoints.append(
+                    {
+                        "id": _endpoint_id(model, index),
+                        "base_url": base_url,
+                        "model": model,
+                        "api_key": key_m.group(1),
+                        "protocol": _infer_endpoint_protocol(base_url) or "openai",
+                    }
+                )
+            if endpoints:
+                return endpoints
+
+    glm, ds = parse_keys(path)
+    return [
+        {
+            "id": "glm-primary",
+            "base_url": "https://open.bigmodel.cn/api/anthropic",
+            "model": "glm-4.7",
+            "api_key": glm,
+            "protocol": "anthropic",
+        },
+        {
+            "id": "deepseek-fallback",
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+            "api_key": ds,
+            "protocol": "openai",
+        },
+    ]
+
+
 def http(
     method: str,
     url: str,

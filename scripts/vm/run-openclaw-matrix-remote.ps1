@@ -148,8 +148,36 @@ while ((Get-Date) -lt $deadline) {
 }
 if (-not $fileIndexReady) { throw "file_index_ready timeout" }
 
+$bootstrap = Join-Path $env:USERPROFILE ".openclaw\workspace\BOOTSTRAP.md"
+if (Test-Path $bootstrap) {
+    Remove-Item -Force $bootstrap
+    Write-Host "==> Removed BOOTSTRAP.md for matrix E2E"
+}
+
+$generatePy = Join-Path $GuestWork "generate_openclaw_saferoute_config.py"
+if (Test-Path $generatePy) {
+    & $python $generatePy --force | Write-Host
+}
+
+$patchPy = Join-Path $GuestWork "patch_openclaw_saferoute.py"
+if (Test-Path $patchPy) {
+    & $python $patchPy | Write-Host
+    $env:Path = "$env:Path;$env:APPDATA\npm"
+    $openclaw = Get-Command openclaw.cmd -ErrorAction SilentlyContinue
+    if ($openclaw) {
+        & $openclaw.Source gateway restart 2>$null
+        Start-Sleep -Seconds 4
+        Write-Host "==> openclaw gateway restarted"
+    }
+}
+
 $testScript = Join-Path $GuestWork "openclaw_security_matrix_test.py"
-& $python $testScript --env-file $EnvFile 2>&1 | Tee-Object -FilePath $Log
+Remove-Item -Force $Log -ErrorAction SilentlyContinue
+$env:PYTHONUNBUFFERED = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+& $python $testScript --env-file $EnvFile *> $Log
+Get-Content $Log
 $rc = $LASTEXITCODE
 
 if (-not $KeepMatrixConfig) {

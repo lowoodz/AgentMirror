@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy portable matrix smr.yaml, reload SafeRoute, run OpenClaw security matrix, restore config.
+# Deploy portable matrix smr.yaml, reload SafeRoute, run strict OpenClaw E2E matrix, restore config.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,18 +9,22 @@ source "${ROOT}/scripts/load_test_env.sh"
 BASE="${SMR_BASE:-http://127.0.0.1:8080}"
 KEEP_MATRIX_CONFIG=false
 LOG="${ROOT}/dist/openclaw-matrix-test.log"
+SMR_BIN="${SMR_BIN:-${ROOT}/target/release/smr}"
+SMR_PROC=""
 
 usage() {
   cat <<'EOF'
 Usage: scripts/run_openclaw_matrix.sh [options]
 
-Portable matrix test (same fixture layout on macOS / Linux / Windows).
-Paths: SMR_MATRIX_ROOT or system temp (see config/test.env.example).
+Strict E2E: openclaw agent -> SafeRoute -> upstream LLM (high group from test keys).
+No HTTP replay fallbacks unless --allow-replay is passed to the Python test.
 
 Options:
   --matrix-root PATH         Fixture + config root (default: SMR_MATRIX_ROOT or temp)
   --keep-matrix-config       Do not restore smr.yaml after the run
   --no-deploy                Skip config deploy (fixtures + env file only)
+  --allow-replay             Legacy mode: allow HTTP replay when OpenClaw skips exec
+  --no-restart-smr           Do not stop :8080 / restart SMR_BIN before deploy
   --log PATH                 Log file (default: dist/openclaw-matrix-test.log)
 
 Windows VM: scripts/vm/run-openclaw-matrix.sh
@@ -29,11 +33,15 @@ EOF
 
 NO_DEPLOY=false
 MATRIX_ROOT_ARG=""
+ALLOW_REPLAY=false
+RESTART_SMR=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --matrix-root) MATRIX_ROOT_ARG="$2"; shift 2 ;;
     --keep-matrix-config) KEEP_MATRIX_CONFIG=true; shift ;;
     --no-deploy) NO_DEPLOY=true; shift ;;
+    --allow-replay) ALLOW_REPLAY=true; shift ;;
+    --no-restart-smr) RESTART_SMR=false; shift ;;
     --log) LOG="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
@@ -58,6 +66,12 @@ GEN_ARGS=(--output "$MATRIX_CFG" --env-file "$ENV_FILE" --fixtures)
 [[ -n "$MATRIX_ROOT_ARG" ]] && GEN_ARGS+=(--matrix-root "$MATRIX_ROOT_ARG")
 
 restore_config() {
+  restore_openclaw
+  if [[ -n "$SMR_PROC" ]] && kill -0 "$SMR_PROC" 2>/dev/null; then
+    kill "$SMR_PROC" 2>/dev/null || true
+    wait "$SMR_PROC" 2>/dev/null || true
+    SMR_PROC=""
+  fi
   if [[ -f "$BACKUP" ]]; then
     cp "$BACKUP" "$CFG"
     rm -f "$BACKUP"
@@ -67,7 +81,51 @@ restore_config() {
   fi
 }
 
+stop_listeners_8080() {
+  if command -v lsof >/dev/null 2>&1; then
+    local pids
+    pids="$(lsof -ti tcp:8080 -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+      echo "==> Stopping listeners on :8080 ($pids)"
+      # shellcheck disable=SC2086
+      kill $pids 2>/dev/null || true
+      sleep 2
+    fi
+  fi
+}
+
+ensure_smr() {
+  if [[ "$RESTART_SMR" == true ]]; then
+    stop_listeners_8080
+  elif curl -sf "${BASE}/health" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ ! -x "$SMR_BIN" ]]; then
+    echo "SafeRoute not on ${BASE} and missing ${SMR_BIN}; run: cargo build --release -p smr-cli" >&2
+    return 1
+  fi
+  echo "==> Starting SafeRoute CLI: ${SMR_BIN} --config ${CFG}"
+  "$SMR_BIN" --config "$CFG" >>"${LOG}.smr" 2>&1 &
+  SMR_PROC=$!
+  "${ROOT}/scripts/wait-file-index-ready.sh" "$BASE" 180
+}
+
+OPENCLAW_BACKUP=""
+restore_openclaw() {
+  if [[ -n "$OPENCLAW_BACKUP" && -f "$OPENCLAW_BACKUP" ]]; then
+    python3 "${ROOT}/scripts/patch_openclaw_saferoute.py" --restore "$OPENCLAW_BACKUP" || true
+    rm -f "$OPENCLAW_BACKUP"
+    echo "==> Restored openclaw.json from backup"
+  fi
+}
+
 trap restore_config EXIT
+
+patch_openclaw_for_matrix() {
+  OPENCLAW_BACKUP="$(python3 "${ROOT}/scripts/patch_openclaw_saferoute.py" 2>/dev/null | tail -1 || true)"
+}
+
+patch_openclaw_for_matrix
 
 # Do not inherit stale matrix paths from the shell environment.
 unset SMR_MATRIX_ROOT SMR_MATRIX_DLP_DIR SMR_MATRIX_DLP_SECRET \
@@ -81,6 +139,7 @@ if [[ "$NO_DEPLOY" == false ]]; then
   cp "$CFG" "$BACKUP" 2>/dev/null || true
   cp "$MATRIX_CFG" "$CFG"
   echo "==> Deployed matrix smr.yaml to ${CFG}"
+  ensure_smr
   curl -sf -X PUT "${BASE}/api/reload" >/dev/null
   "${ROOT}/scripts/wait-file-index-ready.sh" "$BASE" 180
 fi
@@ -88,12 +147,15 @@ fi
 set +e
 # shellcheck disable=SC1090
 set -a && source "$ENV_FILE" && set +a
-python3 "${ROOT}/scripts/openclaw_security_matrix_test.py" --env-file "$ENV_FILE" \
+PY_ARGS=(--env-file "$ENV_FILE")
+[[ "$ALLOW_REPLAY" == true ]] && PY_ARGS+=(--allow-replay)
+python3 "${ROOT}/scripts/openclaw_security_matrix_test.py" "${PY_ARGS[@]}" \
   2>&1 | tee "$LOG"
 RC=${PIPESTATUS[0]}
 set -e
 
 if [[ "$KEEP_MATRIX_CONFIG" == true ]]; then
+  restore_openclaw
   trap - EXIT
   echo "==> Keeping matrix smr.yaml (--keep-matrix-config)"
 else
