@@ -69,6 +69,15 @@ impl FileDlp {
                         .index
                         .resolve_triggered_files_by_basename(&indexed.rule.id, tool_text);
                 }
+                // Directory listing (`ls`, `Get-ChildItem`): activate indexed files under the
+                // working dir even when the command only names the folder, not each basename.
+                if resolved.is_empty() && !work_dirs.is_empty() {
+                    resolved = self.index.resolve_all_indexed_files_under_working_dirs(
+                        &indexed.rule.id,
+                        &work_dirs,
+                        &indexed.rule.formats,
+                    );
+                }
             }
             if resolved.is_empty() {
                 continue;
@@ -115,9 +124,33 @@ pub fn path_trigger_match(normalized_path: &str, tool_text: &str) -> bool {
     if normalized_path.is_empty() {
         return false;
     }
-    tool_text.match_indices(normalized_path).any(|(pos, _)| {
+    let norm = normalize_path_str(normalized_path);
+    let mut needles = vec![norm.clone(), norm.replace('/', "\\")];
+    needles.sort();
+    needles.dedup();
+    for needle in needles {
+        if path_trigger_match_needle(&needle, tool_text) {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            let lower_needle = needle.to_ascii_lowercase();
+            let lower_text = tool_text.to_ascii_lowercase();
+            if lower_needle != needle && path_trigger_match_needle(&lower_needle, &lower_text) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn path_trigger_match_needle(needle: &str, tool_text: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    tool_text.match_indices(needle).any(|(pos, _)| {
         let before_ok = pos == 0 || !is_path_token_char(tool_text.as_bytes()[pos - 1]);
-        let after_pos = pos + normalized_path.len();
+        let after_pos = pos + needle.len();
         let after_ok = after_pos >= tool_text.len()
             || !is_path_token_char(tool_text.as_bytes()[after_pos]);
         before_ok && after_ok
@@ -395,10 +428,14 @@ fn is_path_token_char(b: u8) -> bool {
 }
 
 fn matches_format(path: &Path, formats: &[String]) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|ext| formats.iter().any(|f| f.eq_ignore_ascii_case(ext)))
-        .unwrap_or(false)
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    if formats.iter().any(|f| f.eq_ignore_ascii_case(ext)) {
+        return true;
+    }
+    // `.env` / `test.env` — treat as text when txt is allowed.
+    ext.eq_ignore_ascii_case("env") && formats.iter().any(|f| f.eq_ignore_ascii_case("txt"))
 }
 
 #[cfg(test)]
@@ -544,6 +581,71 @@ mod tests {
     fn path_trigger_avoids_prefix_false_positive() {
         assert!(!path_trigger_match("/secret", "/secrets-backup/file.txt"));
         assert!(path_trigger_match("/secret", "read /secret/file"));
+    }
+
+    #[test]
+    fn path_trigger_matches_windows_backslashes() {
+        let rule = "Z:/AI-Projects/SecureModelRoute/config";
+        let listing = "目录: Z:\\AI-Projects\\SecureModelRoute\\config\r\n\r\nMode  Name\r\n";
+        assert!(path_trigger_match(rule, listing));
+    }
+
+    #[test]
+    fn matches_format_treats_env_as_txt() {
+        assert!(matches_format(
+            Path::new("Z:/proj/config/test.env"),
+            &["txt".into(), "yaml".into()]
+        ));
+        assert!(!matches_format(
+            Path::new("Z:/proj/config/test.env"),
+            &["yaml".into()]
+        ));
+    }
+
+    #[test]
+    fn directory_only_exec_activates_indexed_files_under_working_dir() {
+        use std::thread;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let zone = tmp.path().join("config");
+        fs::create_dir_all(&zone).unwrap();
+        let yaml = zone.join("smr.example.yaml");
+        fs::write(&yaml, format!("secret: {}\n", "Y".repeat(80))).unwrap();
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+
+        let rule = FileRule {
+            id: "cfg-dir".into(),
+            path: zone.clone(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 5,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(24),
+            min_fragment_ratio: Some(0.4),
+            formats: vec!["yaml".into(), "txt".into()],
+            index: FileIndexOptions::default(),
+        };
+        let fdlp = FileDlp::new(std::slice::from_ref(&rule)).unwrap();
+        fdlp.reload(std::slice::from_ref(&rule)).expect("reload");
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !fdlp.is_index_ready() {
+            if std::time::Instant::now() > deadline {
+                panic!("file index not ready");
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        let tool = format!(
+            r#"{{"command":"Get-ChildItem -Path \"{zone_str}\""}}"#
+        );
+        let activated = std::sync::Mutex::new(Vec::<String>::new());
+        fdlp.check_path_triggers_in_tool_text("sess", &tool, |_, _, files| {
+            activated.lock().unwrap().extend(files.iter().cloned());
+        });
+        let resolved = activated.lock().unwrap().clone();
+        assert!(!resolved.is_empty(), "expected indexed files under {zone_str}");
     }
 
     #[test]

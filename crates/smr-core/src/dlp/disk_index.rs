@@ -25,8 +25,8 @@ use crate::dlp::charset::{
 };
 use crate::dlp::doc_extract;
 use crate::dlp::file::{
-    basename_trigger_match, file_under_working_dir, path_basename, path_trigger_match,
-    paths_equivalent, strip_verbatim_path_prefix,
+    basename_trigger_match, file_under_working_dir, normalize_path_str, path_basename,
+    path_trigger_match, paths_equivalent, strip_verbatim_path_prefix,
 };
 use crate::dlp::fragment::{file_fragment_meets_threshold, file_min_fragment_len};
 use crate::dlp::normalize::{normalize_with_map, Normalized};
@@ -378,6 +378,35 @@ impl FileIndexManager {
             }
             let base = path_basename(indexed);
             if basename_trigger_match(&base, tool_text) {
+                out.insert(indexed.clone());
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// All indexed files under working directories (for `ls` / directory-only triggers).
+    pub fn resolve_all_indexed_files_under_working_dirs(
+        &self,
+        rule_id: &str,
+        working_dirs: &[String],
+        formats: &[String],
+    ) -> Vec<String> {
+        if working_dirs.is_empty() {
+            return Vec::new();
+        }
+        let guard = self.inner.read();
+        let Some(snapshot) = guard.snapshots.get(rule_id) else {
+            return Vec::new();
+        };
+        let mut out = HashSet::new();
+        for indexed in snapshot.indexed_paths.iter() {
+            if !matches_format(Path::new(indexed), formats) {
+                continue;
+            }
+            if working_dirs
+                .iter()
+                .any(|dir| file_under_working_dir(indexed, dir))
+            {
                 out.insert(indexed.clone());
             }
         }
@@ -955,10 +984,13 @@ fn collect_files(rule: &FileRule) -> Result<Vec<PathBuf>> {
 }
 
 fn matches_format(path: &Path, formats: &[String]) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|ext| formats.iter().any(|f| f.eq_ignore_ascii_case(ext)))
-        .unwrap_or(false)
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    if formats.iter().any(|f| f.eq_ignore_ascii_case(ext)) {
+        return true;
+    }
+    ext.eq_ignore_ascii_case("env") && formats.iter().any(|f| f.eq_ignore_ascii_case("txt"))
 }
 
 fn index_one_file(
@@ -1388,6 +1420,12 @@ fn scan_haystack(
     }
     if haystack.is_empty() {
         return haystack.to_string();
+    }
+    if whole_block_on_match && rule.path.is_dir() {
+        let rule_base = normalize_path_str(&rule.path.to_string_lossy());
+        if path_trigger_match(&rule_base, haystack) {
+            return tool_output_block_message.to_string();
+        }
     }
     if haystack.len() > rule.index.max_haystack_bytes {
         tracing::warn!(
