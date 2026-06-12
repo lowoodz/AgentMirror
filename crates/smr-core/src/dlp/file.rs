@@ -753,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn directory_only_mention_does_not_activate_index() {
+    fn directory_only_exec_activates_indexed_files_under_working_dir_ls() {
         use std::thread;
         use std::time::Duration;
         use tempfile::TempDir;
@@ -774,13 +774,14 @@ mod tests {
             index: FileIndexOptions::default(),
         };
         let fdlp = FileDlp::new(std::slice::from_ref(&rule)).unwrap();
-        for _ in 0..600 {
-            if fdlp.is_index_ready() {
-                break;
+        fdlp.reload(std::slice::from_ref(&rule)).expect("reload");
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !fdlp.is_index_ready() {
+            if std::time::Instant::now() > deadline {
+                panic!("file index not ready for directory-only trigger test");
             }
             thread::sleep(Duration::from_millis(50));
         }
-        assert!(fdlp.is_index_ready(), "file index not ready for directory-only trigger test");
 
         let dir = tmp.path().to_string_lossy().replace('\\', "/");
         let tool = format!(r#"{{"command":"ls -la \"{dir}\""}}"#);
@@ -789,8 +790,8 @@ mod tests {
             *activated.lock().unwrap() = true;
         });
         assert!(
-            !*activated.lock().unwrap(),
-            "directory-only tool text must not activate"
+            *activated.lock().unwrap(),
+            "directory ls command must activate indexed files under the folder"
         );
     }
 

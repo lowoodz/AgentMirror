@@ -35,7 +35,8 @@ pub fn display_path_for_config(raw: &str) -> String {
 #[cfg(windows)]
 fn user_facing_from_canonical(canon: &Path) -> Option<String> {
     for drive in b'A'..=b'Z' {
-        let root = PathBuf::from(format!("{}:\\", *drive as char));
+        let letter = drive as char;
+        let root = PathBuf::from(format!("{letter}:\\"));
         if !root.exists() {
             continue;
         }
@@ -43,19 +44,13 @@ fn user_facing_from_canonical(canon: &Path) -> Option<String> {
             continue;
         };
         if canon.starts_with(&root_canon) {
-            let rel = canon
-                .strip_prefix(&root_canon)
-                .unwrap_or_else(|_| canon.as_os_str());
+            let rel = canon.strip_prefix(&root_canon).unwrap_or(canon);
             let rel = rel.to_string_lossy();
             let rel = rel.trim_start_matches(['\\', '/']);
             if rel.is_empty() {
-                return Some(format!("{}:\\", *drive as char));
+                return Some(format!("{letter}:\\"));
             }
-            return Some(format!(
-                "{}:\\{}",
-                *drive as char,
-                rel.replace('/', "\\")
-            ));
+            return Some(format!("{letter}:\\{}", rel.replace('/', "\\")));
         }
     }
     None

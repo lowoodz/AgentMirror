@@ -342,7 +342,7 @@ mod file_session_tests {
     }
 
     #[test]
-    fn protected_directory_mention_does_not_activate_session() {
+    fn protected_directory_ls_activates_session() {
         let tmp = TempDir::new().unwrap();
         let probe = tmp.path().join("probe.txt");
         fs::write(&probe, "Q".repeat(65)).unwrap();
@@ -400,13 +400,13 @@ mod file_session_tests {
         });
         dlp.register_path_triggers(session, &trigger);
         assert!(
-            dlp.sessions().active_snapshot(session).is_none(),
-            "directory-only mention must not activate file DLP"
+            dlp.sessions().active_snapshot(session).is_some(),
+            "ls on protected directory must activate file DLP"
         );
     }
 
     #[test]
-    fn cd_ls_tool_listing_in_result_does_not_activate_session() {
+    fn cd_ls_tool_call_activates_session() {
         let tmp = TempDir::new().unwrap();
         let zone = tmp.path().join("protected-zone");
         fs::create_dir_all(&zone).unwrap();
@@ -467,8 +467,8 @@ mod file_session_tests {
         });
         dlp.register_path_triggers(session, &trigger);
         assert!(
-            dlp.sessions().active_snapshot(session).is_none(),
-            "ls listing filenames in tool result must not activate file DLP"
+            dlp.sessions().active_snapshot(session).is_some(),
+            "cd + ls tool-call args must activate file DLP for indexed files under the directory"
         );
     }
 

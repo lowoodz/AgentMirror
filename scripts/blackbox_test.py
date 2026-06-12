@@ -556,7 +556,7 @@ def run_all_scenarios(report: Report, secrets_dir: Path) -> None:
     scenario_file_session_guard(report, secrets_dir)
     scenario_exec_cd_relative_file_dlp(report, secrets_dir)
     scenario_file_scoped_sibling_not_scrubbed(report, secrets_dir)
-    scenario_directory_only_no_file_dlp(report, secrets_dir)
+    scenario_directory_listing_activates_file_dlp(report, secrets_dir)
     scenario_most_specific_child_file_scoped(report, secrets_dir)
     scenario_session_window_exhaustion(report, secrets_dir)
     scenario_request_ops_block(report)
@@ -884,8 +884,8 @@ def scenario_file_scoped_sibling_not_scrubbed(report: Report, secrets_dir: Path)
     )
 
 
-def scenario_directory_only_no_file_dlp(report: Report, secrets_dir: Path) -> None:
-    """Directory path in tool must not activate file DLP (concrete file required)."""
+def scenario_directory_listing_activates_file_dlp(report: Report, secrets_dir: Path) -> None:
+    """Directory listing (list_dir / ls) activates file DLP for indexed files under that folder."""
     story = "Agent：文件路径 DLP"
     dir_str = str(secrets_dir).replace("\\", "/")
     session = "blackbox-dir-only-session"
@@ -925,10 +925,10 @@ def scenario_directory_only_no_file_dlp(report: Report, secrets_dir: Path) -> No
     )
     audit = latest_audit(BASE)
     dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
-    ok = code2 == 200 and dlp == 0
+    ok = code2 == 200 and dlp >= 1 and not leaked
     report.add(
         story,
-        "directory_only_no_file_dlp",
+        "directory_listing_activates_file_dlp",
         ok,
         f"trigger_status={code1}, dlp={dlp}, file_secret_leaked={leaked}",
         ms1 + ms2,
