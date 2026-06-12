@@ -78,16 +78,9 @@ async fn api_canonicalize_paths(
 ) -> Json<serde_json::Value> {
     let mut out = Vec::new();
     for raw in req.paths {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let path = std::path::PathBuf::from(trimmed);
-        if path.exists() {
-            let canon = path.canonicalize().unwrap_or(path);
-            out.push(canon.display().to_string());
-        } else {
-            out.push(trimmed.to_string());
+        let display = crate::path_display::display_path_for_config(&raw);
+        if !display.is_empty() {
+            out.push(display);
         }
     }
     out.sort();

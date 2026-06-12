@@ -332,13 +332,13 @@ fn resolve_rule_base(rule_base: &str) -> String {
 }
 
 fn canonicalize_if_exists(path: &str) -> String {
-    let p = PathBuf::from(path);
+    let trimmed = trim_trailing_path_escapes(path);
+    let p = PathBuf::from(&trimmed);
     if p.exists() {
-        if let Ok(c) = std::fs::canonicalize(&p) {
-            return normalize_trigger_path(&c.to_string_lossy());
-        }
+        let display = crate::path_display::display_path_for_config(&trimmed);
+        return normalize_trigger_path(&display);
     }
-    normalize_trigger_path(path)
+    normalize_trigger_path(&trimmed)
 }
 
 fn path_under_rule(path: &str, rule_base: &str) -> bool {
@@ -358,8 +358,7 @@ fn path_under_rule(path: &str, rule_base: &str) -> bool {
 
 /// Strip Win32 verbatim `\\?\` prefix so tool paths and index paths compare equal.
 pub fn strip_verbatim_path_prefix(path: &str) -> String {
-    let p = normalize_path_str(path);
-    p.strip_prefix("//?/").unwrap_or(&p).to_string()
+    crate::path_display::strip_verbatim_path_prefix(path)
 }
 
 pub fn normalize_trigger_path(path: &str) -> String {

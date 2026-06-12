@@ -7,6 +7,7 @@ pub mod events;
 pub mod http_state;
 pub mod ops;
 pub mod paths;
+pub mod path_display;
 pub mod proxy;
 pub mod proxy_path;
 pub mod provider;
