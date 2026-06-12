@@ -54,6 +54,20 @@ fi
 
 if [[ "$FUNC_OK" -eq 1 && "$NSIS_OK" -eq 1 && "$PY_OK" -eq 1 ]]; then
   echo ""
+  echo "========== Phase 4: OpenClaw strict matrix (12 cases) =========="
+  OPENCLAW_OK=0
+  if bash "${ROOT}/scripts/vm/run-openclaw-matrix.sh" --skip-install; then
+    OPENCLAW_OK=1
+  else
+    echo "OpenClaw matrix did not pass; see dist/windows-openclaw-matrix.log" >&2
+  fi
+else
+  OPENCLAW_OK=0
+  echo "Skip OpenClaw matrix (prior VM phases failed)" >&2
+fi
+
+if [[ "$FUNC_OK" -eq 1 && "$NSIS_OK" -eq 1 && "$PY_OK" -eq 1 && "$OPENCLAW_OK" -eq 1 ]]; then
+  echo ""
   echo "========== ALL WINDOWS VM TESTS PASSED =========="
   exit 0
 fi
@@ -63,4 +77,5 @@ echo "========== SOME TESTS FAILED ==========" >&2
 echo "  functional: dist/windows-utm-test.log" >&2
 echo "  nsis: dist/windows-nsis-install-test.log" >&2
 echo "  blackbox/stress: dist/windows-utm-python-test.log" >&2
+echo "  openclaw: dist/windows-openclaw-matrix.log" >&2
 exit 1

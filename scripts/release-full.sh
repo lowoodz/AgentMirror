@@ -116,6 +116,7 @@ fi
 run "Live tests (host)" "${RC[@]}" test "${RC_EXTRA[@]}"
 run "Install from dist" "${RC[@]}" install "${RC_EXTRA[@]}"
 run "Installed-app tests" "${RC[@]}" installed "${RC_EXTRA[@]}"
+run "OpenClaw matrix (Mac)" "${RC[@]}" openclaw "${RC_EXTRA[@]}"
 
 if [[ "$SKIP_VM" != true ]]; then
   # shellcheck source=vm/vm-ssh.sh

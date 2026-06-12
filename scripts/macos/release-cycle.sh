@@ -23,7 +23,7 @@ usage() {
   cat <<'EOF'
 Usage: release-cycle.sh [phase] [options]
 
-Phases: all | preflight | clean | compile | package | verify | test | install | installed
+Phases: all | preflight | clean | compile | package | verify | test | install | installed | openclaw
 
 Artifact options (app / DMG are optional; CLI tar is always built and verified):
   --with-app       Require app tar; build Tauri app in package phase (default)
@@ -45,7 +45,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    all|preflight|clean|compile|package|verify|test|install|installed)
+    all|preflight|clean|compile|package|verify|test|install|installed|openclaw)
       PHASE="$1"
       shift
       ;;
@@ -166,6 +166,23 @@ phase_installed() {
   run_step "Installed-app tests" bash "${ROOT}/scripts/run_installed_app_tests.sh"
 }
 
+phase_openclaw() {
+  if [[ "$SKIP_TESTS" == true ]]; then
+    log "Skipping OpenClaw matrix (--skip-tests)"
+    return 0
+  fi
+  if ! has_test_keys; then
+    log "SKIP OpenClaw matrix: set config/test.env from config/test.env.example"
+    return 0
+  fi
+  if ! has_openclaw; then
+    log "SKIP OpenClaw matrix: openclaw not in PATH"
+    return 0
+  fi
+  run_step "OpenClaw strict matrix (12 cases)" bash "${ROOT}/scripts/run_openclaw_matrix.sh" \
+    --log "${ROOT}/dist/openclaw-matrix-macos-release-full.log"
+}
+
 log "macOS release cycle (phase=${PHASE}, app=${WITH_APP}, dmg=${WITH_DMG}) root=${ROOT}"
 log "Log: ${LOG_PATH}"
 
@@ -179,6 +196,7 @@ case "$PHASE" in
     phase_test
     phase_install
     phase_installed
+    phase_openclaw
     ;;
   preflight) phase_preflight ;;
   clean) phase_clean ;;
@@ -188,6 +206,7 @@ case "$PHASE" in
   test) phase_test ;;
   install) phase_install ;;
   installed) phase_installed ;;
+  openclaw) phase_openclaw ;;
   *)
     echo "Unknown phase: $PHASE" >&2
     usage >&2

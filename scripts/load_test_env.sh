@@ -24,6 +24,10 @@ has_test_keys() {
   [[ -f "${keys_file}" ]]
 }
 
+has_openclaw() {
+  command -v openclaw >/dev/null 2>&1
+}
+
 # Print path to a keys file (materialize from env when needed).
 resolve_keys_file() {
   local keys_file="${SMR_KEYS_FILE:-${ROOT}/test_model_api_key.txt}"
