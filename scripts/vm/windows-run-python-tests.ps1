@@ -118,7 +118,13 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
 Set-Location $TestRoot
 
+Log "==> transparency_pass_through_test.py (--release)"
+& $python (Join-Path $TestRoot "scripts\transparency_pass_through_test.py") --release 2>&1 | ForEach-Object { Log $_ }
+$transparency = $LASTEXITCODE
+
 Log "==> blackbox_test.py"
+Get-Process smr, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
 & $python (Join-Path $TestRoot "scripts\blackbox_test.py") 2>&1 | ForEach-Object { Log $_ }
 $bb = $LASTEXITCODE
 
@@ -134,9 +140,9 @@ $env:SMR_STRESS_MIN_SUCCESS = "0.75"
 $stress = $LASTEXITCODE
 
 Log ""
-if ($bb -eq 0 -and $stress -eq 0) {
+if ($transparency -eq 0 -and $bb -eq 0 -and $stress -eq 0) {
     Log "Python tests PASSED"
     exit 0
 }
-Log "Python tests FAILED (blackbox=$bb stress=$stress)"
+Log "Python tests FAILED (transparency=$transparency blackbox=$bb stress=$stress)"
 exit 1

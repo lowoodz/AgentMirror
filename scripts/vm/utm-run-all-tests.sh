@@ -46,7 +46,7 @@ fi
 stop_guest_smr
 
 echo ""
-echo "========== Phase 2–3: Blackbox + stress =========="
+echo "========== Phase 2–3: Transparency + blackbox + stress =========="
 PY_OK=0
 if bash "${ROOT}/scripts/vm/utm-run-python-tests.sh"; then
   PY_OK=1
@@ -76,6 +76,6 @@ echo ""
 echo "========== SOME TESTS FAILED ==========" >&2
 echo "  functional: dist/windows-utm-test.log" >&2
 echo "  nsis: dist/windows-nsis-install-test.log" >&2
-echo "  blackbox/stress: dist/windows-utm-python-test.log" >&2
+echo "  blackbox/stress/transparency: dist/windows-utm-python-test.log" >&2
 echo "  openclaw: dist/windows-openclaw-matrix.log" >&2
 exit 1

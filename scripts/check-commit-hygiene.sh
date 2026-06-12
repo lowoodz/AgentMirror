@@ -84,7 +84,7 @@ is_test_fixture_line() {
   local f="$1"
   local line="$2"
   case "$f" in
-    scripts/blackbox_test.py|scripts/live_test.py)
+    scripts/blackbox_test.py|scripts/live_test.py|scripts/transparency_pass_through_test.py)
       [[ "$line" == *PRESET_* || "$line" == *CONTENT_SECRET* || "$line" == *FILE_SECRET* ]] && return 0
       ;;
     crates/*/src/*.rs)

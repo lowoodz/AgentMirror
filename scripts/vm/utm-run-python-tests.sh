@@ -17,7 +17,7 @@ PY_PS1_GUEST="${GUEST_STAGING}/windows-run-python-tests.ps1"
 echo "========== Upload Python test suite ($VM_SSH) =========="
 vm_ssh_mkdir "${SUITE_GUEST}/scripts"
 
-for f in test_common.py blackbox_test.py live_test.py; do
+for f in test_common.py blackbox_test.py live_test.py transparency_pass_through_test.py; do
   vm_scp_to "${ROOT}/scripts/${f}" "${SUITE_GUEST}/scripts/${f}"
 done
 KEYS_SRC="$(resolve_keys_file)" || {

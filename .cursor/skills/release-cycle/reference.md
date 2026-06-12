@@ -166,7 +166,8 @@ preflight → clean → compile → package → verify → test → install → 
 | `windows/verify-package.ps1` | verify |
 | `install_functional_test.py` | test |
 | `blackbox_test.py` | test / installed |
-| `live_test.py` | test |
+| `transparency_pass_through_test.py --release` | test (macOS/Windows host + UTM guest; no API keys) |
+| `live_test.py` | stress |
 | `run_all_tests.sh` / `.ps1` | test |
 | `macos/install-smoke.sh` | install |
 | `vm/windows-install-smoke.ps1` | install |

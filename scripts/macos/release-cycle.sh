@@ -124,12 +124,16 @@ phase_verify() {
 }
 
 phase_test() {
+  smr_set_build_env
+  run_step "Transparency pass-through (mock, no API keys)" \
+    python3 "${ROOT}/scripts/transparency_pass_through_test.py" --release
+
   if [[ "$SKIP_TESTS" == true ]]; then
-    log "Skipping live tests (--skip-tests)"
+    log "Skipping live API tests (--skip-tests)"
     return 0
   fi
   if ! has_test_keys; then
-    log "SKIP live tests: set config/test.env from config/test.env.example"
+    log "SKIP live API tests: set config/test.env from config/test.env.example"
     return 0
   fi
   run_step "Install functional" python3 "${ROOT}/scripts/install_functional_test.py"

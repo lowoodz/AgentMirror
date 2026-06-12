@@ -38,15 +38,16 @@ run_step() {
 echo "Full test run started: $(date)" | tee "$SUMMARY"
 
 run_step "1-verify" bash scripts/verify.sh
+run_step "2-transparency" python3 scripts/transparency_pass_through_test.py --release
 
 if ! has_test_keys; then
-  echo ">>> SKIP live tests: copy config/test.env.example to config/test.env and set API keys" | tee -a "$SUMMARY"
+  echo ">>> SKIP live API tests: copy config/test.env.example to config/test.env and set API keys" | tee -a "$SUMMARY"
   exit 1
 fi
 
-run_step "2-install-functional" python3 scripts/install_functional_test.py
-run_step "3-blackbox" python3 scripts/blackbox_test.py
-run_step "4-stress" python3 scripts/live_test.py
+run_step "3-install-functional" python3 scripts/install_functional_test.py
+run_step "4-blackbox" python3 scripts/blackbox_test.py
+run_step "5-stress" python3 scripts/live_test.py
 
 # shellcheck source=vm/vm-ssh.sh
 source "${ROOT}/scripts/vm/vm-ssh.sh"
