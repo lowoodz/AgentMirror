@@ -59,6 +59,51 @@ impl ContentDlp {
         })
     }
 
+    /// True when text contains api-key/password/secret presets, secret content rules,
+    /// or non-secret content protection rules (full or fragment threshold).
+    pub fn has_protected_content(&self, text: &str) -> bool {
+        for rule in &self.secret_rules {
+            if text.contains(&rule.value) {
+                return true;
+            }
+        }
+
+        for (_, re) in &self.preset_patterns {
+            if re.is_match(text) {
+                return true;
+            }
+        }
+
+        for matcher in &self.rules {
+            let rule = &matcher.rule;
+            if rule.category == ContentCategory::Secret {
+                continue;
+            }
+            if rule.match_mode == MatchMode::Full && text.contains(&rule.value) {
+                return true;
+            }
+        }
+
+        if let Some(ac) = &self.automaton {
+            for mat in ac.find_iter(text) {
+                if let Some(rule) = self.find_fragment_rule(mat.pattern().as_usize()) {
+                    let matched_len = mat.end() - mat.start();
+                    let source_len = rule.value.chars().count();
+                    if fragment_meets_threshold(
+                        source_len,
+                        matched_len,
+                        rule.min_fragment_len,
+                        rule.min_fragment_ratio,
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     pub fn sanitize_text(&self, text: &str) -> Result<String> {
         let mut result = text.to_string();
 
@@ -235,6 +280,24 @@ fn apply_ranges_reversible(
 mod tests {
     use super::*;
     use crate::config::{ContentCategory, MatchMode, PipelineConfig};
+
+    #[test]
+    fn has_protected_content_detects_secret_and_presets() {
+        let rules = vec![ContentRule {
+            id: "phrase".into(),
+            enabled: true,
+            match_mode: MatchMode::Full,
+            value: "company-internal-code".into(),
+            category: ContentCategory::Normal,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+        }];
+        let pipeline = PipelineConfig::default();
+        let dlp = ContentDlp::new(&rules, &pipeline).unwrap();
+        assert!(dlp.has_protected_content("prefix company-internal-code suffix"));
+        assert!(!dlp.has_protected_content("unrelated text"));
+        assert!(dlp.has_protected_content("key sk-abcdefghijklmnopqrstuvwxyz123456"));
+    }
 
     #[test]
     fn secret_requires_full_match() {

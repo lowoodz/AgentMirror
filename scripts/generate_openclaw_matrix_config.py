@@ -13,6 +13,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from openclaw_matrix_common import (  # noqa: E402
+    CONTENT_RULE_SECRET,
+    DLP_SSH_NEEDLE,
     ensure_fixtures,
     matrix_layout,
     matrix_root,
@@ -63,7 +65,17 @@ fallback_groups:
   high:
 {high_block}
 
-content_rules: []
+content_rules:
+  - id: matrix-content-secret
+    enabled: true
+    match_mode: full
+    value: "{CONTENT_RULE_SECRET}"
+    category: secret
+  - id: matrix-ssh-canary
+    enabled: true
+    match_mode: full
+    value: "{DLP_SSH_NEEDLE}"
+    category: secret
 
 file_rules:
   - id: matrix-dlp-dir
@@ -74,7 +86,7 @@ file_rules:
     match_mode: fragment
     min_fragment_len: 24
     min_fragment_ratio: 0.4
-    formats: ["txt", "md"]
+    formats: ["txt", "md", "pub"]
 
 operation_rules:
   - id: matrix-rm-rf

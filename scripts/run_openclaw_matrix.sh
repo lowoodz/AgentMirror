@@ -67,17 +67,19 @@ GEN_ARGS=(--output "$MATRIX_CFG" --env-file "$ENV_FILE" --fixtures)
 
 restore_config() {
   restore_openclaw
+  if [[ -f "$BACKUP" ]]; then
+    cp "$BACKUP" "$CFG"
+    rm -f "$BACKUP"
+    if [[ -n "$SMR_PROC" ]] && kill -0 "$SMR_PROC" 2>/dev/null; then
+      curl -sf -X PUT "${BASE}/api/reload" >/dev/null || true
+      "${ROOT}/scripts/wait-file-index-ready.sh" "$BASE" 180 || true
+    fi
+    echo "==> Restored smr.yaml from backup"
+  fi
   if [[ -n "$SMR_PROC" ]] && kill -0 "$SMR_PROC" 2>/dev/null; then
     kill "$SMR_PROC" 2>/dev/null || true
     wait "$SMR_PROC" 2>/dev/null || true
     SMR_PROC=""
-  fi
-  if [[ -f "$BACKUP" ]]; then
-    cp "$BACKUP" "$CFG"
-    rm -f "$BACKUP"
-    curl -sf -X PUT "${BASE}/api/reload" >/dev/null || true
-    "${ROOT}/scripts/wait-file-index-ready.sh" "$BASE" 180 || true
-    echo "==> Restored smr.yaml from backup"
   fi
 }
 
@@ -129,6 +131,8 @@ patch_openclaw_for_matrix
 
 # Do not inherit stale matrix paths from the shell environment.
 unset SMR_MATRIX_ROOT SMR_MATRIX_DLP_DIR SMR_MATRIX_DLP_SECRET \
+  SMR_MATRIX_DLP_SSH_PUB SMR_MATRIX_DLP_OUT_SSH SMR_MATRIX_DLP_OUT_CONTENT \
+  SMR_MATRIX_CONTENT_SECRET SMR_MATRIX_SSH_NEEDLE \
   SMR_MATRIX_PATH_DENY_ACCESS SMR_MATRIX_PATH_DENY_MODIFY \
   SMR_MATRIX_PATH_DENY_DELETE SMR_MATRIX_PATH_OPEN SMR_MATRIX_OPS_TMP \
   SMR_MATRIX_DLP_CANARY SMR_MATRIX_PLATFORM

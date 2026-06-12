@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """OpenClaw matrix: DLP / path protection / operation security (positive + negative).
 
+Includes reversible DLP cases: SSH pub-key file read→write and content-rule write,
+verifying upstream redaction and plaintext restore in exec tool_call arguments.
+
 Requires: SafeRoute on :8080, OpenClaw gateway, provider saferoute-high.
 
 Platform paths come from SMR_MATRIX_* env vars (see generate_openclaw_matrix_config.py).
@@ -26,7 +29,9 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from openclaw_matrix_common import (  # noqa: E402
+    CONTENT_RULE_SECRET,
     DLP_CANARY,
+    DLP_SSH_NEEDLE,
     MARKER_FILE,
     ensure_fixtures,
     is_windows,
@@ -55,6 +60,11 @@ class MatrixPaths:
     matrix_root: str
     dlp_dir: str
     dlp_secret: Path
+    dlp_ssh_pub: Path
+    dlp_out_ssh: str
+    dlp_out_content: str
+    content_secret: str
+    ssh_needle: str
     path_deny_access: str
     path_deny_modify: str
     path_deny_delete: str
@@ -103,6 +113,11 @@ def resolve_matrix_paths() -> MatrixPaths:
         matrix_root=paths["matrix_root"],
         dlp_dir=paths["dlp_dir"],
         dlp_secret=Path(paths["dlp_secret"]),
+        dlp_ssh_pub=Path(pick("SMR_MATRIX_DLP_SSH_PUB", base["dlp_ssh_pub"])),
+        dlp_out_ssh=pick("SMR_MATRIX_DLP_OUT_SSH", base["dlp_out_ssh"]),
+        dlp_out_content=pick("SMR_MATRIX_DLP_OUT_CONTENT", base["dlp_out_content"]),
+        content_secret=pick("SMR_MATRIX_CONTENT_SECRET", CONTENT_RULE_SECRET),
+        ssh_needle=pick("SMR_MATRIX_SSH_NEEDLE", DLP_SSH_NEEDLE),
         path_deny_access=paths["path_deny_access"],
         path_deny_modify=paths["path_deny_modify"],
         path_deny_delete=paths["path_deny_delete"],
@@ -146,6 +161,27 @@ def shell_delete_file(path: str) -> str:
     return f'rm -f "{path}"'
 
 
+def _windows_python() -> str:
+    staging = os.environ.get("SMR_GUEST_STAGING", "C:/Users/Public/smr-staging").replace(
+        "\\", "/"
+    )
+    py = f"{staging.rstrip('/')}/python312/python.exe"
+    if Path(py).is_file():
+        return py
+    return "C:/Users/Public/python312/python.exe"
+
+
+def shell_write_line(path: str, line: str) -> str:
+    if is_windows():
+        py = _windows_python()
+        return (
+            f'{py} -c "open(r\'{path}\', \'w\', encoding=\'utf-8\').write('
+            f"{line!r})\""
+        )
+    escaped = line.replace("'", "'\\''")
+    return f"printf '%s\\n' '{escaped}' > \"{path}\""
+
+
 def build_cases(mp: MatrixPaths) -> list["Case"]:
     modify_file = f"{mp.path_deny_modify}/{MARKER_FILE}"
     delete_file = f"{mp.path_deny_delete}/{MARKER_FILE}"
@@ -158,6 +194,7 @@ def build_cases(mp: MatrixPaths) -> list["Case"]:
             f"Use exec once: {shell_list_dir(mp.dlp_dir)}. Reply with stdout only.",
             expect_block=False,
             expect_exec_ok=True,
+            allow_empty_reply=True,
             traffic_needle=mp.dlp_dir,
         ),
         Case(
@@ -171,6 +208,41 @@ def build_cases(mp: MatrixPaths) -> list["Case"]:
             expect_dlp=True,
             traffic_needle=dlp_needle,
             openclaw_timeout=300,
+        ),
+        Case(
+            "dlp_reversible_ssh_pub_write",
+            (
+                f"Use the read tool once on {mp.dlp_ssh_pub}. "
+                f"Then use exec once to write the same key line to {mp.dlp_out_ssh} "
+                "(use printf or echo with the full key text inline — do not use cp/mv). "
+                "Reply OK when done."
+            ),
+            expect_block=False,
+            expect_dlp=True,
+            expect_reversible=True,
+            reversible_needle=mp.ssh_needle,
+            expect_exec_ok=True,
+            allow_read_tool=True,
+            verify_output_path=mp.dlp_out_ssh,
+            traffic_needle=mp.ssh_needle,
+            openclaw_timeout=360,
+        ),
+        Case(
+            "dlp_reversible_content_write",
+            (
+                f"The protected string is exactly: {mp.content_secret}. "
+                f"Use exec once to write that string as a single line to {mp.dlp_out_content}; "
+                f"the command must include {mp.content_secret} literally (printf/echo). "
+                "Reply OK when done."
+            ),
+            expect_block=False,
+            expect_dlp=True,
+            expect_reversible=True,
+            reversible_needle=mp.content_secret,
+            expect_exec_ok=True,
+            verify_output_path=mp.dlp_out_content,
+            traffic_needle=mp.content_secret,
+            openclaw_timeout=360,
         ),
         Case(
             "path_negative_open",
@@ -240,7 +312,12 @@ class Case:
     message: str
     expect_block: bool
     expect_dlp: bool = False
+    expect_reversible: bool = False
+    reversible_needle: str = ""
+    allow_read_tool: bool = False
+    verify_output_path: str = ""
     expect_exec_ok: bool = False
+    allow_empty_reply: bool = False
     traffic_needle: str = ""
     openclaw_timeout: int = 180
     replay_command: str = ""
@@ -305,6 +382,116 @@ def traffic_text_since(since: float, *, needle: str = "") -> str:
         except OSError:
             pass
     return "\n".join(chunks)
+
+
+def traffic_phases_since(since: float, *, needle: str | None = None) -> dict[str, str]:
+    """Collect traffic bodies by phase. When needle is set, skip files that do not contain it."""
+    buckets: dict[str, list[str]] = {}
+    for path in traffic_files_since(since):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if needle and needle not in text:
+            continue
+        phase = next(
+            (
+                p
+                for p in ("request_out", "response_out", "request_in", "response_in")
+                if p in path.name
+            ),
+            None,
+        )
+        if phase:
+            buckets.setdefault(phase, []).append(text)
+    return {phase: "\n".join(parts) for phase, parts in buckets.items()}
+
+
+def _needle_outside_smr_tokens(text: str, needle: str) -> bool:
+    if needle not in text:
+        return False
+    stripped = re.sub(r"\[\[smr:[^\]]+\]\]", "", text)
+    return needle in stripped
+
+
+def _non_user_upstream_text(request_out: str) -> str:
+    """Tool/assistant payload sent upstream — excludes user prompts (may name task paths)."""
+    chunks: list[str] = []
+    for raw in request_out.split("\n"):
+        snippet = raw.strip()
+        if not snippet.startswith("{"):
+            continue
+        try:
+            data = json.loads(snippet)
+        except json.JSONDecodeError:
+            continue
+        for msg in data.get("messages") or []:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") == "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                chunks.append(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        text_val = block.get("text")
+                        if isinstance(text_val, str):
+                            chunks.append(text_val)
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                chunks.append(json.dumps(tool_calls, ensure_ascii=False))
+    if chunks:
+        return "\n".join(chunks)
+    return request_out
+
+
+def _exec_tool_args_restored(text: str, needle: str) -> bool:
+    if not text or needle not in text or not _needle_outside_smr_tokens(text, needle):
+        return False
+    return bool(re.search(r'"name"\s*:\s*"exec"', text)) and (
+        "tool_calls" in text or '"arguments"' in text
+    )
+
+
+def reversible_restore_evidence(
+    phases: dict[str, str],
+    needle: str,
+    *,
+    output_path: str = "",
+) -> tuple[bool, str]:
+    req = phases.get("request_out", "")
+    resp = phases.get("response_out", "")
+    combined = "\n".join(phases.values())
+
+    if needle not in combined:
+        if output_path:
+            out = Path(output_path)
+            if out.is_file() and needle in out.read_text(encoding="utf-8", errors="replace"):
+                if req and "[[smr:" in req and not _needle_outside_smr_tokens(req, needle):
+                    return True, f"output file contains {needle!r}; upstream used tokens"
+        return False, f"needle {needle!r} absent from phased traffic"
+
+    if req and _needle_outside_smr_tokens(_non_user_upstream_text(req), needle):
+        return False, "protected value leaked verbatim to upstream (request_out tool/assistant)"
+
+    if _exec_tool_args_restored(resp, needle):
+        return True, "upstream redacted/tokenized; response_out exec args restored"
+    if _exec_tool_args_restored(combined, needle):
+        return True, "upstream redacted/tokenized; exec tool args restored in case traffic"
+
+    if output_path:
+        out = Path(output_path)
+        if out.is_file() and needle in out.read_text(encoding="utf-8", errors="replace"):
+            if "[[smr:" in combined and not _needle_outside_smr_tokens(req, needle):
+                return True, f"output file written; upstream tokenized ({output_path})"
+
+    if not resp:
+        return False, "protected value not present in response_out"
+    if "tool_calls" not in resp and '"exec"' not in resp:
+        return False, "response_out has no exec tool_calls for restore check"
+    return False, "needle present but exec tool args not restored to plaintext"
 
 
 def openclaw_bin() -> str:
@@ -598,6 +785,112 @@ def replay_dlp(session: str, mp: MatrixPaths) -> tuple[bool, str]:
     return True, f"replay audit dlp_replacements={dlp} ({ms:.0f} ms)"
 
 
+def replay_reversible_ssh(session: str, mp: MatrixPaths) -> tuple[bool, str]:
+    if not mp.dlp_ssh_pub.is_file():
+        return False, f"missing fixture {mp.dlp_ssh_pub}"
+    tool_out = mp.dlp_ssh_pub.read_text(encoding="utf-8", errors="replace")[:2500]
+    write_cmd = shell_write_line(mp.dlp_out_ssh, tool_out.strip())
+    payload = {
+        "model": "saferoute-high",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    f"Read {mp.dlp_ssh_pub} then write the full key line to {mp.dlp_out_ssh} "
+                    "with exec (printf/echo inline, no cp/mv)."
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c_read",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": json.dumps({"path": str(mp.dlp_ssh_pub)}),
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c_read", "content": tool_out},
+            {
+                "role": "user",
+                "content": f"Now exec once: {write_cmd}",
+            },
+        ],
+        "max_tokens": 256,
+    }
+    return _replay_reversible_payload(
+        session, payload, mp.ssh_needle, output_path=mp.dlp_out_ssh
+    )
+
+
+def replay_reversible_content(session: str, mp: MatrixPaths) -> tuple[bool, str]:
+    write_cmd = shell_write_line(mp.dlp_out_content, mp.content_secret)
+    payload = {
+        "model": "saferoute-high",
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Write protected string {mp.content_secret} to file.",
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c_write",
+                        "type": "function",
+                        "function": {
+                            "name": "exec",
+                            "arguments": json.dumps({"command": write_cmd}),
+                        },
+                    }
+                ],
+            },
+        ],
+        "max_tokens": 64,
+    }
+    return _replay_reversible_payload(
+        session, payload, mp.content_secret, output_path=mp.dlp_out_content
+    )
+
+
+def _replay_reversible_payload(
+    session: str,
+    payload: dict,
+    needle: str,
+    *,
+    output_path: str = "",
+) -> tuple[bool, str]:
+    headers = {"Authorization": "Bearer dummy", "X-SMR-Session-Id": session}
+    started = time.time()
+    code, text, ms = http(
+        "POST",
+        f"{BASE}/v1/chat/completions",
+        body=payload,
+        headers=headers,
+        timeout=120.0,
+    )
+    if code != 200:
+        return False, f"replay POST {code}: {text[:200]}"
+    audit = wait_for_session_audit(BASE, session, timeout=15.0)
+    if not audit:
+        return False, "replay produced no audit row"
+    dlp = int(audit.get("dlp_replacements", 0))
+    if dlp <= 0:
+        return False, f"replay audit dlp_replacements={dlp}"
+    phases = traffic_phases_since(started)
+    rev_ok, rev_detail = reversible_restore_evidence(
+        phases, needle, output_path=output_path
+    )
+    if not rev_ok:
+        return False, f"replay DLP ok but restore failed: {rev_detail}"
+    return True, f"replay dlp={dlp}; {rev_detail} ({ms:.0f} ms)"
+
+
 def wait_for_case_dlp(
     case: Case, started: float, canary: str, *, timeout: float | None = None
 ) -> tuple[bool, str, dict, str]:
@@ -616,6 +909,32 @@ def wait_for_case_dlp(
     return False, "timed out waiting for OpenClaw follow-up DLP", last_stats, last_traffic
 
 
+def wait_for_case_reversible(
+    case: Case,
+    started: float,
+    mp: MatrixPaths,
+    *,
+    timeout: float | None = None,
+) -> tuple[bool, str, dict[str, str]]:
+    needle = case.reversible_needle or case.traffic_needle
+    if timeout is None:
+        timeout = min(240.0, max(90.0, case.openclaw_timeout * 0.6))
+    deadline = time.time() + timeout
+    last_phases: dict[str, str] = {}
+    last_detail = ""
+    while time.time() < deadline:
+        last_phases = traffic_phases_since(started)
+        ok, last_detail = reversible_restore_evidence(
+            last_phases,
+            needle,
+            output_path=case.verify_output_path,
+        )
+        if ok:
+            return True, last_detail, last_phases
+        time.sleep(2.0)
+    return False, last_detail or "timed out waiting for reversible restore", last_phases
+
+
 def run_case(case: Case, mp: MatrixPaths, *, strict: bool) -> bool:
     started = time.time()
     session_id = f"smr-matrix-{case.name}-{int(started)}"
@@ -630,17 +949,22 @@ def run_case(case: Case, mp: MatrixPaths, *, strict: bool) -> bool:
     stats = audit_stats_since(BASE, started)
     reply = openclaw_reply_text(out)
     traffic = traffic_text_since(started, needle=case.traffic_needle or "")
-    blocked = blocked_in_case_traffic(traffic, case) or (
-        case.expect_block and stats["blocks"] > 0
-    )
 
     ok = True
     healthy, health_detail = openclaw_reply_healthy(reply, err)
+    exec_ran = openclaw_invoked_exec(traffic)
     if strict and not healthy:
-        print(f"FAIL: {health_detail} — reply={reply[:160]!r}", file=sys.stderr)
-        ok = False
+        if case.allow_empty_reply and exec_ran and case.traffic_needle in traffic:
+            print(f"    WARN: {health_detail} — exec path OK (allow_empty_reply)")
+        else:
+            print(f"FAIL: {health_detail} — reply={reply[:160]!r}", file=sys.stderr)
+            ok = False
     elif not healthy:
         print(f"    WARN: {health_detail} — reply={reply[:120]!r}")
+
+    blocked = blocked_in_case_traffic(traffic, case) or (
+        case.expect_block and stats["blocks"] > 0
+    )
 
     upstream_ok, upstream_detail = upstream_llm_ok(started)
     if strict:
@@ -707,10 +1031,41 @@ def run_case(case: Case, mp: MatrixPaths, *, strict: bool) -> bool:
             ok = False
         else:
             print(f"    DLP evidence: {detail}")
+    if case.expect_reversible:
+        rev_ok, rev_detail, _phases = wait_for_case_reversible(case, started, mp)
+        if not rev_ok and not strict:
+            replay_session = f"{session_id}-rev-replay"
+            if case.name == "dlp_reversible_ssh_pub_write":
+                replay_ok, replay_detail = replay_reversible_ssh(replay_session, mp)
+            elif case.name == "dlp_reversible_content_write":
+                replay_ok, replay_detail = replay_reversible_content(replay_session, mp)
+            else:
+                replay_ok, replay_detail = False, "no replay handler"
+            if replay_ok:
+                rev_ok = True
+                rev_detail = f"OpenClaw path incomplete; {replay_detail}"
+        if not rev_ok:
+            print(f"FAIL: expected reversible restore — {rev_detail}", file=sys.stderr)
+            ok = False
+        else:
+            print(f"    Reversible restore: {rev_detail}")
     if case.expect_exec_ok and not exec_looks_ok(reply + traffic):
         print("FAIL: exec does not look successful", file=sys.stderr)
         ok = False
-    if strict and (case.expect_exec_ok or case.expect_dlp) and not openclaw_invoked_exec(traffic):
+    if strict and case.expect_exec_ok and not openclaw_invoked_exec(traffic):
+        print(
+            "FAIL: OpenClaw did not invoke exec tool (no end-to-end tool path)",
+            file=sys.stderr,
+        )
+        ok = False
+    if (
+        strict
+        and case.allow_read_tool
+        and not re.search(r'"name"\s*:\s*"read"', traffic)
+    ):
+        print("FAIL: OpenClaw did not invoke read tool for SSH pub fixture", file=sys.stderr)
+        ok = False
+    elif strict and case.expect_dlp and not case.expect_reversible and not openclaw_invoked_exec(traffic):
         print(
             "FAIL: OpenClaw did not invoke exec tool (no end-to-end tool path)",
             file=sys.stderr,
@@ -747,9 +1102,9 @@ def main() -> int:
         f"traffic_dir={TRAFFIC} strict_e2e={strict}"
     )
 
-    if not mp.dlp_secret.is_file():
+    if not mp.dlp_secret.is_file() or not mp.dlp_ssh_pub.is_file():
         print(
-            f"FAIL: missing DLP fixture {mp.dlp_secret} — "
+            f"FAIL: missing DLP fixtures under {mp.dlp_dir} — "
             "run scripts/run_openclaw_matrix.sh or generate_openclaw_matrix_config.py --fixtures",
             file=sys.stderr,
         )

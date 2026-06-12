@@ -10,6 +10,11 @@ from pathlib import Path
 
 DLP_CANARY = "SMR-MATRIX-DLP-CANARY-PORTABLE-FIXTURE"
 DLP_SECRET_FILE = "matrix-secret.txt"
+DLP_SSH_PUB_FILE = "matrix-ssh.pub"
+DLP_SSH_NEEDLE = "SMR-MATRIX-SSH-PUB-CANARY"
+CONTENT_RULE_SECRET = "SMR-MATRIX-CONTENT-RULE-SECRET-XYZZY"
+DLP_OUT_SSH = "matrix-ssh-out.txt"
+DLP_OUT_CONTENT = "matrix-content-out.txt"
 MARKER_FILE = "matrix-marker.txt"
 
 
@@ -82,6 +87,9 @@ def matrix_layout(root: Path | str | None = None) -> dict[str, str]:
         "matrix_root": base_text,
         "dlp_dir": f"{base_text}/dlp-data",
         "dlp_secret": f"{base_text}/dlp-data/{DLP_SECRET_FILE}",
+        "dlp_ssh_pub": f"{base_text}/dlp-data/{DLP_SSH_PUB_FILE}",
+        "dlp_out_ssh": f"{base_text}/open-area/{DLP_OUT_SSH}",
+        "dlp_out_content": f"{base_text}/open-area/{DLP_OUT_CONTENT}",
         "path_deny_access": f"{base_text}/protected-access",
         "path_deny_modify": f"{base_text}/protected-modify",
         "path_deny_delete": f"{base_text}/protected-delete",
@@ -113,6 +121,13 @@ def ensure_fixtures(root: Path | None = None) -> dict[str, str]:
             f"{DLP_CANARY}\nPortable matrix fixture for file DLP indexing.\n",
             encoding="utf-8",
         )
+    ssh_pub = dlp_dir / DLP_SSH_PUB_FILE
+    if not ssh_pub.is_file():
+        ssh_pub.write_text(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMatrixFixtureCanarySmrOpenClawE2ETest "
+            f"smr-matrix-{DLP_SSH_NEEDLE}@localhost\n",
+            encoding="utf-8",
+        )
     return paths
 
 
@@ -123,6 +138,11 @@ def write_env_file(out: Path, paths: dict[str, str], *, platform: str | None = N
         f"SMR_MATRIX_ROOT={paths['matrix_root']}",
         f"SMR_MATRIX_DLP_DIR={paths['dlp_dir']}",
         f"SMR_MATRIX_DLP_SECRET={paths['dlp_secret']}",
+        f"SMR_MATRIX_DLP_SSH_PUB={paths['dlp_ssh_pub']}",
+        f"SMR_MATRIX_DLP_OUT_SSH={paths['dlp_out_ssh']}",
+        f"SMR_MATRIX_DLP_OUT_CONTENT={paths['dlp_out_content']}",
+        f"SMR_MATRIX_CONTENT_SECRET={CONTENT_RULE_SECRET}",
+        f"SMR_MATRIX_SSH_NEEDLE={DLP_SSH_NEEDLE}",
         f"SMR_MATRIX_PATH_DENY_ACCESS={paths['path_deny_access']}",
         f"SMR_MATRIX_PATH_DENY_MODIFY={paths['path_deny_modify']}",
         f"SMR_MATRIX_PATH_DENY_DELETE={paths['path_deny_delete']}",

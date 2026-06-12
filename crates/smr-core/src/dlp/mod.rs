@@ -178,12 +178,21 @@ impl DlpEngine {
         scan_files: bool,
         whole_block_on_match: bool,
     ) -> anyhow::Result<String> {
+        let content_protected = self.content.has_protected_content(text);
         let sanitized = if self.reversible {
             self.content
                 .sanitize_text_reversible(text, session_id, &self.vault)?
         } else {
             self.content.sanitize_text(text)?
         };
+
+        // Api-key / password / secret / content-rule hits: span-level redaction only.
+        // Skip file DLP on the same text so surrounding task context stays intact and
+        // reversible tokens can restore in tool-call arguments.
+        if content_protected {
+            return Ok(sanitized);
+        }
+
         if scan_files {
             if let Some(active) = session_active {
                 let block_message = self.tool_output_block_message();
@@ -632,7 +641,7 @@ mod file_session_tests {
             .unwrap_or_else(|| repl.first().map(|(_, t)| t.clone()).unwrap_or_default());
         assert_eq!(
             sanitized, expected,
-            "tool output should be wholly replaced with block message, got: {sanitized}"
+            "file-only tool output should be wholly replaced, got: {sanitized}"
         );
         assert!(
             !sanitized.contains(&secret),

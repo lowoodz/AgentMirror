@@ -73,7 +73,7 @@ vm_ssh "cmd.exe /c \"set SMR_GUEST_STAGING=${GUEST_STAGING}&& set SMR_GUEST_WORK
   2>&1 | tee "$LOG_LOCAL"
 
 if grep -qE "Summary: [0-9]+/[0-9]+ passed" "$LOG_LOCAL"; then
-  if grep -q "Summary: 10/10 passed" "$LOG_LOCAL"; then
+  if grep -q "Summary: 12/12 passed" "$LOG_LOCAL"; then
     echo "==> Windows OpenClaw matrix PASSED (strict E2E)"
     exit 0
   fi
