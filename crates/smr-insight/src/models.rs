@@ -244,3 +244,14 @@ impl Default for InsightConfig {
         }
     }
 }
+
+impl InsightConfig {
+    pub fn normalize(&mut self) {
+        if self.retention_days == 0 {
+            self.retention_days = default_retention();
+        }
+        if self.daily_report_hour > 23 {
+            self.daily_report_hour = default_daily_hour();
+        }
+    }
+}

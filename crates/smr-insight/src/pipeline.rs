@@ -7,7 +7,7 @@ use crate::graph::build_graph;
 use crate::models::{RunRecord, RunStatus, TraceTurn};
 use crate::parser::{parse_request, parse_response};
 use crate::report::{build_reflection_report, outcome_from_status};
-use crate::separator::{infer_goal_from_request, new_run_id, resolve_agent};
+use crate::separator::{infer_goal_from_request, new_run_id, resolve_agent, should_start_new_run};
 use crate::store::InsightStore;
 
 pub struct Pipeline {
@@ -42,11 +42,15 @@ impl Pipeline {
         let ctx = resolve_agent(&turn, &req, existing_agent.as_ref());
         self.store.upsert_agent(&ctx.agent_record)?;
 
-        let mut run = if ctx.is_new_run {
+        let active_run = self
+            .store
+            .find_active_run(&ctx.agent_id, &turn.session_id)?;
+        let is_new_run = should_start_new_run(&req, active_run.as_ref(), turn.timestamp);
+
+        let mut run = if is_new_run {
             None
         } else {
-            self.store
-                .find_active_run(&ctx.agent_id, &turn.session_id)?
+            active_run
         };
 
         if run.is_none() {

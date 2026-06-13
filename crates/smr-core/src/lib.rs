@@ -6,6 +6,7 @@ pub mod dlp;
 pub mod events;
 pub mod http_state;
 pub mod insight_admin;
+pub mod insight_sse;
 pub mod ops;
 pub mod paths;
 pub mod path_display;

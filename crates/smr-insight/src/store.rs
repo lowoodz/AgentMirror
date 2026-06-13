@@ -365,6 +365,73 @@ impl InsightStore {
         }
         Ok(Some(std::fs::read_to_string(path)?))
     }
+
+    /// Remove insight data older than `retention_days` (0 = skip).
+    pub fn purge_older_than(&self, retention_days: u32) -> Result<PurgeStats> {
+        if retention_days == 0 {
+            return Ok(PurgeStats::default());
+        }
+        let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
+        let cutoff_str = cutoff.to_rfc3339();
+        let cutoff_date = cutoff.date_naive().to_string();
+
+        let conn = self.conn.lock().unwrap();
+
+        let mut run_ids: Vec<(String, Option<String>)> = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT run_id, graph_path FROM insight_runs WHERE started_at < ?1",
+            )?;
+            let rows = stmt.query_map(params![cutoff_str], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?;
+            run_ids.extend(rows.filter_map(|r| r.ok()));
+        }
+
+        let mut stats = PurgeStats {
+            runs: run_ids.len(),
+            ..Default::default()
+        };
+
+        for (run_id, graph_path) in &run_ids {
+            if let Some(path) = graph_path {
+                let _ = std::fs::remove_file(path);
+            } else {
+                let _ = std::fs::remove_file(self.graph_path_for_run(run_id));
+            }
+            let events = conn.execute(
+                "DELETE FROM insight_events WHERE run_id = ?1",
+                params![run_id],
+            )?;
+            stats.events += events;
+            let reports = conn.execute(
+                "DELETE FROM insight_reports WHERE run_id = ?1",
+                params![run_id],
+            )?;
+            stats.reports += reports;
+        }
+
+        conn.execute(
+            "DELETE FROM insight_runs WHERE started_at < ?1",
+            params![cutoff_str],
+        )?;
+
+        let daily = conn.execute(
+            "DELETE FROM insight_daily_reports WHERE date < ?1",
+            params![cutoff_date],
+        )?;
+        stats.daily_reports = daily;
+
+        Ok(stats)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PurgeStats {
+    pub runs: usize,
+    pub events: usize,
+    pub reports: usize,
+    pub daily_reports: usize,
 }
 
 fn parse_ts(s: &str) -> DateTime<Utc> {

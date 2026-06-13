@@ -1,8 +1,8 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use xxhash_rust::xxh64::xxh64;
 
-use crate::models::AgentRecord;
+use crate::models::{AgentRecord, RunRecord, RunStatus};
 use crate::parser::ParsedRequest;
 
 const AGENT_NS: Uuid = Uuid::NAMESPACE_OID;
@@ -10,7 +10,6 @@ const AGENT_NS: Uuid = Uuid::NAMESPACE_OID;
 pub struct AgentContext {
     pub agent_id: String,
     pub agent_record: AgentRecord,
-    pub is_new_run: bool,
 }
 
 pub fn resolve_agent(
@@ -43,12 +42,9 @@ pub fn resolve_agent(
         last_seen: now,
     };
 
-    let is_new_run = should_start_new_run(req, existing_agent);
-
     AgentContext {
         agent_id,
         agent_record: record,
-        is_new_run,
     }
 }
 
@@ -93,11 +89,90 @@ fn infer_display_name(agent_type: &str, tools: &[String]) -> String {
     }
 }
 
-fn should_start_new_run(req: &ParsedRequest, _existing: Option<&AgentRecord>) -> bool {
-    // First user message in this turn with no prior context signals a new task.
+/// Idle gap after which the next turn starts a new Run (see detailed plan §十二).
+const RUN_IDLE_MINUTES: i64 = 30;
+
+const NEW_TASK_MARKERS: &[&str] = &[
+    "new task:",
+    "/clear",
+    "start over",
+    "forget the previous",
+    "新任务",
+    "另一个任务",
+    "重新开始",
+];
+
+/// Decide whether to open a new Run vs continue the active one for this agent+session.
+pub fn should_start_new_run(
+    req: &ParsedRequest,
+    active_run: Option<&RunRecord>,
+    turn_time: DateTime<Utc>,
+) -> bool {
+    let Some(run) = active_run else {
+        return true;
+    };
+
+    if run.status != RunStatus::Running {
+        return true;
+    }
+
+    if let Some(ended) = run.ended_at {
+        if turn_time.signed_duration_since(ended).num_minutes() > RUN_IDLE_MINUTES {
+            return true;
+        }
+    }
+
+    if let Some(user_text) = latest_user_message(req) {
+        if looks_like_new_task(user_text, &run.goal) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn latest_user_message(req: &ParsedRequest) -> Option<&str> {
     req.new_messages
         .iter()
-        .any(|m| m.role == "user" && !m.text.trim().is_empty())
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.text.as_str())
+        .filter(|t| !t.trim().is_empty())
+}
+
+fn looks_like_new_task(user_text: &str, goal: &str) -> bool {
+    let lower = user_text.to_ascii_lowercase();
+    if NEW_TASK_MARKERS.iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    // Strong topic shift: long message with almost no keyword overlap with current goal.
+    if user_text.chars().count() > 60 && keyword_jaccard(goal, user_text) < 0.12 {
+        return true;
+    }
+    false
+}
+
+fn keyword_jaccard(a: &str, b: &str) -> f32 {
+    let set_a = keyword_set(a);
+    let set_b = keyword_set(b);
+    if set_a.is_empty() || set_b.is_empty() {
+        return 0.0;
+    }
+    let inter = set_a.intersection(&set_b).count() as f32;
+    let union = set_a.union(&set_b).count() as f32;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+fn keyword_set(text: &str) -> std::collections::HashSet<String> {
+    text.to_ascii_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3)
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn new_run_id(session_id: &str, agent_id: &str) -> String {
@@ -135,6 +210,7 @@ mod tests {
     use chrono::Utc;
     use crate::models::TraceTurn;
     use crate::parser::parse_request;
+    use crate::models::RunRecord;
 
     #[test]
     fn stable_agent_id_for_same_fingerprint() {
@@ -151,5 +227,56 @@ mod tests {
         let ctx1 = resolve_agent(&turn, &req, None);
         let ctx2 = resolve_agent(&turn, &req, None);
         assert_eq!(ctx1.agent_id, ctx2.agent_id);
+    }
+
+    #[test]
+    fn continues_run_for_tool_only_turn() {
+        let req = parse_request(b"{\"messages\":[{\"role\":\"user\",\"content\":\"fix bug\"},{\"role\":\"assistant\",\"content\":\"ok\"},{\"role\":\"tool\",\"content\":\"file contents\"}]}");
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Running,
+            goal: "fix bug".into(),
+            turn_count: 1,
+            graph_path: None,
+        };
+        assert!(!should_start_new_run(&req, Some(&run), Utc::now()));
+    }
+
+    #[test]
+    fn new_run_after_idle_timeout() {
+        let req = parse_request(b"{\"messages\":[{\"role\":\"user\",\"content\":\"fix bug\"}]}");
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now() - chrono::Duration::minutes(45),
+            ended_at: Some(Utc::now() - chrono::Duration::minutes(45)),
+            status: RunStatus::Running,
+            goal: "fix bug".into(),
+            turn_count: 1,
+            graph_path: None,
+        };
+        assert!(should_start_new_run(&req, Some(&run), Utc::now()));
+    }
+
+    #[test]
+    fn new_run_on_explicit_marker() {
+        let req = parse_request(b"{\"messages\":[{\"role\":\"user\",\"content\":\"new task: write docs\"}]}");
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Running,
+            goal: "fix bug".into(),
+            turn_count: 2,
+            graph_path: None,
+        };
+        assert!(should_start_new_run(&req, Some(&run), Utc::now()));
     }
 }

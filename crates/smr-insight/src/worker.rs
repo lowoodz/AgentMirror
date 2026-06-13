@@ -27,7 +27,13 @@ impl InsightService {
     ) -> anyhow::Result<Arc<Self>> {
         let store = Arc::new(InsightStore::open(data_dir, graphs_dir)?);
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
-        let config_slot = Arc::new(parking_lot::RwLock::new(config));
+        let config_slot = Arc::new(parking_lot::RwLock::new(config.clone()));
+
+        if config.retention_days > 0 {
+            if let Err(err) = store.purge_older_than(config.retention_days) {
+                warn!(?err, "AgentMirror retention purge on startup failed");
+            }
+        }
 
         spawn_worker(rx, Arc::clone(&store));
         spawn_daily_scheduler(Arc::clone(&store), Arc::clone(&config_slot));
@@ -132,6 +138,12 @@ fn spawn_daily_scheduler(store: Arc<InsightStore>, config: Arc<parking_lot::RwLo
                             generate_daily_report(&store, &agent.agent_id, yesterday)
                         {
                             let _ = store.save_daily_report(&report);
+                        }
+                    }
+                    let retention = config.read().retention_days;
+                    if retention > 0 {
+                        if let Err(err) = store.purge_older_than(retention) {
+                            warn!(?err, "AgentMirror scheduled retention purge failed");
                         }
                     }
                 }

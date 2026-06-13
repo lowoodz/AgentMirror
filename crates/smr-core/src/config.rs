@@ -510,6 +510,13 @@ impl AppConfig {
         config.pipeline.normalize_modes();
         let before = config.logging.traffic_max_body_bytes;
         config.logging.normalize_traffic_policy();
+        config.insight.normalize();
+        if config.insight.enabled && config.insight.require_traffic_bodies {
+            if !config.logging.save_traffic_bodies {
+                tracing::info!("AgentMirror enabled — turning on save_traffic_bodies");
+            }
+            config.logging.save_traffic_bodies = true;
+        }
         config.validate()?;
         if before == LEGACY_TRAFFIC_MAX_BODY_BYTES
             && before != config.logging.traffic_max_body_bytes

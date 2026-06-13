@@ -166,6 +166,11 @@ impl SharedApp {
     pub fn save_config(&self, config: &AppConfig) -> Result<()> {
         let mut config = config.clone();
         config.pipeline.normalize_modes();
+        config.logging.normalize_traffic_policy();
+        config.insight.normalize();
+        if config.insight.enabled && config.insight.require_traffic_bodies {
+            config.logging.save_traffic_bodies = true;
+        }
         config.validate()?;
         if let Some(parent) = self.config_path.parent() {
             std::fs::create_dir_all(parent)?;

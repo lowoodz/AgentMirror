@@ -416,7 +416,7 @@ impl ProxyService {
             }
         };
 
-        let proxy_body = if traffic_cfg.save_traffic_bodies {
+        let mut proxy_body = if traffic_cfg.save_traffic_bodies {
             match proxy_body {
                 ProxyBody::SseStream(stream) => ProxyBody::SseStream(self.app.traffic.wrap_sse_stream(
                     stream,
@@ -482,20 +482,41 @@ impl ProxyService {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string);
-            let response_body = match &proxy_body {
-                ProxyBody::Buffered(b) => b.to_vec(),
-                _ => Vec::new(),
+            let max_body = traffic_cfg.traffic_max_body_bytes;
+            proxy_body = match proxy_body {
+                ProxyBody::Buffered(b) => {
+                    if !insight_request_snapshot.is_empty() || !b.is_empty() {
+                        self.app.insight.submit_turn(smr_insight::TraceTurn {
+                            audit_id: audit.id.clone(),
+                            session_id: session_id.to_string(),
+                            agent_header,
+                            timestamp: audit.timestamp,
+                            request_body: insight_request_snapshot,
+                            response_body: b.to_vec(),
+                        });
+                    }
+                    ProxyBody::Buffered(b)
+                }
+                ProxyBody::SseStream(stream) => {
+                    if insight_request_snapshot.is_empty() {
+                        ProxyBody::SseStream(stream)
+                    } else {
+                        ProxyBody::SseStream(crate::insight_sse::wrap_sse_for_insight(
+                            stream,
+                            smr_insight::TraceTurn {
+                                audit_id: audit.id.clone(),
+                                session_id: session_id.to_string(),
+                                agent_header,
+                                timestamp: audit.timestamp,
+                                request_body: insight_request_snapshot,
+                                response_body: Vec::new(),
+                            },
+                            Arc::clone(&self.app.insight),
+                            max_body,
+                        ))
+                    }
+                }
             };
-            if !insight_request_snapshot.is_empty() || !response_body.is_empty() {
-                self.app.insight.submit_turn(smr_insight::TraceTurn {
-                    audit_id: audit.id.clone(),
-                    session_id: session_id.to_string(),
-                    agent_header,
-                    timestamp: audit.timestamp,
-                    request_body: insight_request_snapshot,
-                    response_body,
-                });
-            }
         }
 
         Ok((attempt.status, resp_headers, proxy_body))
