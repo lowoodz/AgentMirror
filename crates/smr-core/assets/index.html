@@ -16,6 +16,7 @@
       --high:#38bdf8; --medium:#a78bfa; --lite:#2dd4bf;
       --radius:6px; --radius-lg:8px;
       --gap:10px; --gap-lg:14px;
+      --header-bar-lift:14px;
     }
     * { box-sizing:border-box; }
     html { color-scheme:dark; background:var(--bg); }
@@ -33,6 +34,8 @@
       background:var(--bg-subtle);
       position:sticky; top:0; z-index:20;
       min-height:48px;
+      transform:translateY(calc(-1 * var(--header-bar-lift)));
+      margin-bottom:calc(-1 * var(--header-bar-lift));
     }
     .brand { display:flex; align-items:center; gap:8px; }
     .brand h1 { margin:0; font-size:14px; font-weight:600; letter-spacing:-.01em; line-height:1.2; }
@@ -45,7 +48,7 @@
     .switch { display:flex; align-items:center; gap:8px; margin-left:auto; margin-right:2em; }
     .switch input { width:38px; height:20px; accent-color:var(--accent-strong); }
     #langSelect { width:auto; min-width:88px; min-height:32px; padding:0 28px 0 10px; font-size:12px; }
-    main { display:flex; min-height:calc(100vh - 43px); }
+    main { display:flex; min-height:calc(100vh - 34px); }
     nav {
       width:208px; border-right:1px solid var(--border);
       padding:14px 10px; flex-shrink:0; background:var(--bg-subtle);
@@ -655,9 +658,9 @@ async function loadTraffic(){const d=await(await fetch('/api/traffic?limit=5000'
 function formatTrafficPreview(preview){const text=String(preview||'');if(!text.trim().startsWith('data:'))return text;let count=0;for(const line of text.split('\n')){const payload=line.trim().replace(/^data:\s*/,'');if(payload&&payload!=='[DONE]')count++;}if(!count)return lang==='zh'?'SSE 流':'SSE stream';return lang==='zh'?`SSE 流 · ${count}+ 条事件`:`SSE stream · ${count}+ events`;}
 let trafficViewerRaw='';
 function looksLikePath(s){const t=(s||'').trim();return t.startsWith('/')||/^[A-Za-z]:[\\/]/.test(t)||t.startsWith('\\\\')||t.startsWith('~/');}
-function stripWindowsVerbatimPrefix(s){let t=String(s||'').trim();if(!t)return t;if(/^\\\\\?\\UNC\\/i.test(t))return t.replace(/^\\\\\?\\UNC\\/i,'\\\\');return t.replace(/^\\\\\?\\/,'');}
+function stripWindowsVerbatimPrefix(s){let t=String(s||'').trim();if(!t)return t;const uncPrefix=/^\\\\\?\\UNC[\\]/i;if(uncPrefix.test(t))return t.replace(uncPrefix,'\\\\');return t.replace(/^\\\\\?[\\]/,'');}
 function pathFromFileUri(uri){try{let s=String(uri||'').trim();if(!s)return null;if(s.startsWith('file://localhost'))s='file://'+s.slice('file://localhost'.length);if(s.startsWith('file://')){const u=new URL(s);let p=decodeURIComponent(u.pathname);if(/^\/[A-Za-z]:\//.test(p))p=p.slice(1);return stripWindowsVerbatimPrefix(p)||null;}if(looksLikePath(s))return stripWindowsVerbatimPrefix(s.replace(/\\/g,'/'));return null;}catch{if(looksLikePath(uri))return stripWindowsVerbatimPrefix(String(uri).trim().replace(/\\/g,'/'));return null;}}
-function pushPathsFromRaw(raw,paths){if(!raw)return;for(const line of String(raw).split(/\r?\n/)){const t=line.trim();if(!t||t.startsWith('#'))continue;const fromUri=pathFromFileUri(t);if(fromUri){paths.push(fromUri);continue;}if(!t.startsWith('{')&&looksLikePath(t))paths.push(stripWindowsVerbatimPrefix(t.replace(/\\/g,'/'));}}
+function pushPathsFromRaw(raw,paths){if(!raw)return;for(const line of String(raw).split(/\r?\n/)){const t=line.trim();if(!t||t.startsWith('#'))continue;const fromUri=pathFromFileUri(t);if(fromUri){paths.push(fromUri);continue;}if(!t.startsWith('{')&&looksLikePath(t))paths.push(stripWindowsVerbatimPrefix(t.replace(/\\/g,'/')));}}
 async function pathsFromDropEventAsync(e){const paths=[];const dt=e.dataTransfer;if(!dt)return paths;for(const mime of['text/uri-list','text/plain','public.file-url','application/x-moz-file']){pushPathsFromRaw(dt.getData(mime),paths);}const pending=[];if(dt.items){for(let i=0;i<dt.items.length;i++){const item=dt.items[i];if(item.kind==='string'){pending.push(new Promise(resolve=>{item.getAsString(str=>{pushPathsFromRaw(str,paths);resolve();});}));}else if(item.kind==='file'){const f=item.getAsFile();if(f?.path)paths.push(f.path);}}}await Promise.all(pending);for(const f of dt.files||[]){if(f.path)paths.push(f.path);}return[...new Set(paths.filter(Boolean))];}
 async function canonicalizePaths(paths){if(!paths?.length)return[];try{const r=await fetch('/api/canonicalize-paths',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths})});if(!r.ok)return paths;const d=await r.json();return d.paths?.length?d.paths:paths;}catch{return paths;}}
 function clearDropZoneHighlight(except){document.querySelectorAll('[data-drop-zone]').forEach(el=>{if(el!==except)el.classList.remove('dragover');});}
