@@ -12,6 +12,7 @@ use crate::router::Router;
 use crate::storage::AuditStore;
 use crate::paths;
 use crate::traffic::TrafficLog;
+use smr_insight::InsightService;
 
 pub struct AppEngines {
     pub config: AppConfig,
@@ -91,6 +92,7 @@ pub struct SharedApp {
     pub events: Arc<EventLog>,
     pub storage: Arc<AuditStore>,
     pub traffic: Arc<TrafficLog>,
+    pub insight: Arc<InsightService>,
     inner: RwLock<AppEngines>,
 }
 
@@ -100,12 +102,14 @@ impl SharedApp {
         config: AppConfig,
         events: Arc<EventLog>,
         storage: Arc<AuditStore>,
+        insight: Arc<InsightService>,
     ) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             config_path,
             events,
             storage,
             traffic: TrafficLog::from_logging_config(&config.logging, paths::traffic_dir()),
+            insight,
             inner: RwLock::new(AppEngines::from_config(config)?),
         }))
     }
@@ -149,6 +153,7 @@ impl SharedApp {
     pub fn reload(&self) -> Result<()> {
         let config = AppConfig::load(&self.config_path)?;
         self.traffic.apply_policy(&config.logging);
+        self.insight.apply_config(&config.insight);
         self.replace_engines(config)?;
         self.events.push(
             EventKind::ConfigReload,
@@ -168,6 +173,7 @@ impl SharedApp {
         let yaml = serde_yaml::to_string(&config)?;
         std::fs::write(&self.config_path, yaml)?;
         self.traffic.apply_policy(&config.logging);
+        self.insight.apply_config(&config.insight);
         self.replace_engines(config)?;
         self.events.push(EventKind::ConfigReload, "config saved", None);
         Ok(())
@@ -193,7 +199,12 @@ impl SharedApp {
         };
 
         let config = AppConfig::load(&path)?;
-        let app = SharedApp::new(path.clone(), config, events, storage)?;
+        let insight = InsightService::open(
+            &crate::paths::data_dir(),
+            crate::paths::insight_graphs_dir(),
+            config.insight.clone(),
+        )?;
+        let app = SharedApp::new(path.clone(), config, events, storage, insight)?;
         app.events.push(
             EventKind::Info,
             format!("started with config {}", path.display()),

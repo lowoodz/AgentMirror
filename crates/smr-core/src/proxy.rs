@@ -191,6 +191,7 @@ impl ProxyService {
         let (group_name, group) = snap
             .router
             .resolve_group(effective_fallback_group.as_deref())?;
+        let insight_request_snapshot = forward_body.clone();
         let forward = ForwardRequest {
             method: req.method.clone(),
             path: &api_path,
@@ -473,6 +474,29 @@ impl ProxyService {
         };
         let _ = self.app.storage.insert_audit(&audit);
         events.push(EventKind::Info, audit.summary(), None);
+
+        if snap.config.insight.enabled && success {
+            let agent_header = headers
+                .get("x-smr-agent-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let response_body = match &proxy_body {
+                ProxyBody::Buffered(b) => b.to_vec(),
+                _ => Vec::new(),
+            };
+            if !insight_request_snapshot.is_empty() || !response_body.is_empty() {
+                self.app.insight.submit_turn(smr_insight::TraceTurn {
+                    audit_id: audit.id.clone(),
+                    session_id: session_id.to_string(),
+                    agent_header,
+                    timestamp: audit.timestamp,
+                    request_body: insight_request_snapshot,
+                    response_body,
+                });
+            }
+        }
 
         Ok((attempt.status, resp_headers, proxy_body))
     }

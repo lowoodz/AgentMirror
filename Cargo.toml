@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/smr-protocol",
     "crates/smr-core",
+    "crates/smr-insight",
     "crates/smr-cli",
     "gui/src-tauri",
 ]

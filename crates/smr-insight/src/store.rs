@@ -1,0 +1,437 @@
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, NaiveDate, Utc};
+use rusqlite::{params, Connection};
+
+use crate::models::{
+    AgentRecord, CognitiveEvent, DailyReport, EventKind, ReflectionReport, RunRecord, RunStatus,
+};
+
+pub struct InsightStore {
+    conn: Mutex<Connection>,
+    graphs_dir: PathBuf,
+}
+
+impl InsightStore {
+    pub fn open(data_dir: &Path, graphs_dir: PathBuf) -> Result<Self> {
+        std::fs::create_dir_all(data_dir)?;
+        std::fs::create_dir_all(&graphs_dir)?;
+        let db_path = data_dir.join("smr.db");
+        let conn = Connection::open(&db_path).context("open insight sqlite db")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS insight_agents (
+                agent_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                agent_type TEXT NOT NULL,
+                system_hash TEXT NOT NULL,
+                tools_json TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS insight_runs (
+                run_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                status TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                turn_count INTEGER NOT NULL DEFAULT 0,
+                graph_path TEXT,
+                FOREIGN KEY (agent_id) REFERENCES insight_agents(agent_id)
+            );
+            CREATE TABLE IF NOT EXISTS insight_events (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                audit_id TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                timestamp TEXT NOT NULL,
+                payload_json TEXT,
+                FOREIGN KEY (run_id) REFERENCES insight_runs(run_id)
+            );
+            CREATE TABLE IF NOT EXISTS insight_reports (
+                run_id TEXT PRIMARY KEY,
+                generated_at TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES insight_runs(run_id)
+            );
+            CREATE TABLE IF NOT EXISTS insight_daily_reports (
+                date TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                PRIMARY KEY (date, agent_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_insight_runs_agent ON insight_runs(agent_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_insight_runs_session ON insight_runs(session_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_insight_events_run ON insight_events(run_id, seq);
+            CREATE TABLE IF NOT EXISTS insight_processed_audits (
+                audit_id TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            );",
+        )?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+            graphs_dir,
+        })
+    }
+
+    pub fn graphs_dir(&self) -> &Path {
+        &self.graphs_dir
+    }
+
+    pub fn is_audit_processed(&self, audit_id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT 1 FROM insight_processed_audits WHERE audit_id = ?1 LIMIT 1",
+        )?;
+        Ok(stmt.exists(params![audit_id])?)
+    }
+
+    pub fn mark_audit_processed(&self, audit_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO insight_processed_audits (audit_id, processed_at) VALUES (?1, ?2)",
+            params![audit_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_agent(&self, agent: &AgentRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO insight_agents (agent_id, display_name, agent_type, system_hash, tools_json, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(agent_id) DO UPDATE SET
+               display_name = excluded.display_name,
+               agent_type = excluded.agent_type,
+               last_seen = excluded.last_seen",
+            params![
+                agent.agent_id,
+                agent.display_name,
+                agent.agent_type,
+                agent.system_hash,
+                agent.tools_json,
+                agent.first_seen.to_rfc3339(),
+                agent.last_seen.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_agent(&self, agent_id: &str) -> Result<Option<AgentRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id, display_name, agent_type, system_hash, tools_json, first_seen, last_seen
+             FROM insight_agents WHERE agent_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![agent_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(map_agent(row)?));
+        }
+        Ok(None)
+    }
+
+    pub fn list_agents(&self, limit: usize) -> Result<Vec<AgentRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id, display_name, agent_type, system_hash, tools_json, first_seen, last_seen
+             FROM insight_agents ORDER BY last_seen DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], map_agent)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn insert_run(&self, run: &RunRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO insight_runs (run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                run.run_id,
+                run.agent_id,
+                run.session_id,
+                run.started_at.to_rfc3339(),
+                run.ended_at.map(|t| t.to_rfc3339()),
+                run.status.as_str(),
+                run.goal,
+                run.turn_count,
+                run.graph_path,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_run(&self, run: &RunRecord) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE insight_runs SET ended_at = ?2, status = ?3, goal = ?4, turn_count = ?5, graph_path = ?6
+             WHERE run_id = ?1",
+            params![
+                run.run_id,
+                run.ended_at.map(|t| t.to_rfc3339()),
+                run.status.as_str(),
+                run.goal,
+                run.turn_count,
+                run.graph_path,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_run(&self, run_id: &str) -> Result<Option<RunRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+             FROM insight_runs WHERE run_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![run_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(map_run(row)?));
+        }
+        Ok(None)
+    }
+
+    pub fn list_runs(&self, agent_id: Option<&str>, limit: usize) -> Result<Vec<RunRecord>> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(agent_id) = agent_id {
+            let mut stmt = conn.prepare(
+                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+                 FROM insight_runs WHERE agent_id = ?1 ORDER BY started_at DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![agent_id, limit as i64], map_run)?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+                 FROM insight_runs ORDER BY started_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit as i64], map_run)?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        }
+    }
+
+    pub fn find_active_run(&self, agent_id: &str, session_id: &str) -> Result<Option<RunRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+             FROM insight_runs
+             WHERE agent_id = ?1 AND session_id = ?2 AND status = 'running'
+             ORDER BY started_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![agent_id, session_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(map_run(row)?));
+        }
+        Ok(None)
+    }
+
+    pub fn insert_event(&self, event: &CognitiveEvent) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO insight_events (id, run_id, seq, kind, summary, audit_id, confidence, timestamp, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                event.id,
+                event.run_id,
+                event.seq,
+                event.kind.as_str(),
+                event.summary,
+                event.audit_id,
+                event.confidence,
+                event.timestamp.to_rfc3339(),
+                event.metadata.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_events(&self, run_id: &str) -> Result<Vec<CognitiveEvent>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, run_id, seq, kind, summary, audit_id, confidence, timestamp, payload_json
+             FROM insight_events WHERE run_id = ?1 ORDER BY seq ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id], map_event)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn next_event_seq(&self, run_id: &str) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        let max: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(seq), -1) FROM insight_events WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )?;
+        Ok((max + 1) as u32)
+    }
+
+    pub fn save_report(&self, report: &ReflectionReport) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let json = serde_json::to_string(report)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO insight_reports (run_id, generated_at, report_json)
+             VALUES (?1, ?2, ?3)",
+            params![report.run_id, report.generated_at.to_rfc3339(), json],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_report(&self, run_id: &str) -> Result<Option<ReflectionReport>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT report_json FROM insight_reports WHERE run_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![run_id])?;
+        if let Some(row) = rows.next()? {
+            let json: String = row.get(0)?;
+            return Ok(Some(serde_json::from_str(&json)?));
+        }
+        Ok(None)
+    }
+
+    pub fn save_daily_report(&self, report: &DailyReport) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let json = serde_json::to_string(report)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO insight_daily_reports (date, agent_id, report_json)
+             VALUES (?1, ?2, ?3)",
+            params![report.date, report.agent_id, json],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_daily_report(&self, date: &str, agent_id: Option<&str>) -> Result<Vec<DailyReport>> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(agent_id) = agent_id {
+            let mut stmt = conn.prepare(
+                "SELECT report_json FROM insight_daily_reports WHERE date = ?1 AND agent_id = ?2",
+            )?;
+            let mut rows = stmt.query(params![date, agent_id])?;
+            if let Some(row) = rows.next()? {
+                let json: String = row.get(0)?;
+                return Ok(vec![serde_json::from_str(&json)?]);
+            }
+            return Ok(Vec::new());
+        }
+        let mut stmt = conn.prepare(
+            "SELECT report_json FROM insight_daily_reports WHERE date = ?1 ORDER BY agent_id",
+        )?;
+        let rows = stmt.query_map(params![date], |row| {
+            let json: String = row.get(0)?;
+            Ok(json)
+        })?;
+        Ok(rows
+            .filter_map(|r| r.ok())
+            .filter_map(|json| serde_json::from_str::<DailyReport>(&json).ok())
+            .collect())
+    }
+
+    pub fn runs_for_agent_on_date(&self, agent_id: &str, date: NaiveDate) -> Result<Vec<RunRecord>> {
+        let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let end = date.and_hms_opt(23, 59, 59).unwrap().and_utc();
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+             FROM insight_runs
+             WHERE agent_id = ?1 AND started_at >= ?2 AND started_at <= ?3
+             ORDER BY started_at ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![agent_id, start.to_rfc3339(), end.to_rfc3339()],
+            map_run,
+        )?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn graph_path_for_run(&self, run_id: &str) -> PathBuf {
+        self.graphs_dir.join(format!("{run_id}.json"))
+    }
+
+    pub fn save_graph_json(&self, run_id: &str, json: &str) -> Result<String> {
+        let path = self.graph_path_for_run(run_id);
+        std::fs::write(&path, json)?;
+        Ok(path.display().to_string())
+    }
+
+    pub fn load_graph_json(&self, run_id: &str) -> Result<Option<String>> {
+        let path = self.graph_path_for_run(run_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(std::fs::read_to_string(path)?))
+    }
+}
+
+fn parse_ts(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|d| d.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
+}
+
+fn map_agent(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRecord> {
+    Ok(AgentRecord {
+        agent_id: row.get(0)?,
+        display_name: row.get(1)?,
+        agent_type: row.get(2)?,
+        system_hash: row.get(3)?,
+        tools_json: row.get(4)?,
+        first_seen: parse_ts(&row.get::<_, String>(5)?),
+        last_seen: parse_ts(&row.get::<_, String>(6)?),
+    })
+}
+
+fn map_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
+    let status: String = row.get(5)?;
+    let status = match status.as_str() {
+        "completed" => RunStatus::Completed,
+        "failed" => RunStatus::Failed,
+        "stale" => RunStatus::Stale,
+        _ => RunStatus::Running,
+    };
+    let ended: Option<String> = row.get(4)?;
+    Ok(RunRecord {
+        run_id: row.get(0)?,
+        agent_id: row.get(1)?,
+        session_id: row.get(2)?,
+        started_at: parse_ts(&row.get::<_, String>(3)?),
+        ended_at: ended.map(|s| parse_ts(&s)),
+        status,
+        goal: row.get(6)?,
+        turn_count: row.get::<_, i64>(7)? as u32,
+        graph_path: row.get(8)?,
+    })
+}
+
+fn map_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<CognitiveEvent> {
+    let kind: String = row.get(3)?;
+    let kind = match kind.as_str() {
+        "goal" => EventKind::Goal,
+        "sub_goal" => EventKind::SubGoal,
+        "decision" => EventKind::Decision,
+        "action" => EventKind::Action,
+        "observation" => EventKind::Observation,
+        "reflection" => EventKind::Reflection,
+        "result" => EventKind::Result,
+        "state_transition" => EventKind::StateTransition,
+        _ => EventKind::Action,
+    };
+    let payload: Option<String> = row.get(8)?;
+    Ok(CognitiveEvent {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        seq: row.get::<_, i64>(2)? as u32,
+        kind,
+        summary: row.get(4)?,
+        audit_id: row.get(5)?,
+        confidence: row.get(6)?,
+        timestamp: parse_ts(&row.get::<_, String>(7)?),
+        metadata: payload
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(serde_json::Value::Null),
+    })
+}

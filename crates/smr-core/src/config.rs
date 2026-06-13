@@ -22,6 +22,8 @@ pub struct AppConfig {
     pub operation_rules: Vec<OperationRule>,
     #[serde(default)]
     pub path_protection_rules: Vec<PathProtectionRule>,
+    #[serde(default)]
+    pub insight: smr_insight::InsightConfig,
 }
 
 /// Admin UI / user-facing notice language (`server.ui_language` in config).

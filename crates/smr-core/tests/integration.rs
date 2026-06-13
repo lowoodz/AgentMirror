@@ -69,6 +69,7 @@ fn test_config(upstream_base: &str) -> AppConfig {
             },
         }],
         path_protection_rules: vec![],
+        insight: Default::default(),
     }
 }
 
@@ -78,11 +79,18 @@ fn make_app(config: AppConfig) -> (Arc<SharedApp>, ProxyService) {
     let storage = Arc::new(
         AuditStore::open(&std::env::temp_dir().join("smr-test-db")).unwrap(),
     );
+    let insight = smr_insight::InsightService::open(
+        &std::env::temp_dir().join(format!("smr-test-insight-{}", uuid::Uuid::new_v4())),
+        std::env::temp_dir().join(format!("smr-test-graphs-{}", uuid::Uuid::new_v4())),
+        config.insight.clone(),
+    )
+    .unwrap();
     let app = SharedApp::new(
         tmp.path().to_path_buf(),
         config,
         EventLog::new(100),
         storage,
+        insight,
     )
     .unwrap();
     let proxy = ProxyService::new(app.clone());
@@ -572,6 +580,7 @@ fn config_validation_rejects_empty_groups() {
         file_rules: vec![],
         operation_rules: vec![],
         path_protection_rules: vec![],
+        insight: Default::default(),
     };
     assert!(config.validate().is_err());
     config.fallback_groups.insert("high".into(), vec![]);
@@ -592,11 +601,18 @@ async fn health_and_ui_endpoints() {
 
     let mut tmp = NamedTempFile::new().unwrap();
     write!(tmp, "{}", serde_yaml::to_string(&config).unwrap()).unwrap();
+    let insight = smr_insight::InsightService::open(
+        &std::env::temp_dir().join(format!("smr-test-insight-{}", uuid::Uuid::new_v4())),
+        std::env::temp_dir().join(format!("smr-test-graphs-{}", uuid::Uuid::new_v4())),
+        config.insight.clone(),
+    )
+    .unwrap();
     let app = SharedApp::new(
         tmp.path().to_path_buf(),
         config,
         EventLog::new(50),
         Arc::new(AuditStore::open(&std::env::temp_dir().join("smr-test-db2")).unwrap()),
+        insight,
     )
     .unwrap();
 

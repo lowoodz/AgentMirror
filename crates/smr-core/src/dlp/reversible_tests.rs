@@ -29,6 +29,7 @@ mod reversible_tests {
             file_rules: vec![],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         }
     }
 
@@ -149,6 +150,7 @@ mod reversible_tests {
             }],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         };
 
         let dlp = DlpEngine::new(&cfg).unwrap();
@@ -247,6 +249,7 @@ mod reversible_tests {
             }],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         };
 
         let dlp = DlpEngine::new(&cfg).unwrap();

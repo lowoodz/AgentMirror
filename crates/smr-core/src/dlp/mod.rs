@@ -286,6 +286,7 @@ mod file_session_tests {
             }],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         };
 
         let dlp = DlpEngine::new(&config).unwrap();
@@ -370,6 +371,7 @@ mod file_session_tests {
             }],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         };
 
         let dlp = DlpEngine::new(&config).unwrap();
@@ -437,6 +439,7 @@ mod file_session_tests {
             }],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         };
 
         let dlp = DlpEngine::new(&config).unwrap();
@@ -504,6 +507,7 @@ mod file_session_tests {
             }],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         };
 
         let dlp = DlpEngine::new(&config).unwrap();
@@ -592,6 +596,7 @@ mod file_session_tests {
             }],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         };
 
         let dlp = DlpEngine::new(&config).unwrap();

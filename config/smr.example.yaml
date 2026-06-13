@@ -26,6 +26,14 @@ logging:
   traffic_retention_days: 7         # keep snapshots for one week
   traffic_max_disk_bytes: 1073741824  # 1 GiB total cap for all snapshot files
 
+insight:
+  enabled: true
+  require_traffic_bodies: true
+  daily_report_hour: 8
+  retention_days: 30
+  llm_critic: false
+  critic_model_group: medium
+
 fallback_groups:
   high:
     - id: openai-primary

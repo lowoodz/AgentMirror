@@ -171,6 +171,7 @@ mod tests {
             file_rules: vec![],
             operation_rules: vec![],
             path_protection_rules: vec![],
+            insight: Default::default(),
         }
     }
 

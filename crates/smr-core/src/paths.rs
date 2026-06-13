@@ -22,6 +22,14 @@ pub fn traffic_dir() -> PathBuf {
     config_dir().join("traffic")
 }
 
+pub fn insight_graphs_dir() -> PathBuf {
+    config_dir().join("data").join("insight").join("graphs")
+}
+
+pub fn data_dir() -> PathBuf {
+    config_dir().join("data")
+}
+
 pub fn init_default_config(example: &str) -> anyhow::Result<PathBuf> {
     ensure_config_dir()?;
     let path = default_config_path();

@@ -66,6 +66,7 @@ pub fn router() -> Router<HttpState> {
         .route("/api/traffic/{id}", get(api_traffic_body))
         .route("/api/reload", put(api_reload))
         .route("/api/canonicalize-paths", post(api_canonicalize_paths))
+        .merge(crate::insight_admin::router())
 }
 
 #[derive(Deserialize)]
