@@ -105,7 +105,7 @@ impl SharedApp {
             config_path,
             events,
             storage,
-            traffic: TrafficLog::new(200, paths::traffic_dir()),
+            traffic: TrafficLog::from_logging_config(&config.logging, paths::traffic_dir()),
             inner: RwLock::new(AppEngines::from_config(config)?),
         }))
     }
@@ -148,6 +148,7 @@ impl SharedApp {
 
     pub fn reload(&self) -> Result<()> {
         let config = AppConfig::load(&self.config_path)?;
+        self.traffic.apply_policy(&config.logging);
         self.replace_engines(config)?;
         self.events.push(
             EventKind::ConfigReload,
@@ -166,6 +167,7 @@ impl SharedApp {
         }
         let yaml = serde_yaml::to_string(&config)?;
         std::fs::write(&self.config_path, yaml)?;
+        self.traffic.apply_policy(&config.logging);
         self.replace_engines(config)?;
         self.events.push(EventKind::ConfigReload, "config saved", None);
         Ok(())

@@ -23,6 +23,8 @@ logging:
   save_traffic_bodies: false
   traffic_request_capture: after_dlp  # after_dlp (default) | before_dlp (raw, may contain secrets)
   traffic_max_body_bytes: 20971520  # 20 MiB per snapshot file
+  traffic_retention_days: 7         # keep snapshots for one week
+  traffic_max_disk_bytes: 1073741824  # 1 GiB total cap for all snapshot files
 
 fallback_groups:
   high:

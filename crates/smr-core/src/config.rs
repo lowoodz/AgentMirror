@@ -151,10 +151,24 @@ pub struct LoggingConfig {
     /// Max bytes per saved body file (truncated beyond this; hard cap 20 MiB).
     #[serde(default = "default_traffic_max_body_bytes")]
     pub traffic_max_body_bytes: usize,
+    /// Keep traffic snapshot files for this many days (all sessions within the window).
+    #[serde(default = "default_traffic_retention_days")]
+    pub traffic_retention_days: u32,
+    /// Total on-disk cap for all traffic snapshot files combined.
+    #[serde(default = "default_traffic_max_disk_bytes")]
+    pub traffic_max_disk_bytes: u64,
 }
 
 fn default_traffic_max_body_bytes() -> usize {
     20 * 1024 * 1024
+}
+
+fn default_traffic_retention_days() -> u32 {
+    crate::traffic::DEFAULT_RETENTION_DAYS
+}
+
+fn default_traffic_max_disk_bytes() -> u64 {
+    crate::traffic::DEFAULT_MAX_DISK_BYTES
 }
 
 /// Previous default before full-body disk snapshots (32 KiB).
@@ -169,6 +183,19 @@ impl LoggingConfig {
         self.traffic_max_body_bytes =
             crate::traffic::clamp_body_limit(self.traffic_max_body_bytes);
     }
+
+    pub fn normalize_traffic_policy(&mut self) {
+        self.normalize_traffic_limit();
+        if self.traffic_retention_days == 0 {
+            self.traffic_retention_days = default_traffic_retention_days();
+        }
+        if self.traffic_max_disk_bytes == 0 {
+            self.traffic_max_disk_bytes = default_traffic_max_disk_bytes();
+        }
+        self.traffic_max_disk_bytes = self
+            .traffic_max_disk_bytes
+            .max(crate::traffic::MIN_MAX_DISK_BYTES);
+    }
 }
 
 impl Default for LoggingConfig {
@@ -179,6 +206,8 @@ impl Default for LoggingConfig {
             save_traffic_bodies: false,
             traffic_request_capture: TrafficRequestCapture::AfterDlp,
             traffic_max_body_bytes: default_traffic_max_body_bytes(),
+            traffic_retention_days: default_traffic_retention_days(),
+            traffic_max_disk_bytes: default_traffic_max_disk_bytes(),
         }
     }
 }
@@ -478,7 +507,7 @@ impl AppConfig {
         let mut config: AppConfig = serde_yaml::from_str(&text)?;
         config.pipeline.normalize_modes();
         let before = config.logging.traffic_max_body_bytes;
-        config.logging.normalize_traffic_limit();
+        config.logging.normalize_traffic_policy();
         config.validate()?;
         if before == LEGACY_TRAFFIC_MAX_BODY_BYTES
             && before != config.logging.traffic_max_body_bytes

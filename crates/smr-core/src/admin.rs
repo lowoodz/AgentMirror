@@ -147,7 +147,7 @@ async fn api_traffic(
     State(s): State<HttpState>,
     Query(q): Query<TrafficQuery>,
 ) -> Json<serde_json::Value> {
-    let limit = q.limit.unwrap_or(30).min(100);
+    let limit = q.limit.unwrap_or(500).min(10_000);
     Json(serde_json::json!({
         "records": s.app.traffic.list(limit),
         "enabled": s.app.config().logging.save_traffic_bodies,
