@@ -131,6 +131,15 @@ impl TrafficLog {
         guard.iter().take(limit).cloned().collect()
     }
 
+    pub fn list_by_audit(&self, audit_id: &str) -> Vec<TrafficRecord> {
+        let guard = self.inner.lock();
+        guard
+            .iter()
+            .filter(|r| r.audit_id == audit_id)
+            .cloned()
+            .collect()
+    }
+
     pub fn read_body(&self, id: &str) -> Option<(TrafficRecord, Vec<u8>)> {
         if !is_uuid(id) {
             return None;

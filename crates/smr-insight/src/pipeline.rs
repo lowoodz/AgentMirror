@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crate::critic::{evaluate, CriticInput};
 use crate::extract::{drafts_to_events, extract_from_turn};
 use crate::graph::build_graph;
-use crate::models::{RunRecord, RunStatus, TraceTurn};
+use crate::infer::infer_goal_llm;
+use crate::llm::LlmClient;
+use crate::models::{InsightConfig, RunRecord, RunStatus, TraceTurn};
 use crate::parser::{parse_request, parse_response};
 use crate::report::{build_reflection_report, outcome_from_status};
 use crate::safety::{scan_action_events, SafetyScanner};
@@ -13,11 +15,23 @@ use crate::store::InsightStore;
 pub struct Pipeline {
     store: Arc<InsightStore>,
     safety: Option<Arc<dyn SafetyScanner>>,
+    llm: Option<Arc<dyn LlmClient>>,
+    config: InsightConfig,
 }
 
 impl Pipeline {
-    pub fn new(store: Arc<InsightStore>, safety: Option<Arc<dyn SafetyScanner>>) -> Self {
-        Self { store, safety }
+    pub fn new(
+        store: Arc<InsightStore>,
+        safety: Option<Arc<dyn SafetyScanner>>,
+        llm: Option<Arc<dyn LlmClient>>,
+        config: InsightConfig,
+    ) -> Self {
+        Self {
+            store,
+            safety,
+            llm,
+            config,
+        }
     }
 
     pub fn store(&self) -> &InsightStore {
@@ -48,11 +62,7 @@ impl Pipeline {
             .find_active_run(&ctx.agent_id, &turn.session_id)?;
         let is_new_run = should_start_new_run(&req, active_run.as_ref(), turn.timestamp);
 
-        let mut run = if is_new_run {
-            None
-        } else {
-            active_run
-        };
+        let mut run = if is_new_run { None } else { active_run };
 
         if run.is_none() {
             let goal = infer_goal_from_request(&req);
@@ -97,6 +107,13 @@ impl Pipeline {
         }
 
         let all_events = self.store.list_events(&run.run_id)?;
+        if self.config.llm_critic && run.turn_count == 1 {
+            let refined = infer_goal_llm(self.llm.as_deref(), &all_events, &run.goal);
+            if refined != run.goal {
+                run.goal = refined;
+            }
+        }
+
         let graph = build_graph(&run.run_id, &all_events);
         let graph_json = serde_json::to_string_pretty(&graph)?;
         let graph_path = self.store.save_graph_json(&run.run_id, &graph_json)?;
@@ -113,7 +130,13 @@ impl Pipeline {
 
         self.store.update_run(&run)?;
 
-        let report = build_reflection_report(&self.store, &run, self.safety.as_deref())?;
+        let report = build_reflection_report(
+            &self.store,
+            &run,
+            self.safety.as_deref(),
+            self.llm.as_deref(),
+            self.config.llm_critic,
+        )?;
         self.store.save_report(&report)?;
 
         self.store.mark_audit_processed(&turn.audit_id)?;

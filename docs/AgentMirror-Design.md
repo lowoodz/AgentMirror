@@ -42,14 +42,12 @@ Proxy (existing)
   → InsightWorker (dedicated thread + Tokio runtime)
   → Conversation Parser
   → Agent Separator (agent_id + run_id)
-  → Cognitive Event Extractor (rules; LLM optional in V1)
+  → Cognitive Event Extractor (rules; LLM optional)
   → Reasoning Graph Builder → JSON on disk
-  → Critic Engine (rules MVP)
+  → Critic Engine (rules + optional LLM)
   → Reflection Report + Daily Report
   → SQLite (insight_* tables) + Admin UI
 ```
-
-With proxy-only logs we use **Cognitive Process Reconstruction**, not full Process Mining.
 
 ---
 
@@ -57,170 +55,94 @@ With proxy-only logs we use **Cognitive Process Reconstruction**, not full Proce
 
 | Priority | Signal | Status |
 |----------|--------|--------|
-| 1 | `X-SMR-Agent-Id` request header | ✅ Implemented |
-| 2 | `sha256(system_prompt + tools[])` fingerprint | ✅ Implemented |
-| 3 | First user message → Goal anchor | ✅ Goal inference |
-| 4 | Run boundary: idle 30 min, explicit new-task markers, topic shift | ✅ Implemented |
-
-```
-Session (SMR session_id)
-  └── Agent (system_hash + tools_hash)
-        └── Run (one task: Goal → complete/fail)
-```
-
-**Run boundary rules** (see detailed plan §十二): continue active `running` run by default; start new run on idle timeout (30 min), completed/failed status, or explicit new-task signals (`new task:`, `/clear`, 新任务, etc.).
+| 1 | `X-SMR-Agent-Id` request header | ✅ |
+| 2 | `sha256(system_prompt + tools[])` fingerprint | ✅ |
+| 3 | First user message → Goal anchor | ✅ |
+| 4 | Run boundary: idle 30 min, explicit new-task markers | ✅ |
 
 ---
 
-## 5. Data model
-
-### CognitiveEvent kinds
-
-`Goal | SubGoal | Decision | Action | Observation | Reflection | Result | StateTransition`
-
-### Storage
-
-- **SQLite** (`smr.db`, tables `insight_*`): agents, runs, events, reports, daily_reports, processed_audits
-- **JSON files** (`data/insight/graphs/{run_id}.json`): reasoning graphs (linear chain MVP)
-
-### ReflectionReport (output)
-
-- goal, execution_summary, outcome, issues, risks, suggestions
-- critics: alignment, necessity, completeness, efficiency, safety (0–100)
-- dialectical notes → **V1** (LLM)
-
----
-
-## 6. Configuration (`smr.yaml`)
+## 5. Configuration (`smr.yaml`)
 
 ```yaml
 insight:
   enabled: true
-  require_traffic_bodies: true   # auto-enables logging.save_traffic_bodies on load
+  require_traffic_bodies: true   # auto-enables logging.save_traffic_bodies
   daily_report_hour: 8
-  retention_days: 30           # purged on startup + daily scheduler
-  llm_critic: false              # V1
-  critic_model_group: medium
-logging:
-  save_traffic_bodies: true      # auto-set when insight.require_traffic_bodies
-  traffic_retention_days: 7      # source snapshots may expire before insight retention
+  retention_days: 30
+  llm_critic: false              # set true to enable LLM goal + critic enrichment
+  critic_model_group: medium     # fallback group for insight LLM calls
 ```
+
+When `llm_critic: true`, AgentMirror calls the configured SafeRoute model group (1–2 calls per completed run; trajectory truncated to ~6k chars).
 
 ---
 
-## 7. API
+## 6. API
 
 ```
 GET  /api/insight/status
 GET  /api/insight/agents
 GET  /api/insight/runs?agent_id=&limit=
 GET  /api/insight/runs/{run_id}
+PATCH /api/insight/runs/{run_id}          # edit goal
+POST /api/insight/runs/merge              # merge runs
+POST /api/insight/runs/{run_id}/split     # split after seq
 GET  /api/insight/runs/{run_id}/graph
 GET  /api/insight/runs/{run_id}/report
+GET  /api/insight/audit/{audit_id}/traffic
 GET  /api/insight/daily/{date}?agent_id=
 POST /api/insight/daily/generate
 ```
 
 ---
 
-## 8. UI
+## 7. UI
 
-Nav order (AgentMirror first):
+Nav order: **AgentMirror** first.
 
-**AgentMirror | Overview | Routing | DLP | …**
-
-- Agent list + run cards
-- **View trajectory** → modal with vertical causal graph + critic scores
-- Daily report: date picker + **View daily report** + generate button
-
-**Not yet in UI (V1):** modal tabs for timeline / raw transcript; Mermaid export.
-
-Graph rendering: in-house vertical flow (linear chain); Decision Graph with branches → V1.
+- Agent list + run cards (checkbox merge, edit goal)
+- Trajectory modal: **Graph / Timeline / Events / Raw traffic**
+- Daily report date picker + viewer
+- Reflection report with dialectical + counterfactual (when LLM enabled)
 
 ---
 
-## 9. Crate layout
+## 8. Implementation status
 
-```
-crates/smr-insight/
-  src/
-    lib.rs, models.rs, store.rs, parser.rs, separator.rs,
-    extract.rs, graph.rs, critic.rs, report.rs, pipeline.rs, worker.rs
-
-crates/smr-core/
-  src/insight_admin.rs, insight_sse.rs   # SSE response tap for AgentMirror
-```
-
-Integration: `SharedApp.insight`, proxy hook after successful turn, `/api/insight/*` routes.
-
----
-
-## 10. Implementation status
-
-| Capability | Status | Notes |
-|------------|--------|-------|
-| Trace ingest (buffered JSON) | ✅ | Proxy inline submit |
-| Trace ingest (SSE streams) | ✅ | `insight_sse::wrap_sse_for_insight` |
-| Agent separation (header + fingerprint) | ✅ | |
-| Run boundary (multi-turn) | ✅ | Fixed: no longer splits every turn |
-| Rule parser / extractor / linear graph | ✅ | |
-| Five critics (rule-based) | ✅ | Safety uses ops/path rules via `SafetyScanner` |
-| Admin UI: agents, runs, graph modal | ✅ | Modal tabs: graph / timeline / events |
-| Daily report backend | ✅ | SQL aggregation |
-| Daily report viewer UI | ✅ | Date picker + panel |
-| `retention_days` purge | ✅ | Startup + daily scheduler |
-| Auto-enable `save_traffic_bodies` | ✅ | On config load |
-| `X-SMR-Agent-Id` documented | ✅ | This doc + proxy support |
-| Decision graph branching | ✅ | Actions branch from Decision nodes |
-| Safety critic ↔ ops rules | ✅ | `OpsSafetyScanner` + `insight_policy_match` |
-| Modal timeline / raw transcript tabs | ✅ | Timeline + events table |
-| LLM Goal Discovery + critics | 🔲 V1 | |
-| Dialectical / counterfactual | 🔲 V1 | |
-| Manual run merge/split | 🔲 V1 | |
-| Pattern mining / agent profile | 🔲 V2 | |
-| Markdown daily file export | 🔲 V2 | |
-
-Legend: ✅ shipped · 🔲 planned
+| Capability | Status |
+|------------|--------|
+| Trace ingest (buffered + SSE) | ✅ |
+| Run boundary (multi-turn) | ✅ |
+| Rule parser / extractor / decision graph | ✅ |
+| Five critics (rule-based) | ✅ |
+| LLM goal + critic + dialectical/counterfactual | ✅ (`llm_critic: true`) |
+| Safety critic ↔ ops rules | ✅ |
+| Run merge / split + goal edit | ✅ |
+| Daily report SQL + Markdown files | ✅ (`data/insight/daily/`) |
+| Raw traffic tab (audit → snapshot) | ✅ |
+| Pattern mining / agent profile | 🔲 V2 |
 
 ---
 
-## 11. Phases (roadmap)
+## 9. Phases
 
-### MVP — delivered
+### V1 — delivered
 
-Core ingest → separate → extract → graph → critics → Admin UI → daily reports.
-
-### V1
-
-- LLM Goal Discovery + five critics + counterfactual
-- Manual run merge/split
-- Raw traffic body viewer in graph modal (link audit → traffic snapshot)
+Core MVP + ops safety + graph tabs + merge/split + LLM enrichment + daily Markdown.
 
 ### V2
 
-- Success/failure pattern mining (SQLite sequences)
-- Agent capability profile from system + tools
-- DLP/safety cross-highlight
-- Daily report Markdown / PDF export
+- Success/failure pattern mining
+- Agent capability profile
+- DLP cross-highlight
+- PDF export
 
 ---
 
-## 12. Performance
+## 10. Performance & token budget
 
-- Proxy path: non-blocking `try_send` only; queue full → drop + warn
-- Worker: dedicated thread + Tokio runtime (GUI-safe)
-- Rule pipeline: target < 200 ms per turn (background)
-- LLM critic: opt-in, 1–2 calls per run (V1)
-
----
-
-## 13. Risks & known limitations
-
-| Risk | Mitigation |
-|------|------------|
-| Traffic off | Auto-enable when `insight.require_traffic_bodies`; UI warning if still off |
-| Traffic retention (7d) < insight retention (30d) | Increase `traffic_retention_days` for long analysis windows |
-| Wrong goal inference | Show confidence; user edit (V1) |
-| Multi-agent mis-split | `X-SMR-Agent-Id`; manual fix (V1) |
-| Linear graph oversimplifies decisions | Decision Graph in V1 |
-| SSE body truncated | Same limit as `traffic_max_body_bytes` |
+- Proxy path: non-blocking `try_send` only
+- Rule pipeline: < 200 ms per turn (background)
+- LLM: opt-in; compact trajectory (~6k chars); runs on completed/failed status + turn-1 goal refine
+- Long sessions: insight retention 30d vs traffic 7d — increase `traffic_retention_days` if needed

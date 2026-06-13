@@ -7,21 +7,24 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
+use crate::llm::LlmClient;
 use crate::models::{InsightConfig, TraceTurn};
 use crate::pipeline::Pipeline;
-use crate::report::generate_daily_report;
+use crate::report::{daily_report_markdown, generate_daily_report};
 use crate::safety::SafetyScanner;
 use crate::store::InsightStore;
 
 const QUEUE_CAPACITY: usize = 256;
 
 type SafetySlot = Arc<Mutex<Option<Arc<dyn SafetyScanner>>>>;
+type LlmSlot = Arc<Mutex<Option<Arc<dyn LlmClient>>>>;
 
 pub struct InsightService {
     config: Arc<parking_lot::RwLock<InsightConfig>>,
     tx: mpsc::Sender<TraceTurn>,
     store: Arc<InsightStore>,
     safety: SafetySlot,
+    llm: LlmSlot,
 }
 
 impl InsightService {
@@ -41,7 +44,14 @@ impl InsightService {
         }
 
         let safety: SafetySlot = Arc::new(Mutex::new(None));
-        spawn_worker(rx, Arc::clone(&store), Arc::clone(&safety));
+        let llm: LlmSlot = Arc::new(Mutex::new(None));
+        spawn_worker(
+            rx,
+            Arc::clone(&store),
+            Arc::clone(&safety),
+            Arc::clone(&llm),
+            Arc::clone(&config_slot),
+        );
         spawn_daily_scheduler(Arc::clone(&store), Arc::clone(&config_slot));
 
         Ok(Arc::new(Self {
@@ -49,11 +59,16 @@ impl InsightService {
             tx,
             store,
             safety,
+            llm,
         }))
     }
 
     pub fn set_safety_scanner(&self, scanner: Option<Arc<dyn SafetyScanner>>) {
         *self.safety.lock() = scanner;
+    }
+
+    pub fn set_llm_client(&self, client: Option<Arc<dyn LlmClient>>) {
+        *self.llm.lock() = client;
     }
 
     pub fn apply_config(&self, config: &InsightConfig) {
@@ -93,9 +108,14 @@ impl InsightService {
     pub fn generate_daily_for_date(&self, date: NaiveDate) -> anyhow::Result<usize> {
         let agents = self.store.list_agents(500)?;
         let mut count = 0;
+        let daily_dir = self.store.daily_reports_dir();
+        std::fs::create_dir_all(&daily_dir)?;
         for agent in agents {
             if let Some(report) = generate_daily_report(&self.store, &agent.agent_id, date)? {
                 self.store.save_daily_report(&report)?;
+                let md = daily_report_markdown(&report);
+                let path = daily_dir.join(format!("{}_{}.md", report.date, report.agent_id));
+                let _ = std::fs::write(path, md);
                 count += 1;
             }
         }
@@ -105,7 +125,13 @@ impl InsightService {
 
 /// Own Tokio runtime on a background thread so InsightService works from Tauri/GUI
 /// startup (no reactor on the main thread yet).
-fn spawn_worker(mut rx: mpsc::Receiver<TraceTurn>, store: Arc<InsightStore>, safety: SafetySlot) {
+fn spawn_worker(
+    mut rx: mpsc::Receiver<TraceTurn>,
+    store: Arc<InsightStore>,
+    safety: SafetySlot,
+    llm: LlmSlot,
+    config: Arc<parking_lot::RwLock<InsightConfig>>,
+) {
     thread::Builder::new()
         .name("agentmirror-worker".into())
         .spawn(move || {
@@ -118,7 +144,9 @@ fn spawn_worker(mut rx: mpsc::Receiver<TraceTurn>, store: Arc<InsightStore>, saf
                     let audit_id = turn.audit_id.clone();
                     let store = Arc::clone(&store);
                     let scanner = safety.lock().clone();
-                    match Pipeline::new(store, scanner).process_turn(turn) {
+                    let llm_client = llm.lock().clone();
+                    let cfg = config.read().clone();
+                    match Pipeline::new(store, scanner, llm_client, cfg).process_turn(turn) {
                         Ok(()) => debug!(audit_id = %audit_id, "AgentMirror processed turn"),
                         Err(err) => error!(?err, audit_id = %audit_id, "AgentMirror process error"),
                     }

@@ -117,9 +117,20 @@ impl SharedApp {
     }
 
     fn sync_insight_safety(&self) {
-        let ops = self.inner.read().ops.clone();
+        let inner = self.inner.read();
+        let ops = inner.ops.clone();
+        let router = inner.router.clone();
+        let cfg = inner.config.insight.clone();
+        drop(inner);
         self.insight
             .set_safety_scanner(Some(Arc::new(crate::insight_ops::OpsSafetyScanner(ops))));
+        if cfg.llm_critic {
+            self.insight.set_llm_client(Some(Arc::new(
+                crate::insight_llm::RouterLlmClient::new(router, &cfg.critic_model_group),
+            )));
+        } else {
+            self.insight.set_llm_client(None);
+        }
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {

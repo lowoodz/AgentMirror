@@ -84,6 +84,12 @@ impl InsightStore {
         &self.graphs_dir
     }
 
+    pub fn daily_reports_dir(&self) -> PathBuf {
+        self.graphs_dir.parent().map(|p| p.join("daily")).unwrap_or_else(|| {
+            PathBuf::from("data/insight/daily")
+        })
+    }
+
     pub fn is_audit_processed(&self, audit_id: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -364,6 +370,124 @@ impl InsightStore {
             return Ok(None);
         }
         Ok(Some(std::fs::read_to_string(path)?))
+    }
+
+    pub fn update_run_goal(&self, run_id: &str, goal: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE insight_runs SET goal = ?2 WHERE run_id = ?1",
+            params![run_id, goal],
+        )?;
+        Ok(())
+    }
+
+    pub fn merge_runs(&self, target_run_id: &str, source_run_ids: &[String]) -> Result<()> {
+        if source_run_ids.is_empty() {
+            return Ok(());
+        }
+        if !self.get_run(target_run_id)?.is_some() {
+            anyhow::bail!("target run not found");
+        }
+
+        for source_id in source_run_ids {
+            if source_id == target_run_id {
+                continue;
+            }
+            if self.get_run(source_id)?.is_none() {
+                continue;
+            }
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE insight_events SET run_id = ?1 WHERE run_id = ?2",
+                params![target_run_id, source_id],
+            )?;
+            drop(conn);
+            let _ = std::fs::remove_file(self.graph_path_for_run(source_id));
+            let conn = self.conn.lock().unwrap();
+            conn.execute("DELETE FROM insight_reports WHERE run_id = ?1", params![source_id])?;
+            conn.execute("DELETE FROM insight_runs WHERE run_id = ?1", params![source_id])?;
+        }
+
+        self.renumber_events(target_run_id)?;
+        self.refresh_run_stats(target_run_id)?;
+        Ok(())
+    }
+
+    pub fn split_run(&self, run_id: &str, after_seq: u32) -> Result<String> {
+        let run = self
+            .get_run(run_id)?
+            .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+        let events = self.list_events(run_id)?;
+        if events.iter().all(|e| e.seq <= after_seq) {
+            anyhow::bail!("nothing to split after seq {after_seq}");
+        }
+
+        let new_run_id = crate::separator::new_run_id(&run.session_id, &run.agent_id);
+        let split_goal = events
+            .iter()
+            .find(|e| e.seq > after_seq)
+            .map(|e| e.summary.clone())
+            .unwrap_or_else(|| run.goal.clone());
+
+        let new_run = RunRecord {
+            run_id: new_run_id.clone(),
+            agent_id: run.agent_id.clone(),
+            session_id: run.session_id.clone(),
+            started_at: run.started_at,
+            ended_at: run.ended_at,
+            status: run.status,
+            goal: split_goal,
+            turn_count: 0,
+            graph_path: None,
+        };
+        self.insert_run(&new_run)?;
+
+        {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE insight_events SET run_id = ?1 WHERE run_id = ?2 AND seq > ?3",
+                params![new_run_id, run_id, after_seq],
+            )?;
+        }
+
+        self.renumber_events(run_id)?;
+        self.renumber_events(&new_run_id)?;
+        self.refresh_run_stats(run_id)?;
+        self.refresh_run_stats(&new_run_id)?;
+        Ok(new_run_id)
+    }
+
+    fn renumber_events(&self, run_id: &str) -> Result<()> {
+        let mut events = self.list_events(run_id)?;
+        events.sort_by_key(|e| e.seq);
+        let conn = self.conn.lock().unwrap();
+        for (idx, event) in events.iter().enumerate() {
+            conn.execute(
+                "UPDATE insight_events SET seq = ?2 WHERE id = ?1",
+                params![event.id, idx as i64],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn refresh_run_stats(&self, run_id: &str) -> Result<()> {
+        let mut run = self
+            .get_run(run_id)?
+            .ok_or_else(|| anyhow::anyhow!("run not found"))?;
+        let events = self.list_events(run_id)?;
+        run.turn_count = events
+            .iter()
+            .map(|e| e.audit_id.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u32;
+        if run.turn_count == 0 {
+            run.turn_count = 1;
+        }
+        let graph = crate::graph::build_graph(run_id, &events);
+        let graph_json = serde_json::to_string_pretty(&graph)?;
+        run.graph_path = Some(self.save_graph_json(run_id, &graph_json)?);
+        self.update_run(&run)?;
+        Ok(())
     }
 
     /// Remove insight data older than `retention_days` (0 = skip).

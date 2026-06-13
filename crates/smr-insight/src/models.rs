@@ -154,6 +154,20 @@ pub struct Suggestion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DialecticalNotes {
+    pub thesis: String,
+    pub antithesis: Vec<String>,
+    pub synthesis: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterfactualNote {
+    pub decision: String,
+    pub alternative: String,
+    pub when_better: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReflectionReport {
     pub run_id: String,
     pub goal: String,
@@ -164,6 +178,12 @@ pub struct ReflectionReport {
     pub suggestions: Vec<Suggestion>,
     pub critics: CriticsScore,
     pub generated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialectical: Option<DialecticalNotes>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counterfactuals: Vec<CounterfactualNote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_improvement: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -5,6 +5,8 @@ use crate::graph::{build_graph, execution_summary};
 use crate::models::{
     DailyReport, DailyRunSummary, ReflectionReport, RunOutcome, RunRecord, RunStatus,
 };
+use crate::infer::maybe_llm_enrich;
+use crate::llm::LlmClient;
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::store::InsightStore;
 
@@ -12,6 +14,8 @@ pub fn build_reflection_report(
     store: &InsightStore,
     run: &RunRecord,
     safety: Option<&dyn SafetyScanner>,
+    llm: Option<&dyn LlmClient>,
+    llm_critic: bool,
 ) -> anyhow::Result<ReflectionReport> {
     let events = store.list_events(&run.run_id)?;
     let safety_findings = scan_action_events(&events, safety);
@@ -35,7 +39,7 @@ pub fn build_reflection_report(
         .map(|i| i.message.clone())
         .collect();
 
-    Ok(ReflectionReport {
+    let mut report = ReflectionReport {
         run_id: run.run_id.clone(),
         goal: run.goal.clone(),
         execution_summary,
@@ -45,7 +49,16 @@ pub fn build_reflection_report(
         suggestions,
         critics,
         generated_at: Utc::now(),
-    })
+        dialectical: None,
+        counterfactuals: Vec::new(),
+        estimated_improvement: None,
+    };
+
+    if llm_critic && run.status != RunStatus::Running {
+        maybe_llm_enrich(llm, run, &events, &mut report);
+    }
+
+    Ok(report)
 }
 
 pub fn generate_daily_report(
@@ -125,6 +138,40 @@ pub fn generate_daily_report(
         run_summaries,
         generated_at: Utc::now(),
     }))
+}
+
+pub fn daily_report_markdown(report: &DailyReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# AgentMirror Daily — {}\n\n", report.date));
+    out.push_str(&format!("**{}** — {}\n\n", report.display_name, report.summary));
+    out.push_str(&format!(
+        "- Completed: {}\n- Running: {}\n- Failed: {}\n- Turns: {}\n\n",
+        report.runs_completed, report.runs_running, report.runs_failed, report.total_turns
+    ));
+    if !report.run_summaries.is_empty() {
+        out.push_str("## Runs\n");
+        for r in &report.run_summaries {
+            out.push_str(&format!(
+                "- {} · {} · {} turns\n",
+                r.goal, r.status, r.turn_count
+            ));
+        }
+        out.push('\n');
+    }
+    if !report.top_issues.is_empty() {
+        out.push_str("## Issues\n");
+        for i in &report.top_issues {
+            out.push_str(&format!("- {i}\n"));
+        }
+        out.push('\n');
+    }
+    if !report.top_suggestions.is_empty() {
+        out.push_str("## Suggestions\n");
+        for s in &report.top_suggestions {
+            out.push_str(&format!("- {s}\n"));
+        }
+    }
+    out
 }
 
 pub fn persist_graph(store: &InsightStore, run_id: &str) -> anyhow::Result<String> {

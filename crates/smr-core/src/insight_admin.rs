@@ -1,7 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::Router;
 use chrono::NaiveDate;
 use serde::Deserialize;
@@ -24,14 +24,33 @@ struct GenerateDailyRequest {
     date: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct MergeRunsRequest {
+    target_run_id: String,
+    source_run_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct SplitRunRequest {
+    after_seq: u32,
+}
+
+#[derive(Deserialize)]
+struct PatchRunRequest {
+    goal: Option<String>,
+}
+
 pub fn router() -> Router<HttpState> {
     Router::new()
         .route("/api/insight/status", get(api_insight_status))
         .route("/api/insight/agents", get(api_insight_agents))
         .route("/api/insight/runs", get(api_insight_runs))
-        .route("/api/insight/runs/{run_id}", get(api_insight_run))
+        .route("/api/insight/runs/{run_id}", get(api_insight_run).patch(api_insight_patch_run))
         .route("/api/insight/runs/{run_id}/graph", get(api_insight_graph))
         .route("/api/insight/runs/{run_id}/report", get(api_insight_report))
+        .route("/api/insight/runs/merge", post(api_insight_merge_runs))
+        .route("/api/insight/runs/{run_id}/split", post(api_insight_split_run))
+        .route("/api/insight/audit/{audit_id}/traffic", get(api_insight_audit_traffic))
         .route("/api/insight/daily/{date}", get(api_insight_daily))
         .route("/api/insight/daily/generate", post(api_insight_generate_daily))
 }
@@ -75,6 +94,24 @@ async fn api_insight_run(
     Ok(Json(serde_json::json!({ "run": run, "events": events })))
 }
 
+async fn api_insight_patch_run(
+    State(s): State<HttpState>,
+    Path(run_id): Path<String>,
+    Json(req): Json<PatchRunRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let store = s.app.insight.store();
+    if store.get_run(&run_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if let Some(goal) = req.goal.filter(|g| !g.trim().is_empty()) {
+        store
+            .update_run_goal(&run_id, goal.trim())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    let run = store.get_run(&run_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "run": run })))
+}
+
 async fn api_insight_graph(
     State(s): State<HttpState>,
     Path(run_id): Path<String>,
@@ -108,6 +145,43 @@ async fn api_insight_report(
         Some(r) => Ok(Json(serde_json::json!({ "report": r }))),
         None => Err(StatusCode::NOT_FOUND),
     }
+}
+
+async fn api_insight_merge_runs(
+    State(s): State<HttpState>,
+    Json(req): Json<MergeRunsRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let store = s.app.insight.store();
+    store
+        .merge_runs(&req.target_run_id, &req.source_run_ids)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let run = store
+        .get_run(&req.target_run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "run": run })))
+}
+
+async fn api_insight_split_run(
+    State(s): State<HttpState>,
+    Path(run_id): Path<String>,
+    Json(req): Json<SplitRunRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let store = s.app.insight.store();
+    let new_run_id = store
+        .split_run(&run_id, req.after_seq)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let run = store
+        .get_run(&new_run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({ "new_run_id": new_run_id, "run": run })))
+}
+
+async fn api_insight_audit_traffic(
+    State(s): State<HttpState>,
+    Path(audit_id): Path<String>,
+) -> Json<serde_json::Value> {
+    let records = s.app.traffic.list_by_audit(&audit_id);
+    Json(serde_json::json!({ "audit_id": audit_id, "records": records }))
 }
 
 async fn api_insight_daily(
