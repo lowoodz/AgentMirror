@@ -9,13 +9,18 @@ source "${ROOT}/scripts/vm/vm-ssh.sh"
 PS1="${ROOT}/scripts/vm/clean-vm-artifacts.ps1"
 
 KEEP_INSTALLED=""
-KEEP_PYTHON=""
+KEEP_PYTHON="-KeepPythonEmbed"
+PURGE_PYTHON=false
 for arg in "$@"; do
   case "$arg" in
     --keep-installed) KEEP_INSTALLED="-KeepInstalled" ;;
     --keep-python) KEEP_PYTHON="-KeepPythonEmbed" ;;
+    --purge-python) PURGE_PYTHON=true ;;
   esac
 done
+if [[ "$PURGE_PYTHON" == true ]]; then
+  KEEP_PYTHON=""
+fi
 
 vm_ssh_init
 vm_ssh_require

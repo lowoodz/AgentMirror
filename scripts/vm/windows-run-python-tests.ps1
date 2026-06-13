@@ -54,7 +54,7 @@ function Install-EmbeddedPython {
     Log "Downloading embedded Python from python.org..."
     if (-not (Test-Path $EmbedDir)) { New-Item -ItemType Directory -Force -Path $EmbedDir | Out-Null }
     try {
-        Invoke-WebRequest -Uri $EmbedUrl -OutFile $EmbedZip -UseBasicParsing -TimeoutSec 300
+        Invoke-WebRequest -Uri $EmbedUrl -OutFile $EmbedZip -UseBasicParsing -TimeoutSec 600
     } catch {
         Log "ERROR: download failed: $($_.Exception.Message)"
         return $null

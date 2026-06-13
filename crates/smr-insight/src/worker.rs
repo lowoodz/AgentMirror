@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::thread;
 
 use chrono::{Local, NaiveDate, Timelike};
 use tokio::sync::mpsc;
@@ -85,38 +86,56 @@ impl InsightService {
     }
 }
 
+/// Own Tokio runtime on a background thread so InsightService works from Tauri/GUI
+/// startup (no reactor on the main thread yet).
 fn spawn_worker(mut rx: mpsc::Receiver<TraceTurn>, store: Arc<InsightStore>) {
-    tokio::spawn(async move {
-        while let Some(turn) = rx.recv().await {
-            let audit_id = turn.audit_id.clone();
-            let store = Arc::clone(&store);
-            let result =
-                tokio::task::spawn_blocking(move || Pipeline::new(store).process_turn(turn)).await;
-            match result {
-                Ok(Ok(())) => debug!(audit_id = %audit_id, "AgentMirror processed turn"),
-                Ok(Err(err)) => error!(?err, audit_id = %audit_id, "AgentMirror process error"),
-                Err(err) => error!(?err, "AgentMirror worker join error"),
-            }
-        }
-    });
+    thread::Builder::new()
+        .name("agentmirror-worker".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("AgentMirror worker runtime");
+            rt.block_on(async move {
+                while let Some(turn) = rx.recv().await {
+                    let audit_id = turn.audit_id.clone();
+                    let store = Arc::clone(&store);
+                    match Pipeline::new(store).process_turn(turn) {
+                        Ok(()) => debug!(audit_id = %audit_id, "AgentMirror processed turn"),
+                        Err(err) => error!(?err, audit_id = %audit_id, "AgentMirror process error"),
+                    }
+                }
+            });
+        })
+        .expect("spawn AgentMirror worker thread");
 }
 
 fn spawn_daily_scheduler(store: Arc<InsightStore>, config: Arc<parking_lot::RwLock<InsightConfig>>) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-            let hour = config.read().daily_report_hour;
-            if Local::now().hour() != u32::from(hour) {
-                continue;
-            }
-            let yesterday = (Local::now() - chrono::Duration::days(1)).date_naive();
-            let agents = store.list_agents(500).unwrap_or_default();
-            for agent in agents {
-                if let Ok(Some(report)) = generate_daily_report(&store, &agent.agent_id, yesterday)
-                {
-                    let _ = store.save_daily_report(&report);
+    thread::Builder::new()
+        .name("agentmirror-daily".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("AgentMirror daily runtime");
+            rt.block_on(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                    let hour = config.read().daily_report_hour;
+                    if Local::now().hour() != u32::from(hour) {
+                        continue;
+                    }
+                    let yesterday = (Local::now() - chrono::Duration::days(1)).date_naive();
+                    let agents = store.list_agents(500).unwrap_or_default();
+                    for agent in agents {
+                        if let Ok(Some(report)) =
+                            generate_daily_report(&store, &agent.agent_id, yesterday)
+                        {
+                            let _ = store.save_daily_report(&report);
+                        }
+                    }
                 }
-            }
-        }
-    });
+            });
+        })
+        .expect("spawn AgentMirror daily scheduler thread");
 }

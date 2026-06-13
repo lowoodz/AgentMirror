@@ -273,6 +273,23 @@
     .sse-event-head { font-size:11px; font-weight:650; color:var(--muted); margin-bottom:6px; letter-spacing:.02em; }
     .sse-section-title { margin:14px 0 6px; font-size:12px; font-weight:650; color:var(--text); }
     .sse-parse-err { margin:4px 0 6px; color:var(--warn, #fbbf24); }
+    .insight-grid { display:grid; grid-template-columns:minmax(220px,280px) 1fr; gap:var(--gap-lg); align-items:start; }
+    @media (max-width:860px){ .insight-grid { grid-template-columns:1fr; } }
+    .insight-agents, .insight-runs { display:flex; flex-direction:column; gap:8px; }
+    .insight-card { border:1px solid var(--border); border-radius:var(--radius); padding:10px 12px; background:var(--surface); cursor:pointer; text-align:left; width:100%; font:inherit; color:inherit; }
+    .insight-card:hover, .insight-card.active { border-color:var(--accent); background:var(--surface-inset); }
+    .insight-card-title { font-size:13px; font-weight:650; margin:0 0 4px; }
+    .insight-card-meta { font-size:11px; color:var(--muted); margin:0; line-height:1.45; }
+    .insight-scores { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .insight-score { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--border); background:var(--surface-inset); }
+    .causal-flow { display:flex; flex-direction:column; gap:0; margin-top:12px; }
+    .causal-node { position:relative; padding:10px 12px 10px 14px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); margin-bottom:8px; }
+    .causal-node::before { content:''; position:absolute; left:18px; top:-9px; width:2px; height:8px; background:var(--border-strong); }
+    .causal-node:first-child::before { display:none; }
+    .causal-kind { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-bottom:4px; }
+    .causal-label { font-size:13px; line-height:1.45; word-break:break-word; }
+    .causal-kind.goal { color:#7dd3fc; } .causal-kind.action { color:#86efac; } .causal-kind.decision { color:#fcd34d; }
+    .causal-kind.observation { color:#c4b5fd; } .causal-kind.result { color:#f472b6; }
   </style>
 </head>
 <body>
@@ -293,7 +310,8 @@
 </header>
 <main>
 <nav id="mainNav">
-  <button class="active" data-tab="overview" data-i18n="nav.overview" onclick="showTab('overview',this)">Overview</button>
+  <button class="active" data-tab="agentmirror" data-i18n="nav.agentmirror" onclick="showTab('agentmirror',this)">AgentMirror</button>
+  <button data-tab="overview" data-i18n="nav.overview" onclick="showTab('overview',this)">Overview</button>
   <button data-tab="routing" data-i18n="nav.routing" onclick="showTab('routing',this)">Routing</button>
   <button data-tab="dlp" data-i18n="nav.dlp" onclick="showTab('dlp',this)">DLP</button>
   <button data-tab="path-protection" data-i18n="nav.path" onclick="showTab('path-protection',this)">Path protection</button>
@@ -302,7 +320,33 @@
   <button data-tab="advanced" data-i18n="nav.advanced" onclick="showTab('advanced',this)">Advanced Configs</button>
 </nav>
 <div class="content">
-<section class="panel active" id="overview">
+<section class="panel active" id="agentmirror">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.agentmirror">AgentMirror</h2>
+    <p class="page-desc" data-i18n="insight.pageHint">Reconstruct agent goals, decisions, and actions from LLM proxy traffic — with daily reports and causal trajectory graphs.</p>
+  </div>
+  <div id="insightTrafficWarn" class="info-callout" style="display:none" data-i18n="insight.trafficWarn">Enable traffic snapshots (Logs tab) so AgentMirror can analyze request/response bodies.</div>
+  <div class="traffic-toolbar" style="margin-bottom:var(--gap-lg)">
+    <div class="traffic-toolbar-row">
+      <button type="button" class="secondary btn-sm" data-i18n="refresh" onclick="loadInsight()">Refresh</button>
+      <button type="button" class="secondary btn-sm" data-i18n="insight.genDaily" onclick="generateDailyReport()">Generate today's report</button>
+      <span class="traffic-spacer"></span>
+      <span class="hint" id="insightStatusText">…</span>
+    </div>
+  </div>
+  <div class="insight-grid">
+    <div>
+      <h3 class="section-label" data-i18n="insight.agentsTitle">Agents</h3>
+      <div id="insightAgentList" class="insight-agents"></div>
+    </div>
+    <div>
+      <h3 class="section-label" data-i18n="insight.runsTitle">Task runs</h3>
+      <div id="insightRunList" class="insight-runs"></div>
+      <div id="insightRunDetail" style="margin-top:var(--gap-lg)"></div>
+    </div>
+  </div>
+</section>
+<section class="panel" id="overview">
   <div class="page-header">
     <h2 class="page-title" data-i18n="nav.overview">Overview</h2>
     <p class="page-desc" data-i18n="overview.proxyHint">One base URL for OpenAI and Anthropic clients. SafeRoute detects the protocol and converts to each upstream model in the fallback group.</p>
@@ -540,10 +584,20 @@
     <div id="jsonModalBody" class="json-modal-body"></div>
   </div>
 </div>
+<div id="graphModal" class="json-modal" onclick="if(event.target===this)closeGraphModal()">
+  <div class="json-modal-panel" role="dialog" aria-modal="true" aria-labelledby="graphModalTitle">
+    <div class="json-modal-head">
+      <h4 id="graphModalTitle" data-i18n="insight.graphTitle">Causal trajectory</h4>
+      <button type="button" class="secondary btn-sm" onclick="closeGraphModal()">×</button>
+    </div>
+    <div id="graphModalMeta" class="json-modal-meta"></div>
+    <div id="graphModalBody" class="json-modal-body"></div>
+  </div>
+</div>
 <script>
 const I18N={
 en:{
-'securityMaster':'Security master switch','nav.overview':'Overview','nav.routing':'Routing','nav.dlp':'DLP','nav.path':'Path protection','nav.ops':'Operations','nav.logs':'Logs','nav.advanced':'Advanced Configs',
+'securityMaster':'Security master switch','nav.agentmirror':'AgentMirror','nav.overview':'Overview','nav.routing':'Routing','nav.dlp':'DLP','nav.path':'Path protection','nav.ops':'Operations','nav.logs':'Logs','nav.advanced':'Advanced Configs',
 'overview.baseUrl':'Base URL','overview.providerSub':'OpenAI-compatible provider','overview.modelsTitle':'Models','overview.openclawConfig':'OpenClaw configuration','overview.openclawSnippet':'# OpenClaw — one provider, three tier models','overview.proxyHint':'One base URL for OpenAI and Anthropic clients. SafeRoute detects the protocol and converts to each upstream model in the fallback group.','overview.defaultGroup':'Default group','overview.dlp':'DLP','overview.ops':'Operation security','overview.path':'Path protection','overview.index':'File index','overview.copyModel':'Copy id',
 'mode.observe':'Observe','mode.enforce':'Enforce',
 'copy':'Copy','add':'Add','refresh':'Refresh',
@@ -555,10 +609,11 @@ en:{
 'advanced.save':'Save & apply','advanced.reload':'Reload','advanced.pageHint':'Edit the full configuration as JSON. Invalid syntax will reject the save.','advanced.editorTitle':'Configuration','advanced.editorHint':'Changes take effect immediately after save. Use Reload to discard unsaved edits.',
 'status.running':'Running','status.dlpOn':'Enabled','status.dlpOff':'Disabled','status.indexReady':'Ready','status.indexBuilding':'Indexing…','status.loading':'Loading…',
 'toast.saved':'Saved and applied','toast.savedRouting':'Routing saved and applied','toast.saving':'Saving…','toast.copied':'Copied to clipboard','toast.failed':'Save failed','toast.reloadOk':'Reloaded from disk','toast.completeDraft':'Finish or cancel the new model form first','toast.fillModel':'Fill Base URL, model name, and API Key','toast.unnamed':'(unnamed)',
-'model.addTitle':'Add model','model.baseUrl':'Base URL','model.name':'Model name','model.apiKey':'API Key','model.confirm':'Confirm','model.cancel':'Cancel','delete':'Delete'
+'model.addTitle':'Add model','model.baseUrl':'Base URL','model.name':'Model name','model.apiKey':'API Key','model.confirm':'Confirm','model.cancel':'Cancel','delete':'Delete',
+'insight.pageHint':'Reconstruct agent goals, decisions, and actions from LLM proxy traffic — with daily reports and causal trajectory graphs.','insight.trafficWarn':'Enable traffic snapshots (Logs tab) so AgentMirror can analyze request/response bodies.','insight.agentsTitle':'Agents','insight.runsTitle':'Task runs','insight.genDaily':"Generate today's report",'insight.graphTitle':'Causal trajectory','insight.viewGraph':'View trajectory','insight.noAgents':'No agents recorded yet — route agent traffic through SafeRoute.','insight.noRuns':'No runs for this agent.','insight.turns':'turns','insight.dailyOk':'Daily report generated'
 },
 zh:{
-'securityMaster':'安全防护总开关','nav.overview':'概览','nav.routing':'模型路由','nav.dlp':'数据防泄露','nav.path':'重要路径防护','nav.ops':'操作拦截','nav.logs':'日志','nav.advanced':'高级配置',
+'securityMaster':'安全防护总开关','nav.agentmirror':'AgentMirror','nav.overview':'概览','nav.routing':'模型路由','nav.dlp':'数据防泄露','nav.path':'重要路径防护','nav.ops':'操作拦截','nav.logs':'日志','nav.advanced':'高级配置',
 'overview.baseUrl':'接口地址','overview.providerSub':'OpenAI 兼容 Provider','overview.modelsTitle':'模型','overview.openclawConfig':'OpenClaw 配置示例','overview.openclawSnippet':'# OpenClaw — 一个 Provider，三个档位模型','overview.proxyHint':'同一 base URL 兼容 OpenAI 与 Anthropic 客户端；按请求自动识别协议，并在 fallback 组内转换为对应上游 API。','overview.defaultGroup':'默认组','overview.dlp':'DLP','overview.ops':'操作安全','overview.path':'路径防护','overview.index':'文件索引','overview.copyModel':'复制 ID',
 'mode.observe':'观察','mode.enforce':'拦截',
 'copy':'复制','add':'添加','refresh':'刷新',
@@ -570,11 +625,12 @@ zh:{
 'advanced.save':'保存并应用','advanced.reload':'重载','advanced.pageHint':'以 JSON 编辑完整配置，语法错误将无法保存。','advanced.editorTitle':'配置','advanced.editorHint':'保存后立即生效；点「重载」可放弃未保存的修改。',
 'status.running':'运行中','status.dlpOn':'已启用','status.dlpOff':'已关闭','status.indexReady':'就绪','status.indexBuilding':'索引中…','status.loading':'加载中…',
 'toast.saved':'已保存并生效','toast.savedRouting':'路由已保存并生效','toast.saving':'保存中…','toast.copied':'已复制','toast.failed':'保存失败','toast.reloadOk':'已从磁盘重载','toast.completeDraft':'请先完成或取消「新增模型」表单','toast.fillModel':'请填写 Base URL、模型名称和 API Key','toast.unnamed':'(未命名)',
-'model.addTitle':'新增模型','model.baseUrl':'Base URL','model.name':'模型名称','model.apiKey':'API Key','model.confirm':'确认添加','model.cancel':'取消','delete':'删除'
+'model.addTitle':'新增模型','model.baseUrl':'Base URL','model.name':'模型名称','model.apiKey':'API Key','model.confirm':'确认添加','model.cancel':'取消','delete':'删除',
+'insight.pageHint':'从 LLM 代理流量反向重建智能体的目标、决策与行动，并提供日报与因果轨迹图。','insight.trafficWarn':'请先在「日志」页启用流量快照，AgentMirror 才能分析请求/响应正文。','insight.agentsTitle':'智能体','insight.runsTitle':'任务运行','insight.genDaily':'生成今日报告','insight.graphTitle':'因果轨迹','insight.viewGraph':'查看轨迹','insight.noAgents':'尚无记录 — 请将 Agent 流量经 SafeRoute 转发。','insight.noRuns':'该智能体暂无任务。','insight.turns':'轮','insight.dailyOk':'日报已生成'
 }};
 let lang=localStorage.getItem('smr_lang')||'en';
 const ROUTING_DRAFT_KEY='smr_routing_draft';
-let cfg={};let routingDraft=null;let toastTimer=null;let dragPayload=null;let listenHost='';
+let cfg={};let routingDraft=null;let toastTimer=null;let dragPayload=null;let listenHost='';let insightAgents=[];let insightRuns=[];let selectedInsightAgent=null;
 const DEFAULT_FILE_FORMATS=['txt','md','json','yaml','yml','rs','py','js','ts','tsx','jsx','html','css','xml','csv','doc','docx','pptx','pdf'];
 function pathRuleCovers(path,rules){const p=String(path||'').replace(/\\/g,'/').replace(/\/+$/,'');return(rules||[]).some(r=>{if(!r.enabled)return false;const b=String(r.path||'').replace(/\\/g,'/').replace(/\/+$/,'');return p===b||p.startsWith(b+'/')||b.startsWith(p+'/');});}
 function ensurePathProtectionForDir(path){cfg.path_protection_rules=cfg.path_protection_rules||[];if(pathRuleCovers(path,cfg.path_protection_rules))return;cfg.path_protection_rules.push({id:'path-'+Date.now(),enabled:true,path,level:'deny_access'});renderPathRules();}
@@ -590,7 +646,7 @@ function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(el=>{el.te
 function renderOpsExamples(){const el=document.getElementById('opsExamplesBlock');if(!el)return;el.textContent=t('ops.examplesYaml');}
 function fillPathLevelSelect(){const sel=pathProtectLevel;if(!sel)return;const v=sel.value||'deny_access';sel.innerHTML=`<option value="deny_access">${t('level.deny_access')}</option><option value="deny_modify">${t('level.deny_modify')}</option><option value="deny_delete">${t('level.deny_delete')}</option>`;sel.value=v;}
 function showToast(msg,ok=true){const el=document.getElementById('toast');if(!el)return;el.textContent=msg;el.classList.remove('ok','err','show');el.classList.add(ok?'ok':'err','show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2800);}
-function showTab(id,btn){document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');if(id==='logs')loadTraffic();}
+function showTab(id,btn){document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');if(id==='logs')loadTraffic();if(id==='agentmirror')loadInsight();}
 function inferProto(url){return (url||'').includes('anthropic')?'anthropic':'openai';}
 function trafficCaptureMode(){return cfg.logging?.traffic_request_capture==='before_dlp'?'before_dlp':'after_dlp';}
 function syncTrafficCaptureUi(){const on=!!trafficToggle?.checked;const row=document.getElementById('trafficCaptureRow');if(row)row.classList.toggle('traffic-off',!on);const mode=trafficCaptureMode();const segAfter=document.getElementById('segAfter');const segBefore=document.getElementById('segBefore');if(segAfter){const active=mode!=='before_dlp';segAfter.classList.toggle('active',active);segAfter.disabled=!on;segAfter.setAttribute('aria-checked',active?'true':'false');}if(segBefore){const active=mode==='before_dlp';segBefore.classList.toggle('active',active);segBefore.disabled=!on;segBefore.setAttribute('aria-checked',active?'true':'false');}}
@@ -686,12 +742,22 @@ async function openTrafficViewer(id){const modal=document.getElementById('jsonMo
 function onTrafficSnapshotPick(id){if(!id)return;loadTrafficSnapshot(id).catch(err=>{const bodyEl=document.getElementById('jsonModalBody');if(bodyEl)bodyEl.textContent=(err&&err.message)||String(err);});}
 function closeTrafficViewer(){document.getElementById('jsonModal')?.classList.remove('open');trafficViewerRaw='';}
 function copyTrafficRaw(){if(!trafficViewerRaw)return;navigator.clipboard.writeText(trafficViewerRaw).then(()=>showToast(t('toast.copied'))).catch(()=>{});}
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeTrafficViewer();});
+async function loadInsight(){try{const st=await(await fetch('/api/insight/status')).json();const warn=document.getElementById('insightTrafficWarn');if(warn)warn.style.display=st.needs_traffic?'block':'none';const statusEl=document.getElementById('insightStatusText');if(statusEl)statusEl.textContent=st.enabled?(st.traffic_bodies?'AgentMirror ON':'AgentMirror ON (no traffic)'):'AgentMirror OFF';const agentsRes=await(await fetch('/api/insight/agents')).json();insightAgents=agentsRes.agents||[];if(!selectedInsightAgent&&insightAgents.length)selectedInsightAgent=insightAgents[0].agent_id;renderInsightAgents();await loadInsightRuns();}catch(e){const list=document.getElementById('insightAgentList');if(list)list.innerHTML=`<p class="hint">${(e&&e.message)||e}</p>`;}}
+function renderInsightAgents(){const el=document.getElementById('insightAgentList');if(!el)return;if(!insightAgents.length){el.innerHTML=`<p class="hint">${t('insight.noAgents')}</p>`;return;}el.innerHTML='';for(const a of insightAgents){const btn=document.createElement('button');btn.type='button';btn.className='insight-card'+(selectedInsightAgent===a.agent_id?' active':'');btn.innerHTML=`<p class="insight-card-title">${escHtml(a.display_name||a.agent_id)}</p><p class="insight-card-meta">${escHtml(a.agent_type||'agent')} · ${(a.last_seen||'').slice(0,19).replace('T',' ')}</p>`;btn.onclick=()=>{selectedInsightAgent=a.agent_id;renderInsightAgents();loadInsightRuns();};el.appendChild(btn);}}
+async function loadInsightRuns(){const el=document.getElementById('insightRunList');if(!el)return;if(!selectedInsightAgent){el.innerHTML=`<p class="hint">${t('insight.noAgents')}</p>`;return;}const q=selectedInsightAgent?`?agent_id=${encodeURIComponent(selectedInsightAgent)}&limit=50`:'';const res=await(await fetch('/api/insight/runs'+q)).json();insightRuns=res.runs||[];if(!insightRuns.length){el.innerHTML=`<p class="hint">${t('insight.noRuns')}</p>`;document.getElementById('insightRunDetail').innerHTML='';return;}el.innerHTML='';for(const r of insightRuns){const card=document.createElement('div');card.className='insight-card';card.style.cursor='default';card.innerHTML=`<p class="insight-card-title">${escHtml(r.goal||r.run_id)}</p><p class="insight-card-meta">${escHtml(r.status||'')} · ${r.turn_count||0} ${t('insight.turns')} · ${(r.started_at||'').slice(0,19).replace('T',' ')}</p><div class="traffic-actions"><button type="button" class="secondary btn-sm" onclick="openGraphModal('${escAttr(r.run_id)}')">${t('insight.viewGraph')}</button><button type="button" class="secondary btn-sm" onclick="showRunReport('${escAttr(r.run_id)}')">${lang==='zh'?'反思报告':'Report'}</button></div>`;el.appendChild(card);}}
+async function showRunReport(runId){const detail=document.getElementById('insightRunDetail');if(!detail)return;detail.innerHTML=lang==='zh'?'加载中…':'Loading…';try{const data=await(await fetch(`/api/insight/runs/${encodeURIComponent(runId)}/report`)).json();const rep=data.report||{};const c=rep.critics||{};detail.innerHTML=`<div class="info-callout"><strong>${escHtml(rep.goal||'')}</strong><p>${escHtml(rep.execution_summary||'')}</p><div class="insight-scores"><span class="insight-score">Align ${c.alignment??'-'}</span><span class="insight-score">Complete ${c.completeness??'-'}</span><span class="insight-score">Efficiency ${c.efficiency??'-'}</span><span class="insight-score">Safety ${c.safety??'-'}</span></div></div>${(rep.suggestions||[]).map(s=>`<p class="hint">💡 ${escHtml(s.message)}</p>`).join('')}${(rep.issues||[]).map(i=>`<p class="hint">⚠ ${escHtml(i.message)}</p>`).join('')}`;}catch(e){detail.innerHTML=`<p class="hint">${(e&&e.message)||e}</p>`;}}
+async function openGraphModal(runId){const modal=document.getElementById('graphModal');const body=document.getElementById('graphModalBody');const meta=document.getElementById('graphModalMeta');if(!modal||!body)return;body.innerHTML=lang==='zh'?'加载中…':'Loading…';meta.textContent='';modal.classList.add('open');try{const runRes=await(await fetch(`/api/insight/runs/${encodeURIComponent(runId)}`)).json();const graph=await(await fetch(`/api/insight/runs/${encodeURIComponent(runId)}/graph`)).json();meta.textContent=runRes.run?.goal||runId;renderCausalGraph(body,graph);}catch(e){body.innerHTML=`<p class="hint">${(e&&e.message)||e}</p>`;}}
+function renderCausalGraph(el,graph){el.innerHTML='';const nodes=graph.nodes||[];if(!nodes.length){el.innerHTML=`<p class="hint">${lang==='zh'?'暂无轨迹节点':'No trajectory nodes yet'}</p>`;return;}const flow=document.createElement('div');flow.className='causal-flow';for(const n of nodes){const box=document.createElement('div');box.className='causal-node';box.innerHTML=`<div class="causal-kind ${escAttr(n.kind||'')}">${escHtml(n.kind||'')}</div><div class="causal-label">${escHtml(n.label||'')}</div>`;flow.appendChild(box);}el.appendChild(flow);}
+function closeGraphModal(){document.getElementById('graphModal')?.classList.remove('open');}
+async function generateDailyReport(){try{const today=new Date().toISOString().slice(0,10);const r=await fetch('/api/insight/daily/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:today})});if(!r.ok)throw new Error(await r.text());showToast(t('insight.dailyOk'),true);}catch(e){showToast(t('toast.failed')+': '+(e.message||e),false);}}
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function escAttr(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeTrafficViewer();closeGraphModal();}});
 const fileDrop=document.getElementById('fileDrop');const pathDrop=document.getElementById('pathDrop');
 setupPathDropZone(fileDrop,paths=>applyDroppedPaths(paths,fileDrop));
 setupPathDropZone(pathDrop,paths=>applyDroppedPaths(paths,pathDrop));
 window.addEventListener('pagehide',()=>{syncDraftFromForm();saveRoutingDraft();});
-langSelect.value=lang;document.documentElement.lang=lang==='zh'?'zh-CN':'en';applyI18n();statusText.textContent=t('status.loading');loadStatus();loadConfig();loadEvents();loadAudits();loadTraffic();setInterval(()=>{loadEvents();loadAudits();if(document.getElementById('logs').classList.contains('active'))loadTraffic();},8000);
+langSelect.value=lang;document.documentElement.lang=lang==='zh'?'zh-CN':'en';applyI18n();statusText.textContent=t('status.loading');loadStatus();loadConfig();loadEvents();loadAudits();loadTraffic();loadInsight();setInterval(()=>{loadEvents();loadAudits();if(document.getElementById('logs').classList.contains('active'))loadTraffic();if(document.getElementById('agentmirror').classList.contains('active'))loadInsight();},8000);
 </script>
 </body>
 </html>

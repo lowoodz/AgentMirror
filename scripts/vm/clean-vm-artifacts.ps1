@@ -28,7 +28,7 @@ foreach ($name in @("smr", "SafeRoute", "smr-gui")) {
 if (Test-Path $Staging) {
     if ($KeepPythonEmbed) {
         Get-ChildItem -Path $Staging -Force -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -ne "python312" } |
+            Where-Object { $_.Name -notin @("python312", "python-embed.zip") } |
             ForEach-Object {
                 Log "Removing $($_.FullName)"
                 Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
