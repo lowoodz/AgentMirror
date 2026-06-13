@@ -1,22 +1,23 @@
 use std::sync::Arc;
 
-
 use crate::critic::{evaluate, CriticInput};
 use crate::extract::{drafts_to_events, extract_from_turn};
 use crate::graph::build_graph;
 use crate::models::{RunRecord, RunStatus, TraceTurn};
 use crate::parser::{parse_request, parse_response};
 use crate::report::{build_reflection_report, outcome_from_status};
+use crate::safety::{scan_action_events, SafetyScanner};
 use crate::separator::{infer_goal_from_request, new_run_id, resolve_agent, should_start_new_run};
 use crate::store::InsightStore;
 
 pub struct Pipeline {
     store: Arc<InsightStore>,
+    safety: Option<Arc<dyn SafetyScanner>>,
 }
 
 impl Pipeline {
-    pub fn new(store: Arc<InsightStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<InsightStore>, safety: Option<Arc<dyn SafetyScanner>>) -> Self {
+        Self { store, safety }
     }
 
     pub fn store(&self) -> &InsightStore {
@@ -101,16 +102,18 @@ impl Pipeline {
         let graph_path = self.store.save_graph_json(&run.run_id, &graph_json)?;
         run.graph_path = Some(graph_path);
 
+        let safety_findings = scan_action_events(&all_events, self.safety.as_deref());
         let (_, _, _, outcome) = evaluate(CriticInput {
             events: &all_events,
             turn_count: run.turn_count,
             goal: &run.goal,
+            safety_findings: &safety_findings,
         });
         run.status = outcome_from_status(run.status, outcome);
 
         self.store.update_run(&run)?;
 
-        let report = build_reflection_report(&self.store, &run)?;
+        let report = build_reflection_report(&self.store, &run, self.safety.as_deref())?;
         self.store.save_report(&report)?;
 
         self.store.mark_audit_processed(&turn.audit_id)?;

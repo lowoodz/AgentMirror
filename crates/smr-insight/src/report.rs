@@ -5,17 +5,21 @@ use crate::graph::{build_graph, execution_summary};
 use crate::models::{
     DailyReport, DailyRunSummary, ReflectionReport, RunOutcome, RunRecord, RunStatus,
 };
+use crate::safety::{scan_action_events, SafetyScanner};
 use crate::store::InsightStore;
 
 pub fn build_reflection_report(
     store: &InsightStore,
     run: &RunRecord,
+    safety: Option<&dyn SafetyScanner>,
 ) -> anyhow::Result<ReflectionReport> {
     let events = store.list_events(&run.run_id)?;
+    let safety_findings = scan_action_events(&events, safety);
     let (critics, issues, suggestions, outcome) = evaluate(CriticInput {
         events: &events,
         turn_count: run.turn_count,
         goal: &run.goal,
+        safety_findings: &safety_findings,
     });
 
     let summary = execution_summary(&events);

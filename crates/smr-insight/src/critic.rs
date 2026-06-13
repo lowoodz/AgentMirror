@@ -5,6 +5,7 @@ pub struct CriticInput<'a> {
     pub events: &'a [CognitiveEvent],
     pub turn_count: u32,
     pub goal: &'a str,
+    pub safety_findings: &'a [String],
 }
 
 pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Suggestion>, RunOutcome) {
@@ -77,10 +78,17 @@ pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Sugges
     }
 
     score.safety = 90;
+    for finding in input.safety_findings {
+        score.safety = score.safety.min(35);
+        issues.push(Issue {
+            message: finding.clone(),
+            severity: "high".to_string(),
+        });
+    }
     for action in &actions {
         let lower = action.summary.to_ascii_lowercase();
         if lower.contains("rm -rf") || lower.contains("delete") && lower.contains("all") {
-            score.safety = 40;
+            score.safety = score.safety.min(40);
             issues.push(Issue {
                 message: "Potentially destructive shell action detected".to_string(),
                 severity: "high".to_string(),

@@ -3,20 +3,25 @@ use std::sync::Arc;
 use std::thread;
 
 use chrono::{Local, NaiveDate, Timelike};
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
 use crate::models::{InsightConfig, TraceTurn};
 use crate::pipeline::Pipeline;
 use crate::report::generate_daily_report;
+use crate::safety::SafetyScanner;
 use crate::store::InsightStore;
 
 const QUEUE_CAPACITY: usize = 256;
+
+type SafetySlot = Arc<Mutex<Option<Arc<dyn SafetyScanner>>>>;
 
 pub struct InsightService {
     config: Arc<parking_lot::RwLock<InsightConfig>>,
     tx: mpsc::Sender<TraceTurn>,
     store: Arc<InsightStore>,
+    safety: SafetySlot,
 }
 
 impl InsightService {
@@ -35,14 +40,20 @@ impl InsightService {
             }
         }
 
-        spawn_worker(rx, Arc::clone(&store));
+        let safety: SafetySlot = Arc::new(Mutex::new(None));
+        spawn_worker(rx, Arc::clone(&store), Arc::clone(&safety));
         spawn_daily_scheduler(Arc::clone(&store), Arc::clone(&config_slot));
 
         Ok(Arc::new(Self {
             config: config_slot,
             tx,
             store,
+            safety,
         }))
+    }
+
+    pub fn set_safety_scanner(&self, scanner: Option<Arc<dyn SafetyScanner>>) {
+        *self.safety.lock() = scanner;
     }
 
     pub fn apply_config(&self, config: &InsightConfig) {
@@ -94,7 +105,7 @@ impl InsightService {
 
 /// Own Tokio runtime on a background thread so InsightService works from Tauri/GUI
 /// startup (no reactor on the main thread yet).
-fn spawn_worker(mut rx: mpsc::Receiver<TraceTurn>, store: Arc<InsightStore>) {
+fn spawn_worker(mut rx: mpsc::Receiver<TraceTurn>, store: Arc<InsightStore>, safety: SafetySlot) {
     thread::Builder::new()
         .name("agentmirror-worker".into())
         .spawn(move || {
@@ -106,7 +117,8 @@ fn spawn_worker(mut rx: mpsc::Receiver<TraceTurn>, store: Arc<InsightStore>) {
                 while let Some(turn) = rx.recv().await {
                     let audit_id = turn.audit_id.clone();
                     let store = Arc::clone(&store);
-                    match Pipeline::new(store).process_turn(turn) {
+                    let scanner = safety.lock().clone();
+                    match Pipeline::new(store, scanner).process_turn(turn) {
                         Ok(()) => debug!(audit_id = %audit_id, "AgentMirror processed turn"),
                         Err(err) => error!(?err, audit_id = %audit_id, "AgentMirror process error"),
                     }

@@ -164,18 +164,19 @@ Integration: `SharedApp.insight`, proxy hook after successful turn, `/api/insigh
 | Agent separation (header + fingerprint) | ✅ | |
 | Run boundary (multi-turn) | ✅ | Fixed: no longer splits every turn |
 | Rule parser / extractor / linear graph | ✅ | |
-| Five critics (rule-based) | ✅ | Safety uses string heuristics, not ops engine yet |
-| Admin UI: agents, runs, graph modal | ✅ | |
+| Five critics (rule-based) | ✅ | Safety uses ops/path rules via `SafetyScanner` |
+| Admin UI: agents, runs, graph modal | ✅ | Modal tabs: graph / timeline / events |
 | Daily report backend | ✅ | SQL aggregation |
 | Daily report viewer UI | ✅ | Date picker + panel |
 | `retention_days` purge | ✅ | Startup + daily scheduler |
 | Auto-enable `save_traffic_bodies` | ✅ | On config load |
 | `X-SMR-Agent-Id` documented | ✅ | This doc + proxy support |
+| Decision graph branching | ✅ | Actions branch from Decision nodes |
+| Safety critic ↔ ops rules | ✅ | `OpsSafetyScanner` + `insight_policy_match` |
+| Modal timeline / raw transcript tabs | ✅ | Timeline + events table |
 | LLM Goal Discovery + critics | 🔲 V1 | |
 | Dialectical / counterfactual | 🔲 V1 | |
-| Decision Graph (branching) | 🔲 V1 | Current graph is linear |
-| Modal timeline / raw transcript tabs | 🔲 V1 | |
-| Safety critic ↔ ops rules | 🔲 V1 | |
+| Manual run merge/split | 🔲 V1 | |
 | Pattern mining / agent profile | 🔲 V2 | |
 | Markdown daily file export | 🔲 V2 | |
 
@@ -192,10 +193,8 @@ Core ingest → separate → extract → graph → critics → Admin UI → dail
 ### V1
 
 - LLM Goal Discovery + five critics + counterfactual
-- Decision Graph with alternative edges
 - Manual run merge/split
-- Safety critic wired to ops rules
-- Graph modal: timeline + raw transcript tabs
+- Raw traffic body viewer in graph modal (link audit → traffic snapshot)
 
 ### V2
 

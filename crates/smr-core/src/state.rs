@@ -104,14 +104,22 @@ impl SharedApp {
         storage: Arc<AuditStore>,
         insight: Arc<InsightService>,
     ) -> Result<Arc<Self>> {
-        Ok(Arc::new(Self {
+        let app = Arc::new(Self {
             config_path,
             events,
             storage,
             traffic: TrafficLog::from_logging_config(&config.logging, paths::traffic_dir()),
             insight,
             inner: RwLock::new(AppEngines::from_config(config)?),
-        }))
+        });
+        app.sync_insight_safety();
+        Ok(app)
+    }
+
+    fn sync_insight_safety(&self) {
+        let ops = self.inner.read().ops.clone();
+        self.insight
+            .set_safety_scanner(Some(Arc::new(crate::insight_ops::OpsSafetyScanner(ops))));
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {
@@ -147,6 +155,7 @@ impl SharedApp {
         };
         engines.dlp.sync_runtime_config(&config);
         *self.inner.write() = engines;
+        self.sync_insight_safety();
         Ok(())
     }
 

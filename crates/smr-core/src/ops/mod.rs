@@ -104,6 +104,19 @@ impl OperationSecurity {
             .map(|(payload, _)| payload)
     }
 
+    /// Returns a short finding for AgentMirror when text matches any enabled policy.
+    pub fn insight_policy_match(&self, text: &str) -> Option<String> {
+        let matched = self.check_text(text)?;
+        Some(match matched {
+            SecurityMatch::Operation { rule_id, .. } => {
+                format!("Matched operation security rule: {rule_id}")
+            }
+            SecurityMatch::PathProtection { rule_id, .. } => {
+                format!("Matched path protection rule: {rule_id}")
+            }
+        })
+    }
+
     fn check_and_enforce(&self, text: &str) -> Option<(String, bool)> {
         let matched = self.check_text(text)?;
         let (enforce, rule_id, observe_kind) = match &matched {
