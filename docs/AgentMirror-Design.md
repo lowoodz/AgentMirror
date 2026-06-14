@@ -121,7 +121,9 @@ Nav order: **AgentMirror** first.
 | Run merge / split + goal edit | ✅ |
 | Daily report SQL + Markdown files | ✅ (`data/insight/daily/`) |
 | Raw traffic tab (audit → snapshot) | ✅ |
-| Pattern mining / agent profile | 🔲 V2 |
+| Pattern mining / agent profile | ✅ V2 |
+| DLP cross-highlight on runs | ✅ V2 |
+| Daily report print / PDF export | ✅ V2 (browser print) |
 
 ---
 
@@ -131,12 +133,12 @@ Nav order: **AgentMirror** first.
 
 Core MVP + ops safety + graph tabs + merge/split + LLM enrichment + daily Markdown.
 
-### V2
+### V2 — delivered
 
-- Success/failure pattern mining
-- Agent capability profile
-- DLP cross-highlight
-- PDF export
+- Success/failure action pattern mining (`GET /api/insight/agents/{id}/patterns`)
+- Agent capability profile from tools + run stats (`GET /api/insight/agents/{id}/profile`)
+- DLP / ops safety cross-highlight on run cards (audit join)
+- Daily report HTML print view (`GET /api/insight/daily/{date}/print`)
 
 ---
 

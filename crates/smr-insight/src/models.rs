@@ -210,6 +210,40 @@ pub struct DailyRunSummary {
     pub turn_count: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRunStats {
+    pub total_runs: u32,
+    pub completed: u32,
+    pub failed: u32,
+    pub running: u32,
+    pub stale: u32,
+    pub total_turns: u64,
+    pub avg_turns: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunActionSequence {
+    pub run_id: String,
+    pub status: RunStatus,
+    pub actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionPattern {
+    pub steps: Vec<String>,
+    pub success_count: u32,
+    pub failure_count: u32,
+    pub outcome_hint: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunRiskSummary {
+    pub dlp_replacements: u32,
+    pub safety_blocks: u32,
+    pub safety_observations: u32,
+    pub high_risk: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TraceTurn {
     pub audit_id: String,

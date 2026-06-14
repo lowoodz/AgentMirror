@@ -1,12 +1,17 @@
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{get, patch, post};
+use axum::http::{header, StatusCode};
+use axum::response::{Html, IntoResponse, Json, Response};
+use axum::routing::{get, post};
 use axum::Router;
 use chrono::NaiveDate;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::http_state::HttpState;
+use crate::insight_risk::{load_audits_for_ids, risk_for_run, risk_for_runs};
+use smr_insight::export::daily_reports_html;
+use smr_insight::pattern::mine_patterns;
+use smr_insight::profile::build_profile;
 
 #[derive(Deserialize)]
 struct RunsQuery {
@@ -44,6 +49,8 @@ pub fn router() -> Router<HttpState> {
     Router::new()
         .route("/api/insight/status", get(api_insight_status))
         .route("/api/insight/agents", get(api_insight_agents))
+        .route("/api/insight/agents/{agent_id}/profile", get(api_insight_agent_profile))
+        .route("/api/insight/agents/{agent_id}/patterns", get(api_insight_agent_patterns))
         .route("/api/insight/runs", get(api_insight_runs))
         .route("/api/insight/runs/{run_id}", get(api_insight_run).patch(api_insight_patch_run))
         .route("/api/insight/runs/{run_id}/graph", get(api_insight_graph))
@@ -52,6 +59,7 @@ pub fn router() -> Router<HttpState> {
         .route("/api/insight/runs/{run_id}/split", post(api_insight_split_run))
         .route("/api/insight/audit/{audit_id}/traffic", get(api_insight_audit_traffic))
         .route("/api/insight/daily/{date}", get(api_insight_daily))
+        .route("/api/insight/daily/{date}/print", get(api_insight_daily_print))
         .route("/api/insight/daily/generate", post(api_insight_generate_daily))
 }
 
@@ -71,6 +79,41 @@ async fn api_insight_agents(State(s): State<HttpState>) -> Json<serde_json::Valu
     Json(serde_json::json!({ "agents": agents }))
 }
 
+async fn api_insight_agent_profile(
+    State(s): State<HttpState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let store = s.app.insight.store();
+    let agent = store
+        .get_agent(&agent_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let stats = store
+        .agent_run_stats(&agent_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let profile = build_profile(&agent, stats);
+    Ok(Json(serde_json::json!({ "profile": profile })))
+}
+
+async fn api_insight_agent_patterns(
+    State(s): State<HttpState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let store = s.app.insight.store();
+    if store
+        .get_agent(&agent_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .is_none()
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let sequences = store
+        .list_action_sequences(&agent_id, 200)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let patterns = mine_patterns(&sequences);
+    Ok(Json(serde_json::json!({ "patterns": patterns, "sample_runs": sequences.len() })))
+}
+
 async fn api_insight_runs(
     State(s): State<HttpState>,
     Query(q): Query<RunsQuery>,
@@ -80,7 +123,18 @@ async fn api_insight_runs(
     let runs = store
         .list_runs(q.agent_id.as_deref(), limit)
         .unwrap_or_default();
-    Json(serde_json::json!({ "runs": runs }))
+    let run_ids: Vec<String> = runs.iter().map(|r| r.run_id.clone()).collect();
+    let audit_ids = store.audit_ids_for_runs(&run_ids).unwrap_or_default();
+    let audits = load_audits_for_ids(&s.app.storage, &audit_ids);
+    let risks = risk_for_runs(&store, &audits, &run_ids);
+    let enriched: Vec<Value> = runs
+        .into_iter()
+        .map(|run| {
+            let risk = risks.get(&run.run_id).cloned().unwrap_or_default();
+            serde_json::json!({ "run": run, "risk": risk })
+        })
+        .collect();
+    Json(serde_json::json!({ "runs": enriched }))
 }
 
 async fn api_insight_run(
@@ -91,7 +145,10 @@ async fn api_insight_run(
     let run = store.get_run(&run_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let run = run.ok_or(StatusCode::NOT_FOUND)?;
     let events = store.list_events(&run_id).unwrap_or_default();
-    Ok(Json(serde_json::json!({ "run": run, "events": events })))
+    let audit_ids = store.audit_ids_for_run(&run_id).unwrap_or_default();
+    let audits = load_audits_for_ids(&s.app.storage, &audit_ids);
+    let risk = risk_for_run(&store, &audits, &run_id);
+    Ok(Json(serde_json::json!({ "run": run, "events": events, "risk": risk })))
 }
 
 async fn api_insight_patch_run(
@@ -194,6 +251,24 @@ async fn api_insight_daily(
         .get_daily_report(&date, q.agent_id.as_deref())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({ "date": date, "reports": reports })))
+}
+
+async fn api_insight_daily_print(
+    State(s): State<HttpState>,
+    Path(date): Path<String>,
+    Query(q): Query<DailyQuery>,
+) -> Result<Response, StatusCode> {
+    let store = s.app.insight.store();
+    let reports = store
+        .get_daily_report(&date, q.agent_id.as_deref())
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let title = format!("AgentMirror Daily Report — {date}");
+    let html = daily_reports_html(&reports, &title);
+    Ok((
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        Html(html),
+    )
+        .into_response())
 }
 
 async fn api_insight_generate_daily(

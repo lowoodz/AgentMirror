@@ -6,7 +6,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection};
 
 use crate::models::{
-    AgentRecord, CognitiveEvent, DailyReport, EventKind, ReflectionReport, RunRecord, RunStatus,
+    AgentRecord, AgentRunStats, CognitiveEvent, DailyReport, EventKind, ReflectionReport,
+    RunActionSequence, RunRecord, RunStatus,
 };
 
 pub struct InsightStore {
@@ -547,6 +548,95 @@ impl InsightStore {
         stats.daily_reports = daily;
 
         Ok(stats)
+    }
+
+    pub fn agent_run_stats(&self, agent_id: &str) -> Result<AgentRunStats> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT status, turn_count FROM insight_runs WHERE agent_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![agent_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+        })?;
+        let mut stats = AgentRunStats {
+            total_runs: 0,
+            completed: 0,
+            failed: 0,
+            running: 0,
+            stale: 0,
+            total_turns: 0,
+            avg_turns: 0.0,
+        };
+        for row in rows.flatten() {
+            stats.total_runs += 1;
+            stats.total_turns += row.1;
+            match row.0.as_str() {
+                "completed" => stats.completed += 1,
+                "failed" => stats.failed += 1,
+                "stale" => stats.stale += 1,
+                _ => stats.running += 1,
+            }
+        }
+        if stats.total_runs > 0 {
+            stats.avg_turns = stats.total_turns as f32 / stats.total_runs as f32;
+        }
+        Ok(stats)
+    }
+
+    pub fn list_action_sequences(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunActionSequence>> {
+        let runs = self.list_runs(Some(agent_id), limit)?;
+        let mut out = Vec::new();
+        for run in runs {
+            if !matches!(run.status, RunStatus::Completed | RunStatus::Failed) {
+                continue;
+            }
+            let events = self.list_events(&run.run_id)?;
+            let actions: Vec<String> = events
+                .iter()
+                .filter(|e| e.kind == EventKind::Action)
+                .map(|e| e.summary.clone())
+                .collect();
+            if actions.is_empty() {
+                continue;
+            }
+            out.push(RunActionSequence {
+                run_id: run.run_id,
+                status: run.status,
+                actions,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn audit_ids_for_run(&self, run_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT audit_id FROM insight_events WHERE run_id = ?1 AND audit_id != ''",
+        )?;
+        let rows = stmt.query_map(params![run_id], |row| row.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn audit_ids_for_runs(&self, run_ids: &[String]) -> Result<Vec<String>> {
+        if run_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: String = run_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT DISTINCT audit_id FROM insight_events WHERE run_id IN ({placeholders}) AND audit_id != ''"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = run_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+        let rows = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 }
 

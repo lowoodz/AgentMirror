@@ -1,11 +1,14 @@
 pub mod critic;
+pub mod export;
 pub mod extract;
 pub mod graph;
 pub mod infer;
 pub mod llm;
 pub mod models;
 pub mod parser;
+pub mod pattern;
 pub mod pipeline;
+pub mod profile;
 pub mod report;
 pub mod safety;
 pub mod separator;

@@ -104,6 +104,43 @@ impl AuditStore {
         self.list_audits_filtered(limit, Some(session_id))
     }
 
+    pub fn get_audit(&self, id: &str) -> Result<Option<RequestAudit>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, session_id, protocol, fallback_group, fallback_chain, final_model, dlp_replacements, safety_blocks, safety_observations, success, message
+             FROM audits WHERE id = ?1 LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(map_audit_row(&row)?));
+        }
+        Ok(None)
+    }
+
+    pub fn get_audits_by_ids(&self, ids: &[String]) -> Result<std::collections::HashMap<String, RequestAudit>> {
+        let mut out = std::collections::HashMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        let conn = self.conn.lock().unwrap();
+        for id in ids {
+            if out.contains_key(id) {
+                continue;
+            }
+            let mut stmt = conn.prepare(
+                "SELECT id, timestamp, session_id, protocol, fallback_group, fallback_chain, final_model, dlp_replacements, safety_blocks, safety_observations, success, message
+                 FROM audits WHERE id = ?1 LIMIT 1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                if let Ok(audit) = map_audit_row(&row) {
+                    out.insert(audit.id.clone(), audit);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn list_audits_filtered(&self, limit: usize, session_id: Option<&str>) -> Result<Vec<RequestAudit>> {
         let conn = self.conn.lock().unwrap();
         if let Some(session_id) = session_id {
