@@ -140,6 +140,35 @@ Core MVP + ops safety + graph tabs + merge/split + LLM enrichment + daily Markdo
 - DLP / ops safety cross-highlight on run cards (audit join)
 - Daily report HTML print view (`GET /api/insight/daily/{date}/print`)
 
+### V3 — planned
+
+Backlog (also in local `TODO.txt`, gitignored). Not in the original Detailed-Plan; candidates from ACRP / Reflection Prompt.
+
+**P0 — V2 doc gaps**
+
+- [ ] Daily report email subscription
+- [ ] Server-side PDF export (V2: browser Print/HTML only)
+
+**P1 — Cognitive mining**
+
+- [ ] Workflow discovery (cross-run)
+- [ ] Control-flow mining (phases / branches)
+- [ ] Plan inference (sub-goal tree)
+- [ ] Decision mining + counterfactual DAG
+- [ ] Behavior graph (vs Reasoning Graph)
+- [ ] Full process mining (phase templates, bottlenecks, deviation — beyond V2 sequence similarity)
+
+**P2 — Org & alerts**
+
+- [ ] Cross-agent comparison / org daily report
+- [ ] Alerts: high-risk runs, repeated failure patterns (webhook / email)
+- [ ] Agent Digital Twin: baseline trajectories, success-rate drift
+
+**P3 — Quality & scale**
+
+- [ ] Completeness phase templates (Gathering → Implementing → Verifying)
+- [ ] Long-session tiered summarization / sampling (billion-token sessions)
+
 ---
 
 ## 10. Performance & token budget
