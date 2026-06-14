@@ -1,5 +1,5 @@
-use crate::models::{CriticsScore, EventKind, Issue, RunOutcome, Suggestion};
-use crate::models::CognitiveEvent;
+use crate::extract::is_research_goal;
+use crate::models::{CognitiveEvent, CriticsScore, EventKind, Issue, RunOutcome, Suggestion};
 
 pub struct CriticInput<'a> {
     pub events: &'a [CognitiveEvent],
@@ -8,17 +8,61 @@ pub struct CriticInput<'a> {
     pub safety_findings: &'a [String],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskKind {
+    Research,
+    Coding,
+    Chat,
+}
+
+fn infer_task_kind(goal: &str, events: &[CognitiveEvent]) -> TaskKind {
+    if is_research_goal(goal) {
+        return TaskKind::Research;
+    }
+    let has_research_actions = events.iter().any(|e| {
+        e.kind == EventKind::Action
+            && (e.summary.starts_with("WebSearch")
+                || e.summary.contains("search")
+                || e.summary.contains("调研"))
+    });
+    if has_research_actions {
+        return TaskKind::Research;
+    }
+    let has_coding_actions = events.iter().any(|e| {
+        e.kind == EventKind::Action
+            && (e.summary.contains("Edit")
+                || e.summary.contains("Read(")
+                || e.summary.contains("Bash")
+                || e.summary.contains("patch"))
+    });
+    if has_coding_actions {
+        TaskKind::Coding
+    } else if events.iter().any(|e| e.kind == EventKind::Action) {
+        TaskKind::Research
+    } else {
+        TaskKind::Chat
+    }
+}
+
 pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Suggestion>, RunOutcome) {
     let mut score = CriticsScore::default();
     let mut issues = Vec::new();
     let mut suggestions = Vec::new();
 
-    let has_goal = input.events.iter().any(|e| e.kind == EventKind::Goal);
+    let task_kind = infer_task_kind(input.goal, input.events);
+    let has_goal = input
+        .events
+        .iter()
+        .any(|e| matches!(e.kind, EventKind::Goal | EventKind::SubGoal));
     let actions: Vec<_> = input
         .events
         .iter()
         .filter(|e| e.kind == EventKind::Action)
         .collect();
+    let has_observation = input
+        .events
+        .iter()
+        .any(|e| e.kind == EventKind::Observation);
     let has_verify = input.events.iter().any(|e| {
         e.kind == EventKind::StateTransition
             && e.summary.to_ascii_lowercase().contains("verification")
@@ -36,8 +80,39 @@ pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Sugges
         });
     }
 
-    score.completeness = if has_verify { 85 } else if actions.is_empty() { 40 } else { 65 };
-    if !has_verify && actions.len() >= 2 {
+    score.completeness = match task_kind {
+        TaskKind::Research => {
+            if has_result {
+                90
+            } else if has_observation && !actions.is_empty() {
+                75
+            } else if actions.is_empty() {
+                40
+            } else {
+                60
+            }
+        }
+        TaskKind::Coding => {
+            if has_verify {
+                85
+            } else if actions.is_empty() {
+                40
+            } else {
+                65
+            }
+        }
+        TaskKind::Chat => {
+            if has_result {
+                85
+            } else if input.turn_count <= 2 {
+                70
+            } else {
+                60
+            }
+        }
+    };
+
+    if task_kind == TaskKind::Coding && !has_verify && actions.len() >= 2 {
         issues.push(Issue {
             message: "No verification step detected after implementation actions".to_string(),
             severity: "medium".to_string(),
@@ -46,6 +121,14 @@ pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Sugges
             message: "Add a test or validation step before marking the task complete".to_string(),
             rationale: "Bugfix and coding tasks benefit from explicit verification".to_string(),
             priority: "high".to_string(),
+        });
+    }
+
+    if task_kind == TaskKind::Research && !has_result && input.turn_count >= 3 {
+        suggestions.push(Suggestion {
+            message: "Summarize findings with an explicit investment or research conclusion".to_string(),
+            rationale: "Research runs are easier to review when they end with a clear recommendation".to_string(),
+            priority: "medium".to_string(),
         });
     }
 
@@ -107,4 +190,42 @@ pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Sugges
     };
 
     (score, issues, suggestions, outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn event(kind: EventKind, summary: &str) -> CognitiveEvent {
+        CognitiveEvent {
+            id: Uuid::new_v4().to_string(),
+            run_id: "r1".into(),
+            seq: 0,
+            kind,
+            timestamp: Utc::now(),
+            summary: summary.into(),
+            audit_id: "a1".into(),
+            confidence: 1.0,
+            metadata: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn research_run_skips_verification_penalty() {
+        let events = vec![
+            event(EventKind::Goal, "调研珠海金智维是否值得投资"),
+            event(EventKind::Action, "WebSearch(金智维)"),
+            event(EventKind::Observation, "公司成立于2010年"),
+        ];
+        let (score, issues, _, _) = evaluate(CriticInput {
+            events: &events,
+            turn_count: 4,
+            goal: "调研珠海金智维是否值得投资",
+            safety_findings: &[],
+        });
+        assert!(score.completeness >= 70);
+        assert!(!issues.iter().any(|i| i.message.contains("verification")));
+    }
 }

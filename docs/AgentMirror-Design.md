@@ -93,6 +93,7 @@ GET  /api/insight/runs/{run_id}/report
 GET  /api/insight/audit/{audit_id}/traffic
 GET  /api/insight/daily/{date}?agent_id=
 POST /api/insight/daily/generate
+POST /api/insight/reset              # wipe insight_* + graphs; optional traffic replay
 ```
 
 ---
@@ -124,6 +125,20 @@ Nav order: **AgentMirror** first.
 | Pattern mining / agent profile | ✅ V2 |
 | DLP cross-highlight on runs | ✅ V2 |
 | Daily report print / PDF export | ✅ V2 (browser print) |
+| OpenClaw research sessions (message delta, exec→search, CN patterns) | ✅ V2.1 |
+
+**OpenClaw / 调研类会话（V2.1）**
+
+- 每轮请求只处理 `messages[]` 增量（`messages_seen`），避免 Goal/Action/Observation 重复入库
+- `exec`/shell 在调研语境下归一化为 `WebSearch`；Agent 类型可识别为 `research`
+- 中文 Decision/Result 模式（结论、投资建议、是否值得等）；调研 Run 不因 Partial 提前 Completed
+- 推理图：Goal/SubGoal 作为根节点，不再从链尾错误挂接
+
+**Reset / replay**
+
+- `POST /api/insight/reset` — body `{"replay_from_traffic":false}` clears AgentMirror only
+- `{"replay_from_traffic":true,"limit":5000}` also rebuilds from saved traffic snapshots (requires `save_traffic_bodies: true`)
+- CLI: `./scripts/clear-insight.sh` (offline or live API); `--replay` when SMR is running
 
 ---
 

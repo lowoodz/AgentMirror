@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use crate::critic::{evaluate, CriticInput};
-use crate::extract::{drafts_to_events, extract_from_turn};
+use crate::extract::{drafts_to_events, extract_from_turn, ExtractContext};
 use crate::graph::build_graph;
 use crate::infer::infer_goal_llm;
 use crate::llm::LlmClient;
-use crate::models::{InsightConfig, RunRecord, RunStatus, TraceTurn};
-use crate::parser::{parse_request, parse_response};
+use crate::models::{EventKind, InsightConfig, RunRecord, RunStatus, TraceTurn};
+use crate::parser::{apply_messages_delta, parse_request, parse_response};
 use crate::report::{build_reflection_report, outcome_from_status};
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::separator::{infer_goal_from_request, new_run_id, resolve_agent, should_start_new_run};
@@ -46,26 +46,26 @@ impl Pipeline {
             return Ok(());
         }
 
-        let req = parse_request(&turn.request_body);
+        let full_req = parse_request(&turn.request_body);
         let resp = parse_response(&turn.response_body);
 
         let existing_agent = {
-            let fp_agent = resolve_agent(&turn, &req, None);
+            let fp_agent = resolve_agent(&turn, &full_req, None);
             self.store.get_agent(&fp_agent.agent_id)?
         };
 
-        let ctx = resolve_agent(&turn, &req, existing_agent.as_ref());
+        let ctx = resolve_agent(&turn, &full_req, existing_agent.as_ref());
         self.store.upsert_agent(&ctx.agent_record)?;
 
         let active_run = self
             .store
             .find_active_run(&ctx.agent_id, &turn.session_id)?;
-        let is_new_run = should_start_new_run(&req, active_run.as_ref(), turn.timestamp);
+        let is_new_run = should_start_new_run(&full_req, active_run.as_ref(), turn.timestamp);
 
         let mut run = if is_new_run { None } else { active_run };
 
         if run.is_none() {
-            let goal = infer_goal_from_request(&req);
+            let goal = infer_goal_from_request(&full_req);
             let run_id = new_run_id(&turn.session_id, &ctx.agent_id);
             let record = RunRecord {
                 run_id: run_id.clone(),
@@ -76,6 +76,7 @@ impl Pipeline {
                 status: RunStatus::Running,
                 goal,
                 turn_count: 0,
+                messages_seen: 0,
                 graph_path: None,
             };
             self.store.insert_run(&record)?;
@@ -87,14 +88,28 @@ impl Pipeline {
         run.ended_at = Some(turn.timestamp);
 
         if run.goal.is_empty() || run.goal == "Unknown task" {
-            let g = infer_goal_from_request(&req);
+            let g = infer_goal_from_request(&full_req);
             if g != "Unknown task" {
                 run.goal = g;
             }
         }
 
+        let req = apply_messages_delta(&full_req, run.messages_seen);
+        run.messages_seen = full_req.new_messages.len() as u32;
+
         let start_seq = self.store.next_event_seq(&run.run_id)?;
-        let extracted = extract_from_turn(&turn, &req, &resp, &run.run_id, start_seq);
+        let goal_already_in_run = self.store.list_events(&run.run_id)?.iter().any(|e| {
+            matches!(e.kind, EventKind::Goal | EventKind::SubGoal)
+        });
+        let mut extract_ctx = ExtractContext::from_goal(&run.goal, goal_already_in_run);
+        let extracted = extract_from_turn(
+            &turn,
+            &req,
+            &resp,
+            &run.run_id,
+            start_seq,
+            &mut extract_ctx,
+        );
         let events = drafts_to_events(
             extracted.events,
             &run.run_id,

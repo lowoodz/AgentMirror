@@ -121,6 +121,19 @@ impl InsightService {
         }
         Ok(count)
     }
+
+    pub fn reset(&self) -> anyhow::Result<crate::store::ResetStats> {
+        self.store.reset_all()
+    }
+
+    /// Process one turn on the calling thread (for traffic replay; bypasses the async queue).
+    pub fn process_turn_sync(&self, turn: TraceTurn) -> anyhow::Result<()> {
+        let store = Arc::clone(&self.store);
+        let scanner = self.safety.lock().clone();
+        let llm_client = self.llm.lock().clone();
+        let cfg = self.config.read().clone();
+        Pipeline::new(store, scanner, llm_client, cfg).process_turn(turn)
+    }
 }
 
 /// Own Tokio runtime on a background thread so InsightService works from Tauri/GUI

@@ -237,6 +237,17 @@ impl SharedApp {
         );
         Ok((app, path))
     }
+
+    pub fn replay_from_traffic(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<crate::insight_replay::ReplayStats> {
+        crate::insight_replay::replay_from_traffic(self, limit)
+    }
+
+    pub fn reset_insight(&self) -> anyhow::Result<smr_insight::ResetStats> {
+        crate::insight_replay::reset_insight(self)
+    }
 }
 
 pub struct EngineSnapshot {

@@ -43,6 +43,7 @@ fn seed_run_with_actions(
             status,
             goal: "Fix login bug".to_string(),
             turn_count: actions.len() as u32,
+            messages_seen: 0,
             graph_path: None,
         })
         .unwrap();

@@ -79,6 +79,8 @@ pub struct RunRecord {
     pub status: RunStatus,
     pub goal: String,
     pub turn_count: u32,
+    /// Messages already processed from OpenAI-style `messages[]` history.
+    pub messages_seen: u32,
     pub graph_path: Option<String>,
 }
 

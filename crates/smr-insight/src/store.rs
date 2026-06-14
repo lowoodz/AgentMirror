@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 
 use crate::models::{
     AgentRecord, AgentRunStats, CognitiveEvent, DailyReport, EventKind, ReflectionReport,
@@ -40,6 +41,7 @@ impl InsightStore {
                 status TEXT NOT NULL,
                 goal TEXT NOT NULL,
                 turn_count INTEGER NOT NULL DEFAULT 0,
+                messages_seen INTEGER NOT NULL DEFAULT 0,
                 graph_path TEXT,
                 FOREIGN KEY (agent_id) REFERENCES insight_agents(agent_id)
             );
@@ -75,6 +77,10 @@ impl InsightStore {
                 processed_at TEXT NOT NULL
             );",
         )?;
+        let _ = conn.execute(
+            "ALTER TABLE insight_runs ADD COLUMN messages_seen INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         Ok(Self {
             conn: Mutex::new(conn),
             graphs_dir,
@@ -156,8 +162,8 @@ impl InsightStore {
     pub fn insert_run(&self, run: &RunRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO insight_runs (run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO insight_runs (run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 run.run_id,
                 run.agent_id,
@@ -167,6 +173,7 @@ impl InsightStore {
                 run.status.as_str(),
                 run.goal,
                 run.turn_count,
+                run.messages_seen,
                 run.graph_path,
             ],
         )?;
@@ -176,7 +183,7 @@ impl InsightStore {
     pub fn update_run(&self, run: &RunRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE insight_runs SET ended_at = ?2, status = ?3, goal = ?4, turn_count = ?5, graph_path = ?6
+            "UPDATE insight_runs SET ended_at = ?2, status = ?3, goal = ?4, turn_count = ?5, messages_seen = ?6, graph_path = ?7
              WHERE run_id = ?1",
             params![
                 run.run_id,
@@ -184,6 +191,7 @@ impl InsightStore {
                 run.status.as_str(),
                 run.goal,
                 run.turn_count,
+                run.messages_seen,
                 run.graph_path,
             ],
         )?;
@@ -193,7 +201,7 @@ impl InsightStore {
     pub fn get_run(&self, run_id: &str) -> Result<Option<RunRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
              FROM insight_runs WHERE run_id = ?1",
         )?;
         let mut rows = stmt.query(params![run_id])?;
@@ -207,14 +215,14 @@ impl InsightStore {
         let conn = self.conn.lock().unwrap();
         if let Some(agent_id) = agent_id {
             let mut stmt = conn.prepare(
-                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
                  FROM insight_runs WHERE agent_id = ?1 ORDER BY started_at DESC LIMIT ?2",
             )?;
             let rows = stmt.query_map(params![agent_id, limit as i64], map_run)?;
             Ok(rows.filter_map(|r| r.ok()).collect())
         } else {
             let mut stmt = conn.prepare(
-                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
                  FROM insight_runs ORDER BY started_at DESC LIMIT ?1",
             )?;
             let rows = stmt.query_map(params![limit as i64], map_run)?;
@@ -225,7 +233,7 @@ impl InsightStore {
     pub fn find_active_run(&self, agent_id: &str, session_id: &str) -> Result<Option<RunRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
              FROM insight_runs
              WHERE agent_id = ?1 AND session_id = ?2 AND status = 'running'
              ORDER BY started_at DESC LIMIT 1",
@@ -343,7 +351,7 @@ impl InsightStore {
         let end = date.and_hms_opt(23, 59, 59).unwrap().and_utc();
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, graph_path
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
              FROM insight_runs
              WHERE agent_id = ?1 AND started_at >= ?2 AND started_at <= ?3
              ORDER BY started_at ASC",
@@ -439,6 +447,7 @@ impl InsightStore {
             status: run.status,
             goal: split_goal,
             turn_count: 0,
+            messages_seen: 0,
             graph_path: None,
         };
         self.insert_run(&new_run)?;
@@ -550,6 +559,48 @@ impl InsightStore {
         Ok(stats)
     }
 
+    /// Wipe all AgentMirror tables and on-disk graph/daily files.
+    /// Does not touch `audits`, `events`, or traffic snapshot files.
+    pub fn reset_all(&self) -> Result<ResetStats> {
+        let mut stats = ResetStats::default();
+
+        if self.graphs_dir.exists() {
+            for entry in std::fs::read_dir(&self.graphs_dir)? {
+                let entry = entry?;
+                if entry.path().extension().is_some_and(|e| e == "json") {
+                    if entry.file_type()?.is_file() {
+                        let _ = std::fs::remove_file(entry.path());
+                        stats.graph_files += 1;
+                    }
+                }
+            }
+        }
+
+        let daily_dir = self.daily_reports_dir();
+        if daily_dir.exists() {
+            for entry in std::fs::read_dir(&daily_dir)? {
+                let entry = entry?;
+                if entry.path().extension().is_some_and(|e| e == "md") {
+                    if entry.file_type()?.is_file() {
+                        let _ = std::fs::remove_file(entry.path());
+                        stats.daily_files += 1;
+                    }
+                }
+            }
+        }
+
+        let conn = self.conn.lock().unwrap();
+        stats.events = conn.execute("DELETE FROM insight_events", [])?;
+        stats.reports = conn.execute("DELETE FROM insight_reports", [])?;
+        stats.daily_reports = conn.execute("DELETE FROM insight_daily_reports", [])?;
+        stats.processed_audits =
+            conn.execute("DELETE FROM insight_processed_audits", [])?;
+        stats.runs = conn.execute("DELETE FROM insight_runs", [])?;
+        stats.agents = conn.execute("DELETE FROM insight_agents", [])?;
+
+        Ok(stats)
+    }
+
     pub fn agent_run_stats(&self, agent_id: &str) -> Result<AgentRunStats> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -640,12 +691,24 @@ impl InsightStore {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PurgeStats {
     pub runs: usize,
     pub events: usize,
     pub reports: usize,
     pub daily_reports: usize,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ResetStats {
+    pub agents: usize,
+    pub runs: usize,
+    pub events: usize,
+    pub reports: usize,
+    pub daily_reports: usize,
+    pub processed_audits: usize,
+    pub graph_files: usize,
+    pub daily_files: usize,
 }
 
 fn parse_ts(s: &str) -> DateTime<Utc> {
@@ -684,7 +747,8 @@ fn map_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         status,
         goal: row.get(6)?,
         turn_count: row.get::<_, i64>(7)? as u32,
-        graph_path: row.get(8)?,
+        messages_seen: row.get::<_, i64>(8)? as u32,
+        graph_path: row.get(9)?,
     })
 }
 

@@ -140,6 +140,20 @@ impl TrafficLog {
             .collect()
     }
 
+    /// Load request/response bodies saved for an audit (`request_out` + `response_out`).
+    pub fn bodies_for_audit(&self, audit_id: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+        let records = self.list_by_audit(audit_id);
+        if records.is_empty() {
+            return None;
+        }
+        let request = read_body_for_phases(&records, &["request_out", "request_in"]);
+        let response = read_body_for_phases(&records, &["response_out"]);
+        if request.is_none() && response.is_none() {
+            return None;
+        }
+        Some((request.unwrap_or_default(), response.unwrap_or_default()))
+    }
+
     pub fn read_body(&self, id: &str) -> Option<(TrafficRecord, Vec<u8>)> {
         if !is_uuid(id) {
             return None;
@@ -468,6 +482,19 @@ fn sanitize_phase(phase: &str) -> String {
 
 fn is_uuid(s: &str) -> bool {
     uuid::Uuid::parse_str(s).is_ok()
+}
+
+fn read_body_for_phases(records: &[TrafficRecord], phases: &[&str]) -> Option<Vec<u8>> {
+    for phase in phases {
+        if let Some(record) = records.iter().find(|r| r.phase == *phase) {
+            if let Ok(data) = std::fs::read(&record.file_path) {
+                if !data.is_empty() {
+                    return Some(data);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

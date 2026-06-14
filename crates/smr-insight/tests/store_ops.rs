@@ -46,3 +46,42 @@ async fn merge_and_split_runs() {
     assert_ne!(new_id, target);
     assert!(store.get_run(&new_id).unwrap().is_some());
 }
+
+#[test]
+fn reset_clears_insight_but_can_reingest() {
+    let dir = tempfile::tempdir().unwrap();
+    let graphs = dir.path().join("graphs");
+    let svc = InsightService::open(dir.path(), graphs, Default::default()).unwrap();
+    let store = svc.store();
+
+    let body = br#"{"messages":[{"role":"user","content":"task A"}],"tools":[]}"#;
+    let resp = br#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
+
+    svc.submit_turn(TraceTurn {
+        audit_id: "audit-reset-1".into(),
+        session_id: "sess-reset".into(),
+        agent_header: None,
+        timestamp: Utc::now(),
+        request_body: body.to_vec(),
+        response_body: resp.to_vec(),
+    });
+    std::thread::sleep(std::time::Duration::from_millis(400));
+
+    assert!(!store.list_agents(10).unwrap().is_empty());
+    let stats = store.reset_all().unwrap();
+    assert!(stats.runs >= 1);
+    assert!(stats.events >= 1);
+    assert_eq!(store.list_agents(10).unwrap().len(), 0);
+    assert_eq!(store.list_runs(None, 10).unwrap().len(), 0);
+
+    svc.process_turn_sync(TraceTurn {
+        audit_id: "audit-reset-2".into(),
+        session_id: "sess-reset".into(),
+        agent_header: None,
+        timestamp: Utc::now(),
+        request_body: body.to_vec(),
+        response_body: resp.to_vec(),
+    })
+    .unwrap();
+    assert_eq!(store.list_runs(None, 10).unwrap().len(), 1);
+}

@@ -24,7 +24,7 @@ pub fn resolve_agent(
         format!("fp-{}", short_hash(fp.as_bytes()))
     };
 
-    let agent_type = infer_agent_type(&req.system_excerpt, &req.tools);
+    let agent_type = infer_agent_type(&req.system_excerpt, &req.tools, infer_goal_from_request(req));
     let display_name = if let Some(existing) = existing_agent {
         existing.display_name.clone()
     } else {
@@ -60,12 +60,21 @@ fn short_hash(data: &[u8]) -> String {
     format!("{:016x}", xxh64(data, 0))
 }
 
-fn infer_agent_type(system: &str, tools: &[String]) -> String {
+fn infer_agent_type(system: &str, tools: &[String], goal: String) -> String {
     let lower = system.to_ascii_lowercase();
     let tool_str = tools.join(" ").to_ascii_lowercase();
+    let goal_lower = goal.to_ascii_lowercase();
+    if crate::extract::is_research_goal(&goal) {
+        return "research".to_string();
+    }
     if lower.contains("claude code") || tool_str.contains("edit") && tool_str.contains("bash") {
         "coding".to_string()
     } else if tool_str.contains("browser") || tool_str.contains("search") || tool_str.contains("web") {
+        "research".to_string()
+    } else if tools.iter().any(|t| {
+        let n = t.to_ascii_lowercase();
+        n == "exec" || n == "bash" || n == "shell"
+    }) && (goal.contains("调研") || goal.contains("研究") || goal_lower.contains("research")) {
         "research".to_string()
     } else if tools.is_empty() {
         "chat".to_string()
@@ -168,11 +177,36 @@ fn keyword_jaccard(a: &str, b: &str) -> f32 {
 }
 
 fn keyword_set(text: &str) -> std::collections::HashSet<String> {
-    text.to_ascii_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() >= 3)
-        .map(str::to_string)
+    let mut set = std::collections::HashSet::new();
+    let lower = text.to_ascii_lowercase();
+    for word in lower.split(|c: char| !c.is_alphanumeric()) {
+        if word.len() >= 3 {
+            set.insert(word.to_string());
+        }
+    }
+    for token in chinese_tokens(text) {
+        set.insert(token);
+    }
+    set
+}
+
+fn chinese_tokens(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().filter(|c| is_cjk(*c)).collect();
+    if chars.len() < 2 {
+        return Vec::new();
+    }
+    chars
+        .windows(2)
+        .map(|w| w.iter().collect::<String>())
         .collect()
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '\u{F900}'..='\u{FAFF}'
+    )
 }
 
 pub fn new_run_id(session_id: &str, agent_id: &str) -> String {
@@ -241,6 +275,43 @@ mod tests {
             status: RunStatus::Running,
             goal: "fix bug".into(),
             turn_count: 1,
+            messages_seen: 3,
+            graph_path: None,
+        };
+        assert!(!should_start_new_run(&req, Some(&run), Utc::now()));
+    }
+
+    #[test]
+    fn infers_research_agent_for_exec_tools_and_goal() {
+        let body = r#"{"messages":[{"role":"user","content":"帮我调研珠海金智维，看看是否值得投资"}],"tools":[{"type":"function","function":{"name":"exec"}}]}"#.as_bytes();
+        let req = parse_request(body);
+        let turn = TraceTurn {
+            audit_id: "a1".into(),
+            session_id: "s1".into(),
+            agent_header: None,
+            timestamp: Utc::now(),
+            request_body: body.to_vec(),
+            response_body: vec![],
+        };
+        let ctx = resolve_agent(&turn, &req, None);
+        assert_eq!(ctx.agent_record.agent_type, "research");
+    }
+
+    #[test]
+    fn chinese_topic_shift_stays_in_run_when_related() {
+        let req = parse_request(
+            r#"{"messages":[{"role":"user","content":"帮我调研珠海金智维融资情况"}]}"#.as_bytes(),
+        );
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Running,
+            goal: "帮我调研珠海金智维，看看是否值得投资".into(),
+            turn_count: 2,
+            messages_seen: 1,
             graph_path: None,
         };
         assert!(!should_start_new_run(&req, Some(&run), Utc::now()));
@@ -258,6 +329,7 @@ mod tests {
             status: RunStatus::Running,
             goal: "fix bug".into(),
             turn_count: 1,
+            messages_seen: 1,
             graph_path: None,
         };
         assert!(should_start_new_run(&req, Some(&run), Utc::now()));
@@ -275,6 +347,7 @@ mod tests {
             status: RunStatus::Running,
             goal: "fix bug".into(),
             turn_count: 2,
+            messages_seen: 2,
             graph_path: None,
         };
         assert!(should_start_new_run(&req, Some(&run), Utc::now()));

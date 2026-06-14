@@ -18,4 +18,5 @@ pub mod worker;
 pub use models::{InsightConfig, TraceTurn};
 pub use llm::LlmClient;
 pub use safety::SafetyScanner;
+pub use store::{ResetStats, PurgeStats};
 pub use worker::InsightService;

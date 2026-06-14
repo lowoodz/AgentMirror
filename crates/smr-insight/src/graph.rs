@@ -4,6 +4,7 @@ pub fn build_graph(run_id: &str, events: &[CognitiveEvent]) -> ReasoningGraph {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut chain_tip: Option<String> = None;
+    let mut root_tip: Option<String> = None;
     let mut last_decision: Option<String> = None;
     let mut last_action: Option<String> = None;
 
@@ -17,8 +18,23 @@ pub fn build_graph(run_id: &str, events: &[CognitiveEvent]) -> ReasoningGraph {
         });
 
         match event.kind {
+            EventKind::Goal | EventKind::SubGoal => {
+                if let Some(from) = root_tip.clone() {
+                    if event.kind == EventKind::SubGoal {
+                        push_edge(&mut edges, from, id.clone(), edge_label(event.kind));
+                    }
+                }
+                root_tip = Some(id.clone());
+                chain_tip = Some(id.clone());
+                last_decision = None;
+                last_action = None;
+            }
             EventKind::Decision => {
-                if let Some(from) = chain_tip.clone().or(last_action.clone()) {
+                let from = last_action
+                    .clone()
+                    .or(last_decision.clone())
+                    .or(chain_tip.clone());
+                if let Some(from) = from {
                     push_edge(&mut edges, from, id.clone(), "decides");
                 }
                 last_decision = Some(id.clone());
@@ -48,8 +64,12 @@ pub fn build_graph(run_id: &str, events: &[CognitiveEvent]) -> ReasoningGraph {
                 chain_tip = Some(id.clone());
                 last_decision = None;
             }
-            EventKind::Goal | EventKind::SubGoal | EventKind::Result | EventKind::Reflection => {
-                if let Some(from) = chain_tip.clone().or(last_action.clone()) {
+            EventKind::Result | EventKind::Reflection => {
+                let from = chain_tip
+                    .clone()
+                    .or(last_action.clone())
+                    .or(last_decision.clone());
+                if let Some(from) = from {
                     push_edge(&mut edges, from, id.clone(), edge_label(event.kind));
                 }
                 chain_tip = Some(id.clone());
@@ -143,6 +163,7 @@ mod tests {
         let g = build_graph(run_id, &events);
         assert_eq!(g.nodes.len(), 2);
         assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges[0].from, "n0");
     }
 
     #[test]
@@ -157,5 +178,17 @@ mod tests {
         assert_eq!(g.edges.len(), 3);
         assert!(g.edges.iter().any(|e| e.from == "n1" && e.to == "n2"));
         assert!(g.edges.iter().any(|e| e.from == "n1" && e.to == "n3"));
+    }
+
+    #[test]
+    fn goal_is_root_without_incoming_edge() {
+        let events = vec![
+            event(0, EventKind::Goal, "调研投资标的"),
+            event(1, EventKind::Action, "WebSearch"),
+            event(2, EventKind::Observation, "found data"),
+        ];
+        let g = build_graph("r1", &events);
+        assert!(!g.edges.iter().any(|e| e.to == "n0"));
+        assert!(g.edges.iter().any(|e| e.from == "n0" && e.to == "n1"));
     }
 }

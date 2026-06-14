@@ -100,6 +100,16 @@ impl AuditStore {
         self.list_audits_filtered(limit, None)
     }
 
+    pub fn list_audits_chronological(&self, limit: usize) -> Result<Vec<RequestAudit>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, session_id, protocol, fallback_group, fallback_chain, final_model, dlp_replacements, safety_blocks, safety_observations, success, message
+             FROM audits ORDER BY timestamp ASC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], map_audit_row)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     pub fn list_audits_for_session(&self, session_id: &str, limit: usize) -> Result<Vec<RequestAudit>> {
         self.list_audits_filtered(limit, Some(session_id))
     }

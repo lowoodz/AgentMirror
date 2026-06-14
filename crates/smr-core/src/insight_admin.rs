@@ -61,6 +61,36 @@ pub fn router() -> Router<HttpState> {
         .route("/api/insight/daily/{date}", get(api_insight_daily))
         .route("/api/insight/daily/{date}/print", get(api_insight_daily_print))
         .route("/api/insight/daily/generate", post(api_insight_generate_daily))
+        .route("/api/insight/reset", post(api_insight_reset))
+}
+
+#[derive(Deserialize)]
+struct ResetInsightRequest {
+    #[serde(default)]
+    replay_from_traffic: bool,
+    limit: Option<usize>,
+}
+
+async fn api_insight_reset(
+    State(s): State<HttpState>,
+    Json(req): Json<ResetInsightRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let app = s.app.clone();
+    let replay = req.replay_from_traffic;
+    let limit = req.limit.unwrap_or(5000);
+    let result = tokio::task::spawn_blocking(move || {
+        if replay {
+            app.replay_from_traffic(limit)
+                .map(|stats| serde_json::json!({ "replay": stats }))
+        } else {
+            app.reset_insight()
+                .map(|reset| serde_json::json!({ "reset": reset }))
+        }
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(result))
 }
 
 async fn api_insight_status(State(s): State<HttpState>) -> Json<serde_json::Value> {

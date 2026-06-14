@@ -75,6 +75,17 @@ pub fn parse_request_value(json: &Value) -> ParsedRequest {
     }
 }
 
+/// Keep only messages not yet processed for this run (OpenClaw sends full history each turn).
+pub fn apply_messages_delta(req: &ParsedRequest, messages_seen: u32) -> ParsedRequest {
+    let seen = messages_seen.min(req.new_messages.len() as u32) as usize;
+    ParsedRequest {
+        model: req.model.clone(),
+        system_excerpt: req.system_excerpt.clone(),
+        tools: req.tools.clone(),
+        new_messages: req.new_messages[seen..].to_vec(),
+    }
+}
+
 pub fn parse_response(body: &[u8]) -> ParsedResponse {
     let Ok(json) = serde_json::from_slice::<Value>(body) else {
         if looks_like_sse(body) {
@@ -238,11 +249,7 @@ fn parse_message(msg: &Value) -> ParsedMessage {
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("tool")
                                 .to_string(),
-                            content: block
-                                .get("content")
-                                .and_then(|c| c.as_str())
-                                .unwrap_or("")
-                                .to_string(),
+                            content: tool_result_content(block.get("content")),
                         });
                     }
                     _ => {}
@@ -330,6 +337,23 @@ fn message_text(msg: &Value) -> String {
     }
 }
 
+fn tool_result_content(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| {
+                item.get("text")
+                    .and_then(|t| t.as_str())
+                    .or_else(|| item.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -355,6 +379,15 @@ mod tests {
         assert_eq!(req.tools, vec!["Read"]);
         assert_eq!(req.new_messages.len(), 1);
         assert!(req.new_messages[0].text.contains("fix login"));
+    }
+
+    #[test]
+    fn applies_messages_delta() {
+        let body = br#"{"messages":[{"role":"user","content":"goal"},{"role":"assistant","content":"ok"},{"role":"tool","content":"data"}]}"#;
+        let req = parse_request(body);
+        let delta = apply_messages_delta(&req, 2);
+        assert_eq!(delta.new_messages.len(), 1);
+        assert_eq!(delta.new_messages[0].role, "tool");
     }
 
     #[test]

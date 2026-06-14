@@ -192,9 +192,7 @@ pub fn finalize_run_if_idle(run: &mut RunRecord, last_activity: chrono::DateTime
 pub fn outcome_from_status(status: RunStatus, outcome: RunOutcome) -> RunStatus {
     match outcome {
         RunOutcome::Failed => RunStatus::Failed,
-        RunOutcome::Success | RunOutcome::Partial if status == RunStatus::Running => {
-            RunStatus::Completed
-        }
+        RunOutcome::Success if status == RunStatus::Running => RunStatus::Completed,
         _ => status,
     }
 }
