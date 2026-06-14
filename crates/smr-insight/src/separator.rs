@@ -55,16 +55,14 @@ pub fn resolve_agent(
     }
 }
 
-fn agent_fingerprint(_system: &str, tools: &[String]) -> String {
-    // Tool names are stable across OpenClaw multi-turn requests; system prompts may grow each turn.
+fn agent_fingerprint(system: &str, tools: &[String]) -> String {
     if !tools.is_empty() {
         let mut sorted: Vec<_> = tools.iter().map(|t| t.to_ascii_lowercase()).collect();
         sorted.sort();
         sorted.dedup();
         return format!("tools:{}", sorted.join(","));
     }
-    let parts = vec![format!("sys:{_system}")];
-    parts.join("\n")
+    format!("sys:{system}")
 }
 
 fn short_hash(data: &[u8]) -> String {
@@ -215,7 +213,29 @@ mod platform_tests {
 }
 
 /// Idle gap after which the next turn starts a new Run (see detailed plan §十二).
-const RUN_IDLE_MINUTES: i64 = 30;
+pub const RUN_IDLE_MINUTES: i64 = 30;
+
+/// Whether a prior run is still within the continuation window for this turn.
+pub fn run_continue_window(turn_time: DateTime<Utc>, run: &RunRecord) -> bool {
+    if run.status == RunStatus::Failed {
+        return false;
+    }
+    let anchor = run.ended_at.unwrap_or(run.started_at);
+    turn_time.signed_duration_since(anchor).num_minutes() <= RUN_IDLE_MINUTES
+}
+
+/// True when two goals likely describe the same task (dedup fragmented runs).
+pub fn goals_related(a: &str, b: &str) -> bool {
+    let a = a.trim();
+    let b = b.trim();
+    if a.is_empty() || b.is_empty() || a == "Unknown task" || b == "Unknown task" {
+        return false;
+    }
+    if a == b || a.contains(b) || b.contains(a) {
+        return true;
+    }
+    keyword_jaccard(a, b) >= 0.25
+}
 
 const NEW_TASK_MARKERS: &[&str] = &[
     "new task:",
@@ -244,7 +264,7 @@ pub fn should_start_new_run(
     if run.status != RunStatus::Running {
         if let Some(ended) = run.ended_at {
             if turn_time.signed_duration_since(ended).num_minutes() <= RUN_IDLE_MINUTES {
-                if let Some(user_text) = latest_user_message(req) {
+                if let Some(user_text) = latest_real_user_message(req) {
                     if looks_like_new_task(user_text, &run.goal) {
                         return true;
                     }
@@ -261,7 +281,7 @@ pub fn should_start_new_run(
         }
     }
 
-    if let Some(user_text) = latest_user_message(req) {
+    if let Some(user_text) = latest_real_user_message(req) {
         if looks_like_new_task(user_text, &run.goal) {
             return true;
         }
@@ -270,16 +290,41 @@ pub fn should_start_new_run(
     false
 }
 
-fn latest_user_message(req: &ParsedRequest) -> Option<&str> {
+/// OpenClaw injects a bootstrap user turn whose timestamp changes every request.
+pub fn is_bootstrap_user_message(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("a new session was started via /new or /reset")
+        || lower.contains("session startup sequence")
+        || lower.contains("bootstrap.md")
+        || text.contains("[Bootstrap pending]")
+}
+
+pub fn is_bootstrap_goal(text: &str) -> bool {
+    is_bootstrap_user_message(text) || text.trim().eq_ignore_ascii_case("unknown task")
+}
+
+/// Placeholder goals that should be replaced when a real user task appears.
+pub fn is_weak_goal(text: &str) -> bool {
+    let t = text.trim();
+    is_bootstrap_goal(t)
+        || t.starts_with("You are ")
+        || t.eq_ignore_ascii_case("openclaw")
+        || t.chars().count() < 8
+}
+
+fn latest_real_user_message(req: &ParsedRequest) -> Option<&str> {
     req.new_messages
         .iter()
         .rev()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == "user" && !is_bootstrap_user_message(&m.text))
         .map(|m| m.text.as_str())
         .filter(|t| !t.trim().is_empty())
 }
 
 fn looks_like_new_task(user_text: &str, goal: &str) -> bool {
+    if is_bootstrap_user_message(user_text) {
+        return false;
+    }
     let lower = user_text.to_ascii_lowercase();
     if NEW_TASK_MARKERS.iter().any(|m| lower.contains(m)) {
         return true;
@@ -287,6 +332,14 @@ fn looks_like_new_task(user_text: &str, goal: &str) -> bool {
     // Strong topic shift: long message with almost no keyword overlap with current goal.
     if user_text.chars().count() > 60 && keyword_jaccard(goal, user_text) < 0.12 {
         return true;
+    }
+    false
+}
+
+/// Explicit task switches should open a new run, not merge into the prior goal.
+pub fn skip_run_deduplication(req: &ParsedRequest, prior_goal: Option<&str>) -> bool {
+    if let Some(user_text) = latest_real_user_message(req) {
+        return looks_like_new_task(user_text, prior_goal.unwrap_or(""));
     }
     false
 }
@@ -345,15 +398,17 @@ pub fn new_run_id(session_id: &str, agent_id: &str) -> String {
 }
 
 pub fn infer_goal_from_request(req: &ParsedRequest) -> String {
-    for msg in &req.new_messages {
-        if msg.role == "user" {
-            let text = msg.text.trim();
-            if !text.is_empty() {
-                return truncate_goal(text);
-            }
+    for msg in req.new_messages.iter().rev() {
+        if msg.role != "user" {
+            continue;
         }
+        let text = msg.text.trim();
+        if text.is_empty() || is_bootstrap_user_message(text) {
+            continue;
+        }
+        return truncate_goal(text);
     }
-    if !req.system_excerpt.is_empty() {
+    if !req.system_excerpt.is_empty() && !is_bootstrap_user_message(&req.system_excerpt) {
         return truncate_goal(&req.system_excerpt);
     }
     "Unknown task".to_string()
@@ -375,6 +430,14 @@ mod tests {
     use crate::models::TraceTurn;
     use crate::parser::parse_request;
     use crate::models::RunRecord;
+
+    #[test]
+    fn bootstrap_user_message_is_not_new_task() {
+        let goal = "A new session was started via /new or /reset. Execute your Session Startup";
+        let later = "A new session was started via /new or /reset. Execute your Session Startup sequence now. Current time: Sunday - 5:02 PM";
+        assert!(!looks_like_new_task(later, goal));
+        assert!(is_bootstrap_user_message(later));
+    }
 
     #[test]
     fn stable_agent_id_for_same_fingerprint() {
@@ -465,6 +528,15 @@ mod tests {
         let ctx = resolve_agent(&turn, &req, None);
         assert_eq!(ctx.agent_record.display_name, "OpenClaw");
         assert_eq!(ctx.agent_record.agent_type, "research");
+    }
+
+    #[test]
+    fn goals_related_for_research_variants() {
+        assert!(goals_related(
+            "帮我调研一下珠海金智维，看看是否值得投资",
+            "帮我调研珠海金智维融资情况",
+        ));
+        assert!(!goals_related("fix login bug", "调研珠海金智维"));
     }
 
     #[test]

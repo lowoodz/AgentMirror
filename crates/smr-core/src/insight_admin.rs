@@ -207,17 +207,14 @@ async fn api_insight_graph(
     if store.get_run(&run_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.is_none() {
         return Err(StatusCode::NOT_FOUND);
     }
-    let graph = store
-        .load_graph_json(&run_id)
+    let events = store
+        .list_events(&run_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    match graph {
-        Some(text) => {
-            let v: serde_json::Value =
-                serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
-            Ok(Json(v).into_response())
-        }
-        None => Err(StatusCode::NOT_FOUND),
+    if events.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
     }
+    let graph = smr_insight::graph::build_graph(&run_id, &events);
+    Ok(Json(serde_json::to_value(graph).unwrap_or(Value::Null)).into_response())
 }
 
 async fn api_insight_report(

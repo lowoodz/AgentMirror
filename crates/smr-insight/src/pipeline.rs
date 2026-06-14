@@ -9,7 +9,10 @@ use crate::models::{EventKind, InsightConfig, RunRecord, RunStatus, TraceTurn};
 use crate::parser::{apply_messages_delta, parse_request, parse_response};
 use crate::report::{build_reflection_report, outcome_from_status};
 use crate::safety::{scan_action_events, SafetyScanner};
-use crate::separator::{infer_goal_from_request, new_run_id, resolve_agent, should_start_new_run};
+use crate::separator::{
+    infer_goal_from_request, is_bootstrap_goal, is_weak_goal, new_run_id, resolve_agent,
+    should_start_new_run, skip_run_deduplication,
+};
 use crate::store::InsightStore;
 
 pub struct Pipeline {
@@ -57,21 +60,30 @@ impl Pipeline {
         let ctx = resolve_agent(&turn, &full_req, existing_agent.as_ref());
         self.store.upsert_agent(&ctx.agent_record)?;
 
-        let active_run = self
+        let goal = infer_goal_from_request(&full_req);
+        let mut active_run = self
             .store
-            .find_active_run(&ctx.agent_id, &turn.session_id)?
-            .or_else(|| {
-                self.store
-                    .find_active_run_for_session(&turn.session_id)
-                    .ok()
-                    .flatten()
-            });
-        let is_new_run = should_start_new_run(&full_req, active_run.as_ref(), turn.timestamp);
+            .find_active_run(&ctx.agent_id, &turn.session_id)?;
+        let mut is_new_run =
+            should_start_new_run(&full_req, active_run.as_ref(), turn.timestamp);
+
+        if is_new_run
+            && !skip_run_deduplication(&full_req, active_run.as_ref().map(|r| r.goal.as_str()))
+        {
+            if let Some(dup) = self.store.find_duplicate_run(
+                &turn.session_id,
+                &ctx.agent_id,
+                &goal,
+                turn.timestamp,
+            )? {
+                is_new_run = false;
+                active_run = Some(dup);
+            }
+        }
 
         let mut run = if is_new_run { None } else { active_run };
 
         if run.is_none() {
-            let goal = infer_goal_from_request(&full_req);
             let run_id = new_run_id(&turn.session_id, &ctx.agent_id);
             let record = RunRecord {
                 run_id: run_id.clone(),
@@ -96,10 +108,14 @@ impl Pipeline {
         run.turn_count += 1;
         run.ended_at = Some(turn.timestamp);
 
-        if run.goal.is_empty() || run.goal == "Unknown task" {
-            let g = infer_goal_from_request(&full_req);
-            if g != "Unknown task" {
-                run.goal = g;
+        let refined_goal = infer_goal_from_request(&full_req);
+        if !is_weak_goal(&refined_goal)
+            && (is_weak_goal(&run.goal) || is_bootstrap_goal(&run.goal))
+        {
+            run.goal = refined_goal.clone();
+        } else if run.goal.is_empty() || run.goal == "Unknown task" {
+            if refined_goal != "Unknown task" {
+                run.goal = refined_goal;
             }
         }
 

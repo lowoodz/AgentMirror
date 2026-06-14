@@ -37,7 +37,23 @@ fn fingerprint_from_body(body: &Value) -> Option<String> {
     }
 
     let mut parts = Vec::new();
-    if let Some(sys) = messages.first().filter(|m| role_is(m, "system")) {
+    // Tool names stay stable when OpenClaw grows the system prompt each turn.
+    if let Some(tools) = body.get("tools").and_then(|t| t.as_array()) {
+        if !tools.is_empty() {
+            let mut names: Vec<String> = tools
+                .iter()
+                .filter_map(|t| {
+                    t.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                })
+                .map(|s| s.to_ascii_lowercase())
+                .collect();
+            names.sort();
+            names.dedup();
+            parts.push(format!("tools:{}", names.join(",")));
+        }
+    } else if let Some(sys) = messages.first().filter(|m| role_is(m, "system")) {
         parts.push(format!("system:{}", message_content_key(sys)));
     }
     for msg in messages {
@@ -45,7 +61,7 @@ fn fingerprint_from_body(body: &Value) -> Option<String> {
             continue;
         }
         let content = message_content_key(msg);
-        if content.trim().is_empty() {
+        if content.trim().is_empty() || is_bootstrap_user_message(&content) {
             continue;
         }
         parts.push(format!("user:{content}"));
@@ -74,6 +90,14 @@ fn message_content_key(msg: &Value) -> String {
             .join(""),
         _ => String::new(),
     }
+}
+
+fn is_bootstrap_user_message(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("a new session was started via /new or /reset")
+        || lower.contains("session startup sequence")
+        || lower.contains("bootstrap.md")
+        || text.contains("[Bootstrap pending]")
 }
 
 #[cfg(test)]
@@ -141,5 +165,29 @@ mod tests {
         let a = derive_session_id(&HeaderMap::new(), anchor.to_string().as_bytes());
         let b = derive_session_id(&HeaderMap::new(), longer.to_string().as_bytes());
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fingerprint_stable_when_system_grows_with_tools() {
+        let anchor = serde_json::json!({
+            "model": "routed",
+            "messages": [
+                {"role": "system", "content": "You are OpenClaw v1"},
+                {"role": "user", "content": "帮我调研一下珠海金智维，看看是否值得投资"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "exec"}}]
+        });
+        let mut longer = anchor.clone();
+        longer["messages"][0]["content"] = serde_json::json!(
+            "You are OpenClaw v1 with extra injected context from prior turns"
+        );
+        longer["messages"].as_array_mut().unwrap().extend([
+            serde_json::json!({"role": "assistant", "content": "我先搜索基本信息。"}),
+            serde_json::json!({"role": "tool", "content": "search results"}),
+        ]);
+
+        let a = derive_session_id(&HeaderMap::new(), anchor.to_string().as_bytes());
+        let b = derive_session_id(&HeaderMap::new(), longer.to_string().as_bytes());
+        assert_eq!(a, b, "session key should ignore growing system when tools are present");
     }
 }

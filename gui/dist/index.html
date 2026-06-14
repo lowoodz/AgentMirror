@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
-  <title>LLM-SafeRoute</title>
+  <title>AgentMirror</title>
   <link rel="icon" href="/favicon.ico" type="image/png" />
   <style>
     :root {
@@ -83,6 +83,16 @@
     .page-desc { margin:0; max-width:560px; color:var(--muted); font-size:12px; line-height:1.5; word-break:keep-all; }
     .section-label { font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--muted-2); margin:0 0 8px; }
     .overview-layout { display:grid; grid-template-columns:minmax(0,1fr) 200px; gap:var(--gap-lg); align-items:start; }
+    .overview-agents-block { margin-bottom:var(--gap-lg); border:1px solid var(--border); border-radius:var(--radius-lg); padding:14px 16px; background:var(--surface); }
+    .overview-agents-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+    .overview-mirror-brand { display:flex; align-items:center; gap:12px; flex:1; min-width:140px; }
+    .overview-mirror-title { margin:0; font-size:16px; font-weight:650; letter-spacing:-.02em; line-height:1.25; }
+    .overview-agent-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:8px; margin-top:8px; }
+    .overview-agent-card { border:1px solid var(--border); border-radius:var(--radius); padding:8px 10px; background:var(--surface-inset); }
+    .overview-agent-name { font-size:13px; font-weight:650; margin:0 0 2px; }
+    .overview-recent-runs { margin-top:4px; }
+    .overview-run-item { border-left:2px solid var(--border-strong); padding:4px 0 4px 10px; margin-top:6px; }
+    .overview-run-goal { font-size:12px; display:block; margin-bottom:2px; line-height:1.4; }
     @media(max-width:860px){ .overview-layout{ grid-template-columns:1fr; } }
     .connect-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px 18px; display:flex; flex-direction:column; gap:var(--gap-lg); }
     .connect-brand { display:flex; align-items:center; gap:12px; min-width:0; }
@@ -250,6 +260,11 @@
     .json-modal-picker label { color:var(--muted); white-space:nowrap; }
     .json-modal-picker select { flex:1; min-width:0; font-family:inherit; font-size:12px; padding:4px 8px; border-radius:var(--radius); border:1px solid var(--border-strong); background:var(--bg); color:var(--text); }
     .json-modal-body { flex:1; overflow:auto; padding:12px 16px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.5; background:var(--surface-inset); }
+    .json-modal-body .causal-graph-wrap,
+    .json-modal-body .causal-flow,
+    .json-modal-body .insight-timeline,
+    .json-modal-body .insight-event-table,
+    .json-modal-body .info-callout { font-family:ui-sans-serif,system-ui,-apple-system,sans-serif; }
     .json-tree { list-style:none; margin:0; padding-left:0; }
     .json-tree ul { list-style:none; margin:0; padding-left:18px; border-left:1px dashed rgba(255,255,255,.08); }
     .json-node { margin:1px 0; }
@@ -283,16 +298,21 @@
     .insight-scores { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
     .insight-score { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--border); background:var(--surface-inset); }
     .causal-flow { display:flex; flex-direction:column; gap:0; margin-top:12px; }
-    .causal-node { position:relative; padding:10px 12px 10px 14px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); margin-bottom:8px; }
+    .causal-flow .causal-kind { margin:0 0 4px; font-size:9px; line-height:1.2; }
+    .causal-flow .causal-label { font-size:9px; line-height:1.45; word-break:break-word; margin:0; }
+    .causal-node { position:relative; padding:8px 10px 8px 12px; border:0.67px solid var(--border); border-radius:var(--radius); background:var(--surface); margin-bottom:8px; }
     .causal-node::before { content:''; position:absolute; left:18px; top:-9px; width:2px; height:8px; background:var(--border-strong); }
     .causal-node:first-child::before { display:none; }
     .causal-graph-toolbar { display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
     .causal-graph-toolbar button.active { border-color:var(--accent); color:var(--accent); }
     .causal-graph-wrap { overflow:auto; max-height:min(72vh,640px); border:1px solid var(--border); border-radius:var(--radius); background:rgba(15,23,42,.35); padding:12px; }
     .causal-graph-svg { display:block; min-width:480px; min-height:280px; width:100%; height:auto; }
-    .causal-graph-rect { fill:var(--surface); stroke-width:2; }
-    .causal-graph-inner { padding:8px 10px; box-sizing:border-box; overflow:hidden; height:100%; display:flex; flex-direction:column; justify-content:space-between; }
-    .graph-node-detail { margin-top:6px; align-self:flex-start; font-size:11px; padding:2px 8px; }
+    .causal-graph-rect { fill:var(--surface); stroke-width:0.67; }
+    .causal-graph-inner { padding:8px 10px; box-sizing:border-box; overflow:hidden; height:100%; width:100%; display:flex; flex-direction:column; font-family:ui-sans-serif,system-ui,-apple-system,sans-serif; font-size:9px; line-height:1.45; color:var(--text); }
+    .causal-graph-inner .causal-kind { margin:0 0 4px; font-size:9px; line-height:1.2; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+    .causal-graph-inner .causal-label { font-size:9px; line-height:1.45; word-break:break-word; margin:0; overflow:hidden; }
+    .graph-node-detail-inline { color:var(--accent-strong); cursor:pointer; text-decoration:underline; text-underline-offset:2px; white-space:nowrap; }
+    .graph-node-detail-inline:hover { color:var(--accent); }
     .graph-event-detail { position:absolute; inset:0; z-index:3; display:none; flex-direction:column; background:var(--surface); border-radius:inherit; padding:12px 14px; overflow:auto; }
     .graph-event-detail.open { display:flex; }
     .graph-event-detail-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; }
@@ -301,7 +321,7 @@
     .graph-event-detail-body dt { color:var(--muted); font-size:11px; margin-top:10px; }
     .graph-event-detail-body dd { margin:4px 0 0; white-space:pre-wrap; word-break:break-word; }
     .causal-graph-edge path { fill:none; stroke:rgba(148,163,184,.55); stroke-width:1.5; }
-    .causal-edge-label { font-size:9px; fill:var(--muted); text-anchor:middle; pointer-events:none; }
+    .causal-edge-label { font-size:9px; fill:#94a3b8; text-anchor:middle; pointer-events:none; }
     .graph-tab-row { display:flex; gap:6px; padding:0 0 10px; border-bottom:1px solid var(--border); margin-bottom:10px; }
     .graph-tab-row button { font-size:12px; padding:4px 10px; }
     .graph-tab-row button.active { border-color:var(--accent); color:var(--accent); }
@@ -327,7 +347,7 @@
 <div id="toast" role="status" aria-live="polite"></div>
 <header>
   <div class="brand">
-  <h1>LLM-SafeRoute</h1>
+  <h1>AgentMirror</h1>
   </div>
   <span class="hint" id="statusText">…</span>
   <select id="langSelect" onchange="setLang(this.value)" aria-label="Language">
@@ -341,8 +361,8 @@
 </header>
 <main>
 <nav id="mainNav">
-  <button class="active" data-tab="agentmirror" data-i18n="nav.agentmirror" onclick="showTab('agentmirror',this)">AgentMirror</button>
-  <button data-tab="overview" data-i18n="nav.overview" onclick="showTab('overview',this)">Overview</button>
+  <button class="active" data-tab="overview" data-i18n="nav.overview" onclick="showTab('overview',this)">Overview</button>
+  <button data-tab="agentmirror" data-i18n="nav.reflection" onclick="showTab('agentmirror',this)">Agent Reflection</button>
   <button data-tab="routing" data-i18n="nav.routing" onclick="showTab('routing',this)">Routing</button>
   <button data-tab="dlp" data-i18n="nav.dlp" onclick="showTab('dlp',this)">DLP</button>
   <button data-tab="path-protection" data-i18n="nav.path" onclick="showTab('path-protection',this)">Path protection</button>
@@ -351,42 +371,22 @@
   <button data-tab="advanced" data-i18n="nav.advanced" onclick="showTab('advanced',this)">Advanced Configs</button>
 </nav>
 <div class="content">
-<section class="panel active" id="agentmirror">
-  <div class="page-header">
-    <h2 class="page-title" data-i18n="nav.agentmirror">AgentMirror</h2>
-    <p class="page-desc" data-i18n="insight.pageHint">Reconstruct agent goals, decisions, and actions from LLM proxy traffic — with daily reports and causal trajectory graphs.</p>
-  </div>
-  <div id="insightTrafficWarn" class="info-callout" style="display:none" data-i18n="insight.trafficWarn">Enable traffic snapshots (Logs tab) so AgentMirror can analyze request/response bodies.</div>
-  <div class="traffic-toolbar" style="margin-bottom:var(--gap-lg)">
-    <div class="traffic-toolbar-row">
-      <button type="button" class="secondary btn-sm" data-i18n="refresh" onclick="loadInsight()">Refresh</button>
-      <button type="button" class="secondary btn-sm" data-i18n="insight.genDaily" onclick="generateDailyReport()">Generate today's report</button>
-      <input type="date" id="insightDailyDate" class="input-sm" style="max-width:160px" />
-      <button type="button" class="secondary btn-sm" data-i18n="insight.viewDaily" onclick="loadDailyReport()">View daily report</button>
-      <button type="button" class="secondary btn-sm" data-i18n="insight.printDaily" onclick="printDailyReport()">Print / PDF</button>
-      <button type="button" class="secondary btn-sm" data-i18n="insight.mergeRuns" onclick="mergeSelectedRuns()">Merge selected</button>
-      <span class="traffic-spacer"></span>
-      <span class="hint" id="insightStatusText">…</span>
-    </div>
-  </div>
-  <div id="insightDailyPanel" style="display:none;margin-bottom:var(--gap-lg)"></div>
-  <div id="insightAgentProfile" class="insight-profile" style="display:none"></div>
-  <div class="insight-grid">
-    <div>
-      <h3 class="section-label" data-i18n="insight.agentsTitle">Agents</h3>
-      <div id="insightAgentList" class="insight-agents"></div>
-    </div>
-    <div>
-      <h3 class="section-label" data-i18n="insight.runsTitle">Task runs</h3>
-      <div id="insightRunList" class="insight-runs"></div>
-      <div id="insightRunDetail" style="margin-top:var(--gap-lg)"></div>
-    </div>
-  </div>
-</section>
-<section class="panel" id="overview">
+<section class="panel active" id="overview">
   <div class="page-header">
     <h2 class="page-title" data-i18n="nav.overview">Overview</h2>
-    <p class="page-desc" data-i18n="overview.proxyHint">One base URL for OpenAI and Anthropic clients. SafeRoute detects the protocol and converts to each upstream model in the fallback group.</p>
+    <p class="page-desc" data-i18n="overview.pageHint">Tracked agents at a glance, plus proxy connection and security status.</p>
+  </div>
+  <div class="overview-agents-block">
+    <div class="overview-agents-head">
+      <div class="overview-mirror-brand">
+        <div class="connect-icon" aria-hidden="true">🔆</div>
+        <h3 class="overview-mirror-title" data-i18n="overview.agentsTitle">AgentMirror</h3>
+      </div>
+      <span class="hint" id="overviewInsightStatus">…</span>
+      <button type="button" class="secondary btn-sm" data-i18n="overview.openReflection" onclick="showReflectionTab()">Open Agent Reflection</button>
+    </div>
+    <div id="overviewTrafficWarn" class="info-callout" style="display:none;margin-top:8px" data-i18n="insight.trafficWarn">Enable traffic snapshots (Logs tab) so AgentMirror can analyze request/response bodies.</div>
+    <div id="overviewAgentSummary"><p class="hint">…</p></div>
   </div>
   <div class="overview-layout">
     <div class="connect-card">
@@ -423,6 +423,38 @@
       <div class="status-item"><span class="status-item-label" data-i18n="overview.path">Path protection</span><span class="badge badge-muted" id="pathMode">-</span></div>
       <div class="status-item"><span class="status-item-label" data-i18n="overview.index">File index</span><span class="badge badge-muted" id="indexStatus">-</span></div>
     </aside>
+  </div>
+</section>
+<section class="panel" id="agentmirror">
+  <div class="page-header">
+    <h2 class="page-title" data-i18n="nav.reflection">Agent Reflection</h2>
+    <p class="page-desc" data-i18n="insight.pageHint">Reconstruct agent goals, decisions, and actions from LLM proxy traffic — with daily reports and causal trajectory graphs.</p>
+  </div>
+  <div id="insightTrafficWarn" class="info-callout" style="display:none" data-i18n="insight.trafficWarn">Enable traffic snapshots (Logs tab) so AgentMirror can analyze request/response bodies.</div>
+  <div class="traffic-toolbar" style="margin-bottom:var(--gap-lg)">
+    <div class="traffic-toolbar-row">
+      <button type="button" class="secondary btn-sm" data-i18n="refresh" onclick="loadInsight()">Refresh</button>
+      <button type="button" class="secondary btn-sm" data-i18n="insight.genDaily" onclick="generateDailyReport()">Generate today's report</button>
+      <input type="date" id="insightDailyDate" class="input-sm" style="max-width:160px" />
+      <button type="button" class="secondary btn-sm" data-i18n="insight.viewDaily" onclick="loadDailyReport()">View daily report</button>
+      <button type="button" class="secondary btn-sm" data-i18n="insight.printDaily" onclick="printDailyReport()">Print / PDF</button>
+      <button type="button" class="secondary btn-sm" data-i18n="insight.mergeRuns" onclick="mergeSelectedRuns()">Merge selected</button>
+      <span class="traffic-spacer"></span>
+      <span class="hint" id="insightStatusText">…</span>
+    </div>
+  </div>
+  <div id="insightDailyPanel" style="display:none;margin-bottom:var(--gap-lg)"></div>
+  <div id="insightAgentProfile" class="insight-profile" style="display:none"></div>
+  <div class="insight-grid">
+    <div>
+      <h3 class="section-label" data-i18n="insight.agentsTitle">Agents</h3>
+      <div id="insightAgentList" class="insight-agents"></div>
+    </div>
+    <div>
+      <h3 class="section-label" data-i18n="insight.runsTitle">Task runs</h3>
+      <div id="insightRunList" class="insight-runs"></div>
+      <div id="insightRunDetail" style="margin-top:var(--gap-lg)"></div>
+    </div>
   </div>
 </section>
 <section class="panel" id="routing">
@@ -642,8 +674,8 @@
 <script>
 const I18N={
 en:{
-'securityMaster':'Security master switch','nav.agentmirror':'AgentMirror','nav.overview':'Overview','nav.routing':'Routing','nav.dlp':'DLP','nav.path':'Path protection','nav.ops':'Operations','nav.logs':'Logs','nav.advanced':'Advanced Configs',
-'overview.baseUrl':'Base URL','overview.providerSub':'OpenAI-compatible provider','overview.modelsTitle':'Models','overview.openclawConfig':'OpenClaw configuration','overview.openclawSnippet':'# OpenClaw — one provider, three tier models','overview.proxyHint':'One base URL for OpenAI and Anthropic clients. SafeRoute detects the protocol and converts to each upstream model in the fallback group.','overview.defaultGroup':'Default group','overview.dlp':'DLP','overview.ops':'Operation security','overview.path':'Path protection','overview.index':'File index','overview.copyModel':'Copy id',
+'securityMaster':'Security master switch','nav.reflection':'Agent Reflection','nav.overview':'Overview','nav.routing':'Routing','nav.dlp':'DLP','nav.path':'Path protection','nav.ops':'Operations','nav.logs':'Logs','nav.advanced':'Advanced Configs',
+'overview.pageHint':'Tracked agents at a glance, plus proxy connection and security status.','overview.agentsTitle':'AgentMirror','overview.agentCount':'agents','overview.recentRunsTitle':'Recent runs','overview.recentRuns':'recent runs','overview.openReflection':'Open Agent Reflection','overview.noAgents':'No agents tracked yet — route agent traffic through AgentMirror.','overview.baseUrl':'Base URL','overview.providerSub':'OpenAI-compatible provider','overview.modelsTitle':'Models','overview.openclawConfig':'OpenClaw configuration','overview.openclawSnippet':'# OpenClaw — one provider, three tier models','overview.proxyHint':'One base URL for OpenAI and Anthropic clients. AgentMirror detects the protocol and converts to each upstream model in the fallback group.','overview.defaultGroup':'Default group','overview.dlp':'DLP','overview.ops':'Operation security','overview.path':'Path protection','overview.index':'File index','overview.copyModel':'Copy id',
 'mode.observe':'Observe','mode.enforce':'Enforce',
 'copy':'Copy','add':'Add','refresh':'Refresh',
 'routing.hint':'Drag to reorder fallback within each tier. Clients select a tier via model id on the shared base URL. Click Save routing to apply.','routing.save':'Save routing','group.high':'High precision','group.medium':'Balanced','group.low':'Lightweight',
@@ -658,8 +690,8 @@ en:{
 'insight.pageHint':'Reconstruct agent goals, decisions, and actions from LLM proxy traffic — with daily reports and causal trajectory graphs.','insight.trafficWarn':'Enable traffic snapshots (Logs tab) so AgentMirror can analyze request/response bodies.','insight.agentsTitle':'Agents','insight.runsTitle':'Task runs','insight.genDaily':"Generate today's report",'insight.viewDaily':'View daily report','insight.printDaily':'Print / PDF','insight.profileTitle':'Agent profile','insight.patternsTitle':'Action patterns','insight.riskDlp':'DLP','insight.riskSafety':'Safety','insight.noPatterns':'Not enough completed runs for pattern mining.','insight.dailyTitle':'Daily report','insight.dailyEmpty':'No daily report for this date — generate one first.','insight.graphTitle':'Causal trajectory','insight.tabGraph':'Graph','insight.tabTimeline':'Timeline','insight.tabEvents':'Events','insight.tabRaw':'Raw traffic','insight.viewDag':'Directed graph','insight.viewList':'List','insight.viewDetail':'Details','insight.eventDetailTitle':'Event detail','insight.typeResearch':'Research','insight.typeCoding':'Coding','insight.typeChat':'Chat','insight.typeAgent':'Agent','insight.mergeRuns':'Merge selected','insight.splitRun':'Split after','insight.editGoal':'Edit goal','insight.viewGraph':'View trajectory','insight.noAgents':'No agents recorded yet — route agent traffic through SafeRoute.','insight.noRuns':'No runs for this agent.','insight.turns':'turns','insight.dailyOk':'Daily report generated'
 },
 zh:{
-'securityMaster':'安全防护总开关','nav.agentmirror':'AgentMirror','nav.overview':'概览','nav.routing':'模型路由','nav.dlp':'数据防泄露','nav.path':'重要路径防护','nav.ops':'操作拦截','nav.logs':'日志','nav.advanced':'高级配置',
-'overview.baseUrl':'接口地址','overview.providerSub':'OpenAI 兼容 Provider','overview.modelsTitle':'模型','overview.openclawConfig':'OpenClaw 配置示例','overview.openclawSnippet':'# OpenClaw — 一个 Provider，三个档位模型','overview.proxyHint':'同一 base URL 兼容 OpenAI 与 Anthropic 客户端；按请求自动识别协议，并在 fallback 组内转换为对应上游 API。','overview.defaultGroup':'默认组','overview.dlp':'DLP','overview.ops':'操作安全','overview.path':'路径防护','overview.index':'文件索引','overview.copyModel':'复制 ID',
+'securityMaster':'安全防护总开关','nav.reflection':'智能体反思','nav.overview':'概览','nav.routing':'模型路由','nav.dlp':'数据防泄露','nav.path':'重要路径防护','nav.ops':'操作拦截','nav.logs':'日志','nav.advanced':'高级配置',
+'overview.pageHint':'智能体追踪概况一览，以及代理连接与安全状态。','overview.agentsTitle':'AgentMirror','overview.agentCount':'个智能体','overview.recentRunsTitle':'最近任务','overview.recentRuns':'条近期运行','overview.openReflection':'打开智能体反思','overview.noAgents':'尚无追踪记录 — 请将 Agent 流量经 AgentMirror 转发。','overview.baseUrl':'接口地址','overview.providerSub':'OpenAI 兼容 Provider','overview.modelsTitle':'模型','overview.openclawConfig':'OpenClaw 配置示例','overview.openclawSnippet':'# OpenClaw — 一个 Provider，三个档位模型','overview.proxyHint':'同一 base URL 兼容 OpenAI 与 Anthropic 客户端；AgentMirror 按请求自动识别协议，并在 fallback 组内转换为对应上游 API。','overview.defaultGroup':'默认组','overview.dlp':'DLP','overview.ops':'操作安全','overview.path':'路径防护','overview.index':'文件索引','overview.copyModel':'复制 ID',
 'mode.observe':'观察','mode.enforce':'拦截',
 'copy':'复制','add':'添加','refresh':'刷新',
 'routing.hint':'按住 ⠿ 拖拽调整组内 fallback 顺序。客户端在同一 base URL 下用 model id 选档。点击「保存路由」后生效。','routing.save':'保存路由','group.high':'高精度','group.medium':'平衡','group.low':'轻量',
@@ -691,7 +723,8 @@ function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(el=>{el.te
 function renderOpsExamples(){const el=document.getElementById('opsExamplesBlock');if(!el)return;el.textContent=t('ops.examplesYaml');}
 function fillPathLevelSelect(){const sel=pathProtectLevel;if(!sel)return;const v=sel.value||'deny_access';sel.innerHTML=`<option value="deny_access">${t('level.deny_access')}</option><option value="deny_modify">${t('level.deny_modify')}</option><option value="deny_delete">${t('level.deny_delete')}</option>`;sel.value=v;}
 function showToast(msg,ok=true){const el=document.getElementById('toast');if(!el)return;el.textContent=msg;el.classList.remove('ok','err','show');el.classList.add(ok?'ok':'err','show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2800);}
-function showTab(id,btn){document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');if(id==='logs')loadTraffic();if(id==='agentmirror')loadInsight();}
+function showTab(id,btn){document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));document.getElementById(id).classList.add('active');btn.classList.add('active');if(id==='logs')loadTraffic();if(id==='overview')loadOverviewAgents();if(id==='agentmirror')loadInsight();}
+function showReflectionTab(){const btn=document.querySelector('nav button[data-tab="agentmirror"]');if(btn)showTab('agentmirror',btn);}
 function inferProto(url){return (url||'').includes('anthropic')?'anthropic':'openai';}
 function trafficCaptureMode(){return cfg.logging?.traffic_request_capture==='before_dlp'?'before_dlp':'after_dlp';}
 function syncTrafficCaptureUi(){const on=!!trafficToggle?.checked;const row=document.getElementById('trafficCaptureRow');if(row)row.classList.toggle('traffic-off',!on);const mode=trafficCaptureMode();const segAfter=document.getElementById('segAfter');const segBefore=document.getElementById('segBefore');if(segAfter){const active=mode!=='before_dlp';segAfter.classList.toggle('active',active);segAfter.disabled=!on;segAfter.setAttribute('aria-checked',active?'true':'false');}if(segBefore){const active=mode==='before_dlp';segBefore.classList.toggle('active',active);segBefore.disabled=!on;segBefore.setAttribute('aria-checked',active?'true':'false');}}
@@ -787,10 +820,13 @@ async function openTrafficViewer(id){const modal=document.getElementById('jsonMo
 function onTrafficSnapshotPick(id){if(!id)return;loadTrafficSnapshot(id).catch(err=>{const bodyEl=document.getElementById('jsonModalBody');if(bodyEl)bodyEl.textContent=(err&&err.message)||String(err);});}
 function closeTrafficViewer(){document.getElementById('jsonModal')?.classList.remove('open');trafficViewerRaw='';}
 function copyTrafficRaw(){if(!trafficViewerRaw)return;navigator.clipboard.writeText(trafficViewerRaw).then(()=>showToast(t('toast.copied'))).catch(()=>{});}
+const AGENT_NAME_COLORS=['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#3b82f6','#a855f7'];
+function agentDisplayColor(id){let h=0;for(const c of String(id||''))h=(h*31+c.charCodeAt(0))>>>0;return AGENT_NAME_COLORS[h%AGENT_NAME_COLORS.length];}
+async function loadOverviewAgents(){const host=document.getElementById('overviewAgentSummary');const statusEl=document.getElementById('overviewInsightStatus');const warn=document.getElementById('overviewTrafficWarn');if(!host)return;try{const st=await(await fetch('/api/insight/status')).json();if(statusEl)statusEl.textContent=st.enabled?(st.traffic_bodies?'AgentMirror ON':'AgentMirror ON (no traffic)'):'AgentMirror OFF';if(warn)warn.style.display=st.needs_traffic?'block':'none';const agentsRes=await(await fetch('/api/insight/agents')).json();const agents=agentsRes.agents||[];if(!agents.length){host.innerHTML=`<p class="hint">${t('overview.noAgents')}</p>`;return;}const runsRes=await(await fetch('/api/insight/runs?limit=8')).json();const runs=(runsRes.runs||[]).map(x=>x.run||x);const agentById={};agents.forEach(a=>{agentById[a.agent_id]=a;});const agentCards=agents.slice(0,12).map(a=>{const color=agentDisplayColor(a.agent_id);return `<div class="overview-agent-card"><div class="overview-agent-name" style="color:${color}">${escHtml(a.display_name||a.agent_id)}</div><p class="hint" style="margin:0">${escHtml(agentTypeLabel(a.agent_type))} · ${escHtml(formatLocalDateTime(a.last_seen))}</p></div>`;}).join('');const recentRuns=runs.slice(0,3).map(r=>{const agent=agentById[r.agent_id];const aname=agent?.display_name||r.agent_id||'';return `<div class="overview-run-item"><span class="overview-run-goal">${escHtml(r.goal||r.run_id)}</span><span class="hint">${escHtml(r.status||'')} · ${escHtml(aname)} · ${escHtml(formatLocalDateTime(r.started_at))}</span></div>`;}).join('');host.innerHTML=`<p class="hint" style="margin:0">${agents.length} ${t('overview.agentCount')}${runs.length?` · ${Math.min(runs.length,3)} ${t('overview.recentRuns')}`:''}</p><div class="overview-agent-grid">${agentCards}</div>${recentRuns?`<div class="overview-recent-runs"><div class="section-label" style="margin-top:12px;margin-bottom:4px">${t('overview.recentRunsTitle')}</div>${recentRuns}</div>`:''}`;}catch(e){host.innerHTML=`<p class="hint">${(e&&e.message)||e}</p>`;}}
 async function loadInsight(){try{const st=await(await fetch('/api/insight/status')).json();const warn=document.getElementById('insightTrafficWarn');if(warn)warn.style.display=st.needs_traffic?'block':'none';const statusEl=document.getElementById('insightStatusText');if(statusEl)statusEl.textContent=st.enabled?(st.traffic_bodies?'AgentMirror ON':'AgentMirror ON (no traffic)'):'AgentMirror OFF';const dateEl=document.getElementById('insightDailyDate');if(dateEl&&!dateEl.value)dateEl.value=new Date().toISOString().slice(0,10);const agentsRes=await(await fetch('/api/insight/agents')).json();insightAgents=agentsRes.agents||[];if(!selectedInsightAgent&&insightAgents.length)selectedInsightAgent=insightAgents[0].agent_id;renderInsightAgents();await loadAgentProfile();await loadInsightRuns();}catch(e){const list=document.getElementById('insightAgentList');if(list)list.innerHTML=`<p class="hint">${(e&&e.message)||e}</p>`;}}
 function printDailyReport(){const dateEl=document.getElementById('insightDailyDate');const date=dateEl?.value||new Date().toISOString().slice(0,10);const q=selectedInsightAgent?`?agent_id=${encodeURIComponent(selectedInsightAgent)}`:'';window.open(`/api/insight/daily/${encodeURIComponent(date)}/print${q}`,'_blank');}
 function agentTypeLabel(type){const k=String(type||'agent');const m={research:t('insight.typeResearch'),coding:t('insight.typeCoding'),chat:t('insight.typeChat'),agent:t('insight.typeAgent')};return m[k]||k;}
-function renderInsightAgents(){const el=document.getElementById('insightAgentList');if(!el)return;if(!insightAgents.length){el.innerHTML=`<p class="hint">${t('insight.noAgents')}</p>`;document.getElementById('insightAgentProfile').style.display='none';return;}el.innerHTML='';for(const a of insightAgents){const btn=document.createElement('button');btn.type='button';btn.className='insight-card'+(selectedInsightAgent===a.agent_id?' active':'');btn.innerHTML=`<p class="insight-card-title">${escHtml(a.display_name||a.agent_id)}</p><p class="insight-card-meta">${escHtml(agentTypeLabel(a.agent_type))} · ${escHtml(formatLocalDateTime(a.last_seen))}</p>`;btn.onclick=()=>{selectedInsightAgent=a.agent_id;renderInsightAgents();loadAgentProfile();loadInsightRuns();};el.appendChild(btn);}}
+function renderInsightAgents(){const el=document.getElementById('insightAgentList');if(!el)return;if(!insightAgents.length){el.innerHTML=`<p class="hint">${t('insight.noAgents')}</p>`;document.getElementById('insightAgentProfile').style.display='none';return;}el.innerHTML='';for(const a of insightAgents){const btn=document.createElement('button');btn.type='button';btn.className='insight-card'+(selectedInsightAgent===a.agent_id?' active':'');const color=agentDisplayColor(a.agent_id);btn.innerHTML=`<p class="insight-card-title" style="color:${color}">${escHtml(a.display_name||a.agent_id)}</p><p class="insight-card-meta">${escHtml(agentTypeLabel(a.agent_type))} · ${escHtml(formatLocalDateTime(a.last_seen))}</p>`;btn.onclick=()=>{selectedInsightAgent=a.agent_id;renderInsightAgents();loadAgentProfile();loadInsightRuns();};el.appendChild(btn);}}
 async function loadAgentProfile(){const panel=document.getElementById('insightAgentProfile');if(!panel||!selectedInsightAgent){if(panel)panel.style.display='none';return;}panel.style.display='block';panel.innerHTML=lang==='zh'?'加载中…':'Loading…';try{const profRes=await(await fetch(`/api/insight/agents/${encodeURIComponent(selectedInsightAgent)}/profile`)).json();const patRes=await(await fetch(`/api/insight/agents/${encodeURIComponent(selectedInsightAgent)}/patterns`)).json();const p=profRes.profile||{};const st=p.stats||{};const caps=(p.capabilities||[]).map(c=>`<span class="insight-score">${escHtml(c)}</span>`).join('');const tools=(p.tools||[]).slice(0,12).map(tk=>`<span class="insight-score">${escHtml(tk)}</span>`).join('');const patterns=(patRes.patterns||[]).map(pt=>{const cls=pt.outcome_hint==='failure'?' failure':pt.outcome_hint==='success'?' success':'';const steps=(pt.steps||[]).join(' → ');return `<div class="insight-pattern-item${cls}">${escHtml(steps)} <span class="hint">(${pt.success_count||0}✓ / ${pt.failure_count||0}✗)</span></div>`;}).join('')||`<p class="hint">${t('insight.noPatterns')}</p>`;panel.innerHTML=`<div class="info-callout"><strong>${t('insight.profileTitle')}: ${escHtml(p.display_name||selectedInsightAgent)}</strong><p class="hint">${escHtml(p.agent_type||'agent')} · ${st.total_runs||0} runs · ${st.completed||0} done · ${st.failed||0} failed · avg ${(st.avg_turns||0).toFixed(1)} ${t('insight.turns')}</p><div class="insight-scores">${caps||tools}</div></div><div class="insight-patterns"><h3 class="section-label">${t('insight.patternsTitle')}</h3>${patterns}</div>`;}catch(e){panel.innerHTML=`<p class="hint">${(e&&e.message)||e}</p>`;}}
 async function loadInsightRuns(){const el=document.getElementById('insightRunList');if(!el)return;if(!selectedInsightAgent){el.innerHTML=`<p class="hint">${t('insight.noAgents')}</p>`;return;}const q=selectedInsightAgent?`?agent_id=${encodeURIComponent(selectedInsightAgent)}&limit=50`:'';const res=await(await fetch('/api/insight/runs'+q)).json();insightRuns=(res.runs||[]).map(item=>item.run?{...item.run,risk:item.risk||{}}:item);if(!insightRuns.length){el.innerHTML=`<p class="hint">${t('insight.noRuns')}</p>`;document.getElementById('insightRunDetail').innerHTML='';return;}el.innerHTML='';for(const r of insightRuns){const card=document.createElement('div');card.className='insight-card';card.style.cursor='default';const checked=insightMergeSelection.has(r.run_id)?' checked':'';const risk=r.risk||{};let riskBadge='';if(risk.high_risk){const parts=[];if(risk.dlp_replacements)parts.push(`${t('insight.riskDlp')} ${risk.dlp_replacements}`);if((risk.safety_blocks||0)+(risk.safety_observations||0))parts.push(`${t('insight.riskSafety')} ${(risk.safety_blocks||0)+(risk.safety_observations||0)}`);riskBadge=`<span class="insight-risk-badge">${escHtml(parts.join(' · ')||'!')}</span>`;}card.innerHTML=`<label class="hint" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px"><input type="checkbox" data-run-id="${escAttr(r.run_id)}"${checked} onchange="toggleMergeRun(this)" /><span><p class="insight-card-title" style="margin:0">${escHtml(r.goal||r.run_id)}${riskBadge}</p><p class="insight-card-meta">${escHtml(r.status||'')} · ${r.turn_count||0} ${t('insight.turns')} · ${escHtml(formatLocalDateTime(r.started_at))}</p></span></label><div class="traffic-actions"><button type="button" class="secondary btn-sm" onclick="openGraphModal('${escAttr(r.run_id)}')">${t('insight.viewGraph')}</button><button type="button" class="secondary btn-sm" onclick="showRunReport('${escAttr(r.run_id)}')">${lang==='zh'?'反思报告':'Report'}</button><button type="button" class="secondary btn-sm" onclick="editRunGoal('${escAttr(r.run_id)}')">${t('insight.editGoal')}</button></div>`;el.appendChild(card);}}
 function toggleMergeRun(cb){const id=cb.getAttribute('data-run-id');if(!id)return;if(cb.checked)insightMergeSelection.add(id);else insightMergeSelection.delete(id);}
@@ -801,16 +837,19 @@ async function showRunReport(runId){const detail=document.getElementById('insigh
 async function openGraphModal(runId){const modal=document.getElementById('graphModal');const body=document.getElementById('graphModalBody');const meta=document.getElementById('graphModalMeta');const tabs=document.getElementById('graphModalTabs');if(!modal||!body)return;body.innerHTML=lang==='zh'?'加载中…':'Loading…';meta.textContent='';if(tabs)tabs.innerHTML='';modal.classList.add('open');try{const runRes=await(await fetch(`/api/insight/runs/${encodeURIComponent(runId)}`)).json();const graph=await(await fetch(`/api/insight/runs/${encodeURIComponent(runId)}/graph`)).json();graphModalData={run:runRes.run,events:runRes.events||[],graph};graphModalTab='graph';graphViewMode='dag';meta.textContent=runRes.run?.goal||runId;renderGraphModalTabs();renderGraphModalBody();}catch(e){body.innerHTML=`<p class="hint">${(e&&e.message)||e}</p>`;}}
 const CAUSAL_KIND_COLORS={goal:'#7dd3fc',subgoal:'#7dd3fc',decision:'#fcd34d',action:'#86efac',observation:'#c4b5fd',result:'#f472b6',reflection:'#94a3b8',statetransition:'#64748b',state:'#64748b'};
 function graphKindColor(kind){const k=String(kind||'').toLowerCase().replace(/[^a-z]/g,'');return CAUSAL_KIND_COLORS[k]||'#64748b';}
-function truncateGraphLabel(text,max){const s=String(text||'');return s.length<=max?s:s.slice(0,max-1)+'…';}
+function truncateGraphLabel(text,max){const s=String(text||'');return s.length<=max?s:s.slice(0,max-3)+'...';}
+function formatGraphNodeContent(text,idx){const detailText=t('insight.viewDetail');const maxLen=80;let body=String(text||'');if(body.length>maxLen)body=body.slice(0,maxLen-3)+'...';const detail=idx>=0?`<span class="graph-node-detail-inline" data-event-idx="${idx}" role="button" tabindex="0">${escHtml(detailText)}</span>`:'';return `${escHtml(body)}${detail?` ${detail}`:''}`;}
+function formatGraphListContent(text,idx){return formatGraphNodeContent(text,idx);}
 function buildGraphIndex(graph){const nodes=graph.nodes||[];const edges=graph.edges||[];const byId={};nodes.forEach(n=>{byId[n.id]=n;});const incoming={};const outgoing={};nodes.forEach(n=>{incoming[n.id]=[];outgoing[n.id]=[];});edges.forEach(e=>{if(byId[e.from]&&byId[e.to]){outgoing[e.from].push(e);incoming[e.to].push(e);}});const roots=nodes.filter(n=>!incoming[n.id]?.length);return {nodes,edges,byId,incoming,outgoing,roots:roots.length?roots:[nodes[0]].filter(Boolean)};}
 function assignGraphLayers(index){const {nodes,outgoing,roots}=index;const layer={};const queue=roots.map(n=>({id:n.id,l:0}));while(queue.length){const {id,l}=queue.shift();layer[id]=Math.max(layer[id]??0,l);(outgoing[id]||[]).forEach(e=>queue.push({id:e.to,l:l+1}));}nodes.forEach(n=>{if(layer[n.id]===undefined)layer[n.id]=0;});const layers={};nodes.forEach(n=>{const l=layer[n.id];(layers[l]||(layers[l]=[])).push(n);});return layers;}
-function layoutDagPositions(index){const layers=assignGraphLayers(index);const NODE_W=220,NODE_H=88,H_GAP=28,V_GAP=72;const positions={};Object.keys(layers).sort((a,b)=>Number(a)-Number(b)).forEach(l=>{const row=layers[l];const totalW=row.length*NODE_W+(row.length-1)*H_GAP;row.forEach((n,i)=>{positions[n.id]={x:i*(NODE_W+H_GAP)-totalW/2+NODE_W/2,y:Number(l)*(NODE_H+V_GAP),w:NODE_W,h:NODE_H};});});let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;Object.values(positions).forEach(p=>{minX=Math.min(minX,p.x-p.w/2);maxX=Math.max(maxX,p.x+p.w/2);minY=Math.min(minY,p.y-p.h/2);maxY=Math.max(maxY,p.y+p.h/2);});const pad=40;return {positions,bbox:{minX:minX-pad,maxX:maxX+pad,minY:minY-pad,maxY:maxY+pad,w:maxX-minX+2*pad,h:maxY-minY+2*pad}};}
+function layoutDagPositions(index){const layers=assignGraphLayers(index);const NODE_W=220,NODE_H=76,H_GAP=28,V_GAP=72;const positions={};Object.keys(layers).sort((a,b)=>Number(a)-Number(b)).forEach(l=>{const row=layers[l];const totalW=row.length*NODE_W+(row.length-1)*H_GAP;row.forEach((n,i)=>{positions[n.id]={x:i*(NODE_W+H_GAP)-totalW/2+NODE_W/2,y:Number(l)*(NODE_H+V_GAP),w:NODE_W,h:NODE_H};});});let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;Object.values(positions).forEach(p=>{minX=Math.min(minX,p.x-p.w/2);maxX=Math.max(maxX,p.x+p.w/2);minY=Math.min(minY,p.y-p.h/2);maxY=Math.max(maxY,p.y+p.h/2);});const pad=40;return {positions,bbox:{minX:minX-pad,maxX:maxX+pad,minY:minY-pad,maxY:maxY+pad,w:maxX-minX+2*pad,h:maxY-minY+2*pad}};}
 function parseGraphNodeIndex(nodeId){const m=String(nodeId||'').match(/^n(\d+)$/);return m?Number(m[1]):-1;}
 function edgeCurvePath(fromPos,toPos){const sx=fromPos.x,sy=fromPos.y+fromPos.h/2;const tx=toPos.x,ty=toPos.y-toPos.h/2;if(Math.abs(sx-tx)<4&&ty>sy)return `M ${sx} ${sy} L ${tx} ${ty-8}`;const midY=(sy+ty)/2;return `M ${sx} ${sy} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${ty}`;}
-function renderGraphNodeSvg(n,pos){const color=graphKindColor(n.kind);const kind=escHtml(n.kind||'');const label=escHtml(truncateGraphLabel(n.label,90));const idx=parseGraphNodeIndex(n.id);const detailBtn=idx>=0?`<button type="button" class="secondary btn-sm graph-node-detail" data-event-idx="${idx}">${t('insight.viewDetail')}</button>`:'';const x=pos.x-pos.w/2,y=pos.y-pos.h/2;return `<g class="causal-graph-node" data-node-id="${escAttr(n.id||'')}"><rect class="causal-graph-rect" x="${x}" y="${y}" width="${pos.w}" height="${pos.h}" rx="10" stroke="${color}"/><foreignObject x="${x}" y="${y}" width="${pos.w}" height="${pos.h}"><div xmlns="http://www.w3.org/1999/xhtml" class="causal-graph-inner"><div><div class="causal-kind ${escAttr(n.kind||'')}">${kind}</div><div class="causal-label">${label}</div></div>${detailBtn}</div></foreignObject></g>`;}
-function renderCausalGraphSvg(graph){const index=buildGraphIndex(graph);if(!index.nodes.length)return '';const layout=layoutDagPositions(index);const {positions,bbox}=layout;const edges=(graph.edges||[]).map(e=>{const f=positions[e.from],t=positions[e.to];if(!f||!t)return '';const lbl=escHtml(e.label||'');const mx=(f.x+t.x)/2,my=(f.y+t.y)/2;return `<g class="causal-graph-edge"><path d="${edgeCurvePath(f,t)}" marker-end="url(#causalArrow)"/>${lbl?`<text x="${mx}" y="${my}" class="causal-edge-label">${lbl}</text>`:''}</g>`;}).join('');const nodes=index.nodes.map(n=>renderGraphNodeSvg(n,positions[n.id])).join('');return `<svg class="causal-graph-svg" viewBox="${bbox.minX} ${bbox.minY} ${bbox.w} ${bbox.h}" xmlns="http://www.w3.org/2000/svg"><defs><marker id="causalArrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="rgba(148,163,184,.85)"/></marker></defs><g class="causal-graph-edges">${edges}</g><g class="causal-graph-nodes">${nodes}</g></svg>`;}
-function bindGraphNodeDetailButtons(root){if(!root)return;root.querySelectorAll('.graph-node-detail').forEach(btn=>{btn.onclick=(ev)=>{ev.stopPropagation();showGraphEventDetail(Number(btn.dataset.eventIdx));};});}
-function renderCausalGraphList(el,nodes){const flow=document.createElement('div');flow.className='causal-flow';nodes.forEach((n,i)=>{const box=document.createElement('div');box.className='causal-node';box.innerHTML=`<div class="causal-kind ${escAttr(n.kind||'')}">${escHtml(n.kind||'')}</div><div class="causal-label">${escHtml(n.label||'')}</div><button type="button" class="secondary btn-sm graph-node-detail" data-event-idx="${i}">${t('insight.viewDetail')}</button>`;flow.appendChild(box);});el.appendChild(flow);bindGraphNodeDetailButtons(el);}
+function renderGraphNodeSvg(n,pos){const color=graphKindColor(n.kind);const kind=escHtml(n.kind||'');const idx=parseGraphNodeIndex(n.id);const label=formatGraphNodeContent(n.label,idx);const x=pos.x-pos.w/2,y=pos.y-pos.h/2,w=pos.w,h=pos.h;return `<g class="causal-graph-node" data-node-id="${escAttr(n.id||'')}"><rect class="causal-graph-rect" x="${x}" y="${y}" width="${w}" height="${h}" rx="10" stroke="${color}" stroke-width="0.67"/><foreignObject x="${x}" y="${y}" width="${w}" height="${h}"><div xmlns="http://www.w3.org/1999/xhtml" class="causal-graph-inner"><div class="causal-kind ${escAttr(n.kind||'')}">${kind}</div><div class="causal-label">${label}</div></div></foreignObject></g>`;}
+let causalGraphRenderSeq=0;
+function renderCausalGraphSvg(graph){causalGraphRenderSeq+=1;const markerId=`causalArrow${causalGraphRenderSeq}`;const index=buildGraphIndex(graph);if(!index.nodes.length)return '';const layout=layoutDagPositions(index);const {positions,bbox}=layout;const edges=(graph.edges||[]).map(e=>{const f=positions[e.from],t=positions[e.to];if(!f||!t)return '';const lbl=escHtml(e.label||'');const mx=(f.x+t.x)/2,my=(f.y+t.y)/2;return `<g class="causal-graph-edge"><path d="${edgeCurvePath(f,t)}" marker-end="url(#${markerId})"/>${lbl?`<text x="${mx}" y="${my}" class="causal-edge-label">${lbl}</text>`:''}</g>`;}).join('');const nodes=index.nodes.map(n=>renderGraphNodeSvg(n,positions[n.id])).join('');return `<svg class="causal-graph-svg" viewBox="${bbox.minX} ${bbox.minY} ${bbox.w} ${bbox.h}" xmlns="http://www.w3.org/2000/svg"><defs><marker id="${markerId}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="rgba(148,163,184,.85)"/></marker></defs><g class="causal-graph-edges">${edges}</g><g class="causal-graph-nodes">${nodes}</g></svg>`;}
+function bindGraphNodeDetailButtons(root){if(!root)return;root.querySelectorAll('.graph-node-detail,.graph-node-detail-inline').forEach(btn=>{btn.onclick=(ev)=>{ev.stopPropagation();showGraphEventDetail(Number(btn.dataset.eventIdx));};});}
+function renderCausalGraphList(el,nodes){const flow=document.createElement('div');flow.className='causal-flow';nodes.forEach(n=>{const idx=parseGraphNodeIndex(n.id);const box=document.createElement('div');box.className='causal-node';box.innerHTML=`<div class="causal-kind ${escAttr(n.kind||'')}">${escHtml(n.kind||'')}</div><div class="causal-label">${formatGraphListContent(n.label,idx)}</div>`;flow.appendChild(box);});el.appendChild(flow);bindGraphNodeDetailButtons(el);}
 function showGraphEventDetail(eventIdx){const events=graphModalData?.events||[];const e=events[eventIdx];if(!e)return;const panel=document.getElementById('graphEventDetail');const title=document.getElementById('graphEventDetailTitle');const body=document.getElementById('graphEventDetailBody');if(!panel||!title||!body)return;title.textContent=`${t('insight.eventDetailTitle')} · ${e.kind||''} · #${e.seq??''}`;const conf=e.confidence!=null?String(e.confidence):'';body.innerHTML=`<dl><dt>${lang==='zh'?'序号':'Seq'}</dt><dd>${escHtml(String(e.seq??''))}</dd><dt>${lang==='zh'?'类型':'Kind'}</dt><dd>${escHtml(e.kind||'')}</dd><dt>${lang==='zh'?'时间':'Time'}</dt><dd>${escHtml(formatLocalDateTime(e.timestamp))}</dd><dt>${lang==='zh'?'摘要':'Summary'}</dt><dd>${escHtml(e.summary||'')}</dd>${conf?`<dt>${lang==='zh'?'置信度':'Confidence'}</dt><dd>${escHtml(conf)}</dd>`:''}${e.audit_id?`<dt>audit</dt><dd>${escHtml(e.audit_id)}</dd>`:''}</dl>`;panel.classList.add('open');}
 function closeGraphEventDetail(){document.getElementById('graphEventDetail')?.classList.remove('open');}
 function renderCausalGraph(el,graph){closeGraphEventDetail();el.innerHTML='';const nodes=graph?.nodes||[];if(!nodes.length){el.innerHTML=`<p class="hint">${lang==='zh'?'暂无轨迹节点':'No trajectory nodes yet'}</p>`;return;}const toolbar=document.createElement('div');toolbar.className='causal-graph-toolbar';[['dag',t('insight.viewDag')],['list',t('insight.viewList')]].forEach(([id,label])=>{const btn=document.createElement('button');btn.type='button';btn.className='secondary btn-sm'+(graphViewMode===id?' active':'');btn.textContent=label;btn.onclick=()=>{graphViewMode=id;renderGraphModalBody();};toolbar.appendChild(btn);});el.appendChild(toolbar);if(graphViewMode==='list'){renderCausalGraphList(el,nodes);return;}const wrap=document.createElement('div');wrap.className='causal-graph-wrap';wrap.innerHTML=renderCausalGraphSvg(graph);el.appendChild(wrap);bindGraphNodeDetailButtons(wrap);}
@@ -832,7 +871,7 @@ const fileDrop=document.getElementById('fileDrop');const pathDrop=document.getEl
 setupPathDropZone(fileDrop,paths=>applyDroppedPaths(paths,fileDrop));
 setupPathDropZone(pathDrop,paths=>applyDroppedPaths(paths,pathDrop));
 window.addEventListener('pagehide',()=>{syncDraftFromForm();saveRoutingDraft();});
-langSelect.value=lang;document.documentElement.lang=lang==='zh'?'zh-CN':'en';applyI18n();statusText.textContent=t('status.loading');loadStatus();loadConfig();loadEvents();loadAudits();loadTraffic();loadInsight();setInterval(()=>{loadEvents();loadAudits();if(document.getElementById('logs').classList.contains('active'))loadTraffic();if(document.getElementById('agentmirror').classList.contains('active'))loadInsight();},8000);
+langSelect.value=lang;document.documentElement.lang=lang==='zh'?'zh-CN':'en';applyI18n();statusText.textContent=t('status.loading');loadStatus();loadConfig();loadEvents();loadAudits();loadTraffic();loadOverviewAgents();setInterval(()=>{loadEvents();loadAudits();if(document.getElementById('logs').classList.contains('active'))loadTraffic();if(document.getElementById('overview').classList.contains('active'))loadOverviewAgents();if(document.getElementById('agentmirror').classList.contains('active'))loadInsight();},8000);
 </script>
 </body>
 </html>

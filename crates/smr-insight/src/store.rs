@@ -10,6 +10,7 @@ use crate::models::{
     AgentRecord, AgentRunStats, CognitiveEvent, DailyReport, EventKind, ReflectionReport,
     RunActionSequence, RunRecord, RunStatus,
 };
+use crate::separator::{goals_related, is_bootstrap_goal, is_weak_goal, run_continue_window};
 
 pub struct InsightStore {
     conn: Mutex<Connection>,
@@ -243,6 +244,66 @@ impl InsightStore {
             return Ok(Some(map_run(row)?));
         }
         Ok(None)
+    }
+
+    pub fn list_runs_for_session(&self, session_id: &str, limit: usize) -> Result<Vec<RunRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
+             FROM insight_runs
+             WHERE session_id = ?1
+             ORDER BY started_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit as i64], map_run)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Find an existing run for the same agent to continue (never crosses agents).
+    pub fn find_duplicate_run(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        goal: &str,
+        turn_time: DateTime<Utc>,
+    ) -> Result<Option<RunRecord>> {
+        let mut candidates: Vec<RunRecord> = Vec::new();
+        let mut push_candidate = |run: RunRecord| {
+            if run.agent_id != agent_id || !run_continue_window(turn_time, &run) {
+                return;
+            }
+            if goals_related(&run.goal, goal)
+                || (is_bootstrap_goal(&run.goal) && !is_bootstrap_goal(goal))
+                || (is_weak_goal(&run.goal) && !is_weak_goal(goal))
+            {
+                candidates.push(run);
+            }
+        };
+
+        if let Some(run) = self.find_active_run(agent_id, session_id)? {
+            push_candidate(run);
+        }
+        for run in self.list_runs_for_session(session_id, 20)? {
+            push_candidate(run);
+        }
+        if !goal.trim().is_empty() && goal != "Unknown task" {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
+                 FROM insight_runs
+                 WHERE agent_id = ?1
+                 ORDER BY started_at DESC LIMIT 12",
+            )?;
+            let rows = stmt.query_map(params![agent_id], map_run)?;
+            for run in rows.filter_map(|r| r.ok()) {
+                push_candidate(run);
+            }
+        }
+
+        Ok(candidates.into_iter().max_by(|a, b| {
+            a.turn_count
+                .cmp(&b.turn_count)
+                .then_with(|| a.started_at.cmp(&b.started_at))
+        }))
     }
 
     /// Latest run for a proxy session (used when agent fingerprint drifted mid-conversation).

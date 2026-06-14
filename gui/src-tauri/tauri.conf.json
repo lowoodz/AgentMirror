@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "LLM-SafeRoute",
+        "title": "AgentMirror",
         "hiddenTitle": true,
         "titleBarStyle": "Transparent",
         "width": 1100,

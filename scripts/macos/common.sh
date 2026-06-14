@@ -102,6 +102,6 @@ smr_curl_health_ok() {
 smr_curl_ui_ok() {
   local base="${1:-http://127.0.0.1:8080}"
   local n
-  n="$(curl -sf "${base}/ui" 2>/dev/null | grep -c 'LLM-SafeRoute' 2>/dev/null || true)"
+  n="$(curl -sf "${base}/ui" 2>/dev/null | grep -c 'AgentMirror' 2>/dev/null || true)"
   [[ "${n:-0}" -gt 0 ]]
 }

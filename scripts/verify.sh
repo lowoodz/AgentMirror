@@ -44,7 +44,7 @@ bash "${ROOT}/scripts/wait-file-index-ready.sh" "http://127.0.0.1:${PORT}" 120
 
 echo "==> ui"
 ui=$(curl -sf "http://127.0.0.1:${PORT}/ui")
-[[ "$ui" == *LLM-SafeRoute* ]]
+[[ "$ui" == *AgentMirror* ]]
 
 echo ""
 echo "All verification checks passed."
