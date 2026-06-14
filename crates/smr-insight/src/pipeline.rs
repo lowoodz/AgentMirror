@@ -59,7 +59,13 @@ impl Pipeline {
 
         let active_run = self
             .store
-            .find_active_run(&ctx.agent_id, &turn.session_id)?;
+            .find_active_run(&ctx.agent_id, &turn.session_id)?
+            .or_else(|| {
+                self.store
+                    .find_active_run_for_session(&turn.session_id)
+                    .ok()
+                    .flatten()
+            });
         let is_new_run = should_start_new_run(&full_req, active_run.as_ref(), turn.timestamp);
 
         let mut run = if is_new_run { None } else { active_run };
@@ -84,6 +90,9 @@ impl Pipeline {
         }
 
         let mut run = run.expect("run must exist");
+        if run.status != RunStatus::Running {
+            run.status = RunStatus::Running;
+        }
         run.turn_count += 1;
         run.ended_at = Some(turn.timestamp);
 

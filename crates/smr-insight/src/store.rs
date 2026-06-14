@@ -235,10 +235,26 @@ impl InsightStore {
         let mut stmt = conn.prepare(
             "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
              FROM insight_runs
-             WHERE agent_id = ?1 AND session_id = ?2 AND status = 'running'
+             WHERE agent_id = ?1 AND session_id = ?2
              ORDER BY started_at DESC LIMIT 1",
         )?;
         let mut rows = stmt.query(params![agent_id, session_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(map_run(row)?));
+        }
+        Ok(None)
+    }
+
+    /// Latest run for a proxy session (used when agent fingerprint drifted mid-conversation).
+    pub fn find_active_run_for_session(&self, session_id: &str) -> Result<Option<RunRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
+             FROM insight_runs
+             WHERE session_id = ?1
+             ORDER BY started_at DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![session_id])?;
         if let Some(row) = rows.next()? {
             return Ok(Some(map_run(row)?));
         }

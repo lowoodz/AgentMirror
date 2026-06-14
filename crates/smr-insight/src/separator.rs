@@ -24,12 +24,19 @@ pub fn resolve_agent(
         format!("fp-{}", short_hash(fp.as_bytes()))
     };
 
-    let agent_type = infer_agent_type(&req.system_excerpt, &req.tools, infer_goal_from_request(req));
-    let display_name = if let Some(existing) = existing_agent {
-        existing.display_name.clone()
-    } else {
-        infer_display_name(&agent_type, &req.tools)
-    };
+    let platform = detect_platform(
+        &req.system_excerpt,
+        &req.tools,
+        turn.agent_header.as_deref(),
+        req.model.as_deref(),
+    );
+    let agent_type = infer_agent_type(
+        &req.system_excerpt,
+        &req.tools,
+        infer_goal_from_request(req),
+        &platform,
+    );
+    let display_name = platform.display_name.to_string();
 
     let now = turn.timestamp;
     let record = AgentRecord {
@@ -48,11 +55,15 @@ pub fn resolve_agent(
     }
 }
 
-fn agent_fingerprint(system: &str, tools: &[String]) -> String {
-    let mut parts = vec![format!("sys:{system}")];
+fn agent_fingerprint(_system: &str, tools: &[String]) -> String {
+    // Tool names are stable across OpenClaw multi-turn requests; system prompts may grow each turn.
     if !tools.is_empty() {
-        parts.push(format!("tools:{}", tools.join(",")));
+        let mut sorted: Vec<_> = tools.iter().map(|t| t.to_ascii_lowercase()).collect();
+        sorted.sort();
+        sorted.dedup();
+        return format!("tools:{}", sorted.join(","));
     }
+    let parts = vec![format!("sys:{_system}")];
     parts.join("\n")
 }
 
@@ -60,16 +71,24 @@ fn short_hash(data: &[u8]) -> String {
     format!("{:016x}", xxh64(data, 0))
 }
 
-fn infer_agent_type(system: &str, tools: &[String], goal: String) -> String {
+fn infer_agent_type(system: &str, tools: &[String], goal: String, platform: &PlatformInfo) -> String {
     let lower = system.to_ascii_lowercase();
     let tool_str = tools.join(" ").to_ascii_lowercase();
     let goal_lower = goal.to_ascii_lowercase();
     if crate::extract::is_research_goal(&goal) {
         return "research".to_string();
     }
-    if lower.contains("claude code") || tool_str.contains("edit") && tool_str.contains("bash") {
+    if platform.platform_id == "claude_code"
+        || platform.platform_id == "codex"
+        || platform.platform_id == "aider"
+        || platform.platform_id == "cline"
+        || lower.contains("claude code")
+        || tool_str.contains("edit") && tool_str.contains("bash")
+    {
         "coding".to_string()
     } else if tool_str.contains("browser") || tool_str.contains("search") || tool_str.contains("web") {
+        "research".to_string()
+    } else if platform.platform_id == "openclaw" || platform.platform_id == "hermes" {
         "research".to_string()
     } else if tools.iter().any(|t| {
         let n = t.to_ascii_lowercase();
@@ -83,18 +102,115 @@ fn infer_agent_type(system: &str, tools: &[String], goal: String) -> String {
     }
 }
 
-fn infer_display_name(agent_type: &str, tools: &[String]) -> String {
-    match agent_type {
-        "coding" => "Coding Agent".to_string(),
-        "research" => "Research Agent".to_string(),
-        "chat" => "Chat Agent".to_string(),
-        _ => {
-            if tools.is_empty() {
-                "Agent".to_string()
-            } else {
-                format!("Agent ({})", tools.first().unwrap_or(&"tools".to_string()))
-            }
+struct PlatformInfo {
+    platform_id: &'static str,
+    display_name: &'static str,
+}
+
+fn detect_platform(
+    system: &str,
+    tools: &[String],
+    agent_header: Option<&str>,
+    model: Option<&str>,
+) -> PlatformInfo {
+    let lower = system.to_ascii_lowercase();
+    let tool_str = tools.join(" ").to_ascii_lowercase();
+    let header = agent_header.unwrap_or("").to_ascii_lowercase();
+    let model_lower = model.unwrap_or("").to_ascii_lowercase();
+    let combined = format!("{lower} {header} {model_lower}");
+
+    const PLATFORMS: &[(&str, &str, &[&str])] = &[
+        ("openclaw", "OpenClaw", &["openclaw", "open claw"]),
+        ("hermes", "Hermes", &["hermes"]),
+        ("claude_code", "Claude Code", &["claude code", "claude-code"]),
+        ("codex", "Codex", &["codex", "openai codex"]),
+        ("cursor", "Cursor", &["cursor agent", "cursor tab", "cursor"]),
+        ("windsurf", "Windsurf", &["windsurf", "cascade"]),
+        ("copilot", "GitHub Copilot", &["github copilot", "copilot agent"]),
+        ("aider", "Aider", &["aider"]),
+        ("cline", "Cline", &["cline", "claude dev"]),
+        ("gemini", "Gemini", &["gemini cli", "google gemini"]),
+        ("chatgpt", "ChatGPT", &["chatgpt agent", "chatgpt"]),
+    ];
+
+    for (id, name, markers) in PLATFORMS {
+        if markers.iter().any(|m| combined.contains(m)) {
+            return PlatformInfo {
+                platform_id: id,
+                display_name: name,
+            };
         }
+    }
+
+    if tools.iter().any(|t| t.eq_ignore_ascii_case("exec"))
+        && !tool_str.contains("read")
+        && !tool_str.contains("edit")
+        && !tool_str.contains("apply_patch")
+    {
+        return PlatformInfo {
+            platform_id: "openclaw",
+            display_name: "OpenClaw",
+        };
+    }
+
+    if tool_str.contains("read")
+        && (tool_str.contains("edit") || tool_str.contains("write") || tool_str.contains("bash"))
+    {
+        return PlatformInfo {
+            platform_id: "claude_code",
+            display_name: "Claude Code",
+        };
+    }
+
+    if tools.is_empty() {
+        PlatformInfo {
+            platform_id: "chat",
+            display_name: "Chat",
+        }
+    } else {
+        PlatformInfo {
+            platform_id: "agent",
+            display_name: "Agent",
+        }
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::*;
+
+    #[test]
+    fn detects_openclaw_from_system_and_exec_tools() {
+        let p = detect_platform(
+            "You are OpenClaw, a personal assistant.",
+            &["exec".to_string()],
+            None,
+            None,
+        );
+        assert_eq!(p.display_name, "OpenClaw");
+    }
+
+    #[test]
+    fn detects_claude_code_from_tools() {
+        let p = detect_platform(
+            "You are a software engineer.",
+            &["Read".to_string(), "Edit".to_string(), "Bash".to_string()],
+            None,
+            None,
+        );
+        assert_eq!(p.display_name, "Claude Code");
+    }
+
+    #[test]
+    fn detects_codex_from_model() {
+        let p = detect_platform("", &[], None, Some("codex-mini"));
+        assert_eq!(p.display_name, "Codex");
+    }
+
+    #[test]
+    fn exec_only_defaults_to_openclaw() {
+        let p = detect_platform("assistant", &["exec".to_string()], None, None);
+        assert_eq!(p.display_name, "OpenClaw");
     }
 }
 
@@ -121,7 +237,21 @@ pub fn should_start_new_run(
         return true;
     };
 
+    if run.status == RunStatus::Failed {
+        return true;
+    }
+
     if run.status != RunStatus::Running {
+        if let Some(ended) = run.ended_at {
+            if turn_time.signed_duration_since(ended).num_minutes() <= RUN_IDLE_MINUTES {
+                if let Some(user_text) = latest_user_message(req) {
+                    if looks_like_new_task(user_text, &run.goal) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
         return true;
     }
 
@@ -282,6 +412,45 @@ mod tests {
     }
 
     #[test]
+    fn stable_agent_id_when_system_grows() {
+        let body1 = br#"{"messages":[{"role":"system","content":"You are OpenClaw v1"},{"role":"user","content":"task"}],"tools":[{"type":"function","function":{"name":"exec"}}]}"#;
+        let body2 = br#"{"messages":[{"role":"system","content":"You are OpenClaw v1 with extra context injected each turn"},{"role":"user","content":"task"}],"tools":[{"type":"function","function":{"name":"exec"}}]}"#;
+        let req1 = parse_request(body1);
+        let req2 = parse_request(body2);
+        let turn = TraceTurn {
+            audit_id: "a1".into(),
+            session_id: "s1".into(),
+            agent_header: None,
+            timestamp: Utc::now(),
+            request_body: body1.to_vec(),
+            response_body: vec![],
+        };
+        let ctx1 = resolve_agent(&turn, &req1, None);
+        let ctx2 = resolve_agent(&turn, &req2, None);
+        assert_eq!(ctx1.agent_id, ctx2.agent_id);
+    }
+
+    #[test]
+    fn continues_recent_completed_run_in_same_session() {
+        let req = parse_request(
+            r#"{"messages":[{"role":"tool","content":"search results"}]}"#.as_bytes(),
+        );
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Completed,
+            goal: "帮我调研珠海金智维，看看是否值得投资".into(),
+            turn_count: 5,
+            messages_seen: 10,
+            graph_path: None,
+        };
+        assert!(!should_start_new_run(&req, Some(&run), Utc::now()));
+    }
+
+    #[test]
     fn infers_research_agent_for_exec_tools_and_goal() {
         let body = r#"{"messages":[{"role":"user","content":"帮我调研珠海金智维，看看是否值得投资"}],"tools":[{"type":"function","function":{"name":"exec"}}]}"#.as_bytes();
         let req = parse_request(body);
@@ -294,6 +463,7 @@ mod tests {
             response_body: vec![],
         };
         let ctx = resolve_agent(&turn, &req, None);
+        assert_eq!(ctx.agent_record.display_name, "OpenClaw");
         assert_eq!(ctx.agent_record.agent_type, "research");
     }
 

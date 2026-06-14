@@ -330,23 +330,27 @@ fn looks_like_result(text: &str, research: bool) -> bool {
     {
         return true;
     }
-    if research {
+        if research {
         let strong_markers = ["结论", "投资建议", "是否值得", "不推荐", "推荐", "conclusion", "investment thesis"];
         if strong_markers
             .iter()
             .any(|m| text.contains(m) || lower.contains(&m.to_ascii_lowercase()))
         {
-            return true;
+            let min_len = if text.contains("结论") || lower.contains("conclusion") {
+                40
+            } else {
+                80
+            };
+            return text.chars().count() >= min_len;
         }
         let research_markers = [
-            "建议", "总结", "综合来看", "总体而言", "风险", "优势", "劣势", "谨慎", "值得关注",
-            "recommend", "summary",
+            "总结", "综合来看", "总体而言",
         ];
         if research_markers
             .iter()
             .any(|m| text.contains(m) || lower.contains(&m.to_ascii_lowercase()))
         {
-            return text.chars().count() >= 40;
+            return text.chars().count() >= 120;
         }
     }
     false
@@ -393,6 +397,8 @@ mod tests {
     fn detects_research_result_in_chinese() {
         let text = "综合以上调研，珠海金智维在 RPA 领域具备一定优势，但估值偏高。结论：谨慎关注，暂不建议重仓投资。";
         assert!(looks_like_result(text, true));
+        let interim = "接下来我会从融资、竞争格局两方面继续搜索，综合来看需要更多一手资料。";
+        assert!(!looks_like_result(interim, true));
     }
 
     #[test]

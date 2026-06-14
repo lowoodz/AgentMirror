@@ -104,6 +104,7 @@ Nav order: **AgentMirror** first.
 
 - Agent list + run cards (checkbox merge, edit goal)
 - Trajectory modal: **Graph / Timeline / Events / Raw traffic**
+- Graph tab: **directed graph** (layered DAG), **mind map** (radial from Goal), or list fallback; edges show causal labels
 - Daily report date picker + viewer
 - Reflection report with dialectical + counterfactual (when LLM enabled)
 

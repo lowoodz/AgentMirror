@@ -191,8 +191,8 @@ pub fn finalize_run_if_idle(run: &mut RunRecord, last_activity: chrono::DateTime
 
 pub fn outcome_from_status(status: RunStatus, outcome: RunOutcome) -> RunStatus {
     match outcome {
-        RunOutcome::Failed => RunStatus::Failed,
-        RunOutcome::Success if status == RunStatus::Running => RunStatus::Completed,
+        RunOutcome::Failed if status == RunStatus::Running => RunStatus::Failed,
+        // Keep the run open for multi-turn sessions; idle timeout finalizes Completed.
         _ => status,
     }
 }
