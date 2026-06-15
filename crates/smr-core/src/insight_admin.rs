@@ -95,11 +95,21 @@ async fn api_insight_reset(
 
 async fn api_insight_status(State(s): State<HttpState>) -> Json<serde_json::Value> {
     let cfg = s.app.config();
+    let critic_llm = if cfg.insight.llm_critic {
+        let snap = s.app.snapshot();
+        Some(crate::insight_llm::probe_critic_group(
+            snap.router,
+            &cfg.insight.critic_model_group,
+        ))
+    } else {
+        None
+    };
     Json(serde_json::json!({
         "enabled": s.app.insight.enabled(),
         "config": cfg.insight,
         "traffic_bodies": cfg.logging.save_traffic_bodies,
         "needs_traffic": cfg.insight.require_traffic_bodies && !cfg.logging.save_traffic_bodies,
+        "critic_llm": critic_llm,
     }))
 }
 

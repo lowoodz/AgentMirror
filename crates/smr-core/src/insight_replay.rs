@@ -11,6 +11,7 @@ pub struct ReplayStats {
     pub skipped_not_success: usize,
     pub skipped_empty_body: usize,
     pub errors: usize,
+    pub runs_llm_finalized: usize,
 }
 
 pub fn reset_insight(app: &SharedApp) -> anyhow::Result<ResetStats> {
@@ -53,6 +54,15 @@ pub fn replay_from_traffic(app: &SharedApp, limit: usize) -> anyhow::Result<Repl
             Err(err) => {
                 tracing::warn!(?err, audit_id = %audit.id, "AgentMirror replay failed");
                 stats.errors += 1;
+            }
+        }
+    }
+
+    if stats.submitted > 0 {
+        match app.insight.finalize_replayed_runs() {
+            Ok(n) => stats.runs_llm_finalized = n,
+            Err(err) => {
+                tracing::warn!(?err, "AgentMirror replay LLM finalization failed");
             }
         }
     }

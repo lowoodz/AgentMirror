@@ -1,12 +1,34 @@
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::critic::{evaluate, CriticInput};
 use crate::graph::{build_graph, execution_summary};
-use crate::models::{DailyReport, DailyRunSummary, ReflectionReport, RunOutcome, RunRecord, RunStatus};
-use crate::infer::enrich_report_with_llm;
+use crate::infer::generate_reflection_report_llm;
 use crate::llm::LlmClient;
+use crate::models::{
+    CognitiveEvent, DailyReport, DailyRunSummary, Issue, ReflectionReport, RunOutcome,
+    RunRecord, RunStatus,
+};
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::store::InsightStore;
+
+/// No new traffic for this long → treat run as done and generate LLM reflection report.
+pub const RUN_REPORT_IDLE_MINUTES: i64 = 10;
+
+pub fn last_activity_at(run: &RunRecord, events: &[CognitiveEvent]) -> DateTime<Utc> {
+    events
+        .iter()
+        .map(|e| e.timestamp)
+        .max()
+        .or(run.ended_at)
+        .unwrap_or(run.started_at)
+}
+
+pub fn is_idle_for_report(last_activity: DateTime<Utc>) -> bool {
+    Utc::now()
+        .signed_duration_since(last_activity)
+        .num_minutes()
+        >= RUN_REPORT_IDLE_MINUTES
+}
 
 pub fn build_reflection_report(
     store: &InsightStore,
@@ -17,12 +39,6 @@ pub fn build_reflection_report(
 ) -> anyhow::Result<ReflectionReport> {
     let events = store.list_events(&run.run_id)?;
     let safety_findings = scan_action_events(&events, safety);
-    let (critics, issues, suggestions, outcome) = evaluate(CriticInput {
-        events: &events,
-        turn_count: run.turn_count,
-        goal: &run.goal,
-        safety_findings: &safety_findings,
-    });
 
     let summary = execution_summary(&events);
     let execution_summary = if summary.is_empty() {
@@ -31,21 +47,139 @@ pub fn build_reflection_report(
         summary
     };
 
+    let prior = store.get_report(&run.run_id).ok().flatten();
+    let last_activity = last_activity_at(run, &events);
+
+    if llm_critic
+        && should_generate_llm_report(run, events.len(), prior.as_ref(), last_activity)
+    {
+        if let Some(report) = generate_reflection_report_llm(
+            llm,
+            run,
+            &events,
+            &execution_summary,
+            &safety_findings,
+            prior.as_ref(),
+        ) {
+            return Ok(report);
+        }
+        tracing::warn!(
+            run_id = %run.run_id,
+            "LLM reflection report unavailable — falling back to rule baseline"
+        );
+    }
+
+    // While run is active, keep the last LLM report and refresh lightweight metadata.
+    if llm_critic {
+        if let Some(mut prior) = prior {
+            if prior.llm_enhanced {
+                refresh_running_llm_report(
+                    &mut prior,
+                    run,
+                    &execution_summary,
+                    &events,
+                    &safety_findings,
+                );
+                return Ok(prior);
+            }
+        }
+    }
+
+    build_rule_reflection_report(run, &events, &execution_summary, &safety_findings)
+}
+
+/// LLM reports when the run ends, or when the last event is idle ≥ RUN_REPORT_IDLE_MINUTES.
+fn should_generate_llm_report(
+    run: &RunRecord,
+    event_count: usize,
+    prior: Option<&ReflectionReport>,
+    last_activity: DateTime<Utc>,
+) -> bool {
+    if event_count < 2 {
+        return false;
+    }
+    if prior
+        .map(|p| p.llm_enhanced && p.llm_event_count >= event_count as u32)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    match run.status {
+        RunStatus::Completed | RunStatus::Failed | RunStatus::Stale => true,
+        RunStatus::Running => is_idle_for_report(last_activity),
+    }
+}
+
+fn refresh_running_llm_report(
+    report: &mut ReflectionReport,
+    run: &RunRecord,
+    execution_summary: &str,
+    events: &[crate::models::CognitiveEvent],
+    safety_findings: &[String],
+) {
+    report.execution_summary = execution_summary.to_string();
+    merge_safety_into_report(report, safety_findings);
+    let (_, _, _, _, outcome) = evaluate(CriticInput {
+        events,
+        turn_count: run.turn_count,
+        goal: &run.goal,
+        safety_findings,
+    });
+    report.outcome = outcome;
+}
+
+pub fn merge_safety_into_report(report: &mut ReflectionReport, safety_findings: &[String]) {
+    for finding in safety_findings {
+        let issue = Issue {
+            message: finding.clone(),
+            severity: "high".to_string(),
+        };
+        if !report
+            .issues
+            .iter()
+            .any(|i| i.message == issue.message)
+        {
+            report.issues.push(issue);
+        }
+    }
+    report.risks = report
+        .issues
+        .iter()
+        .filter(|i| i.severity == "high")
+        .map(|i| i.message.clone())
+        .collect();
+}
+
+fn build_rule_reflection_report(
+    run: &RunRecord,
+    events: &[crate::models::CognitiveEvent],
+    execution_summary: &str,
+    safety_findings: &[String],
+) -> anyhow::Result<ReflectionReport> {
+    let (critics, critic_analyses, issues, suggestions, outcome) = evaluate(CriticInput {
+        events,
+        turn_count: run.turn_count,
+        goal: &run.goal,
+        safety_findings,
+    });
+
     let risks = issues
         .iter()
         .filter(|i| i.severity == "high")
         .map(|i| i.message.clone())
         .collect();
 
-    let mut report = ReflectionReport {
+    Ok(ReflectionReport {
         run_id: run.run_id.clone(),
         goal: run.goal.clone(),
-        execution_summary,
+        original_goal: None,
+        execution_summary: execution_summary.to_string(),
         outcome,
         issues,
         risks,
         suggestions,
         critics,
+        critic_analyses,
         generated_at: Utc::now(),
         dialectical: None,
         counterfactuals: Vec::new(),
@@ -53,13 +187,35 @@ pub fn build_reflection_report(
         logical_analysis: None,
         reflection_summary: None,
         llm_enhanced: false,
-    };
+        llm_event_count: 0,
+    })
+}
 
-    if llm_critic {
-        enrich_report_with_llm(llm, run, &events, &mut report);
+/// Mark still-running runs completed and regenerate LLM reports (post traffic replay).
+pub fn finalize_runs_for_llm_reports(
+    store: &InsightStore,
+    safety: Option<&dyn SafetyScanner>,
+    llm: Option<&dyn LlmClient>,
+    llm_critic: bool,
+) -> anyhow::Result<usize> {
+    if !llm_critic {
+        return Ok(0);
     }
-
-    Ok(report)
+    let mut updated = 0usize;
+    for mut run in store.list_runs(None, 10_000)? {
+        if run.status != RunStatus::Running {
+            continue;
+        }
+        run.status = RunStatus::Completed;
+        if run.ended_at.is_none() {
+            run.ended_at = Some(Utc::now());
+        }
+        store.update_run(&run)?;
+        let report = build_reflection_report(store, &run, safety, llm, llm_critic)?;
+        store.save_report(&report)?;
+        updated += 1;
+    }
+    Ok(updated)
 }
 
 pub fn generate_daily_report(
@@ -182,18 +338,174 @@ pub fn persist_graph(store: &InsightStore, run_id: &str) -> anyhow::Result<Strin
     store.save_graph_json(run_id, &json)
 }
 
-pub fn finalize_run_if_idle(run: &mut RunRecord, last_activity: chrono::DateTime<Utc>) {
+pub fn finalize_run_if_idle(run: &mut RunRecord, last_activity: DateTime<Utc>) {
     let idle = Utc::now().signed_duration_since(last_activity);
-    if run.status == RunStatus::Running && idle.num_minutes() > 30 {
+    if run.status == RunStatus::Running && idle.num_minutes() >= RUN_REPORT_IDLE_MINUTES {
         run.status = RunStatus::Completed;
         run.ended_at = Some(last_activity);
     }
 }
 
+/// Background sweep: finalize idle running runs and generate LLM reports.
+pub fn sweep_idle_running_runs(
+    store: &InsightStore,
+    safety: Option<&dyn SafetyScanner>,
+    llm: Option<&dyn LlmClient>,
+    llm_critic: bool,
+) -> anyhow::Result<usize> {
+    if !llm_critic {
+        return Ok(0);
+    }
+    let mut updated = 0usize;
+    for mut run in store.list_runs(None, 10_000)? {
+        if run.status != RunStatus::Running {
+            continue;
+        }
+        let events = store.list_events(&run.run_id)?;
+        if events.len() < 2 {
+            continue;
+        }
+        let last = last_activity_at(&run, &events);
+        if !is_idle_for_report(last) {
+            continue;
+        }
+        finalize_run_if_idle(&mut run, last);
+        store.update_run(&run)?;
+        let report = build_reflection_report(store, &run, safety, llm, llm_critic)?;
+        store.save_report(&report)?;
+        if report.llm_enhanced {
+            updated += 1;
+            tracing::info!(
+                run_id = %run.run_id,
+                idle_minutes = RUN_REPORT_IDLE_MINUTES,
+                "AgentMirror idle run — LLM reflection report generated"
+            );
+        }
+    }
+    Ok(updated)
+}
+
 pub fn outcome_from_status(status: RunStatus, outcome: RunOutcome) -> RunStatus {
     match outcome {
         RunOutcome::Failed if status == RunStatus::Running => RunStatus::Failed,
-        // Keep the run open for multi-turn sessions; idle timeout finalizes Completed.
         _ => status,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::CriticsScore;
+
+    #[test]
+    fn defers_llm_while_running_and_recent() {
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Running,
+            goal: "task".into(),
+            turn_count: 5,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        assert!(!should_generate_llm_report(
+            &run,
+            10,
+            None,
+            Utc::now()
+        ));
+    }
+
+    #[test]
+    fn generates_llm_when_running_but_idle() {
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now() - chrono::Duration::minutes(20),
+            ended_at: Some(Utc::now() - chrono::Duration::minutes(15)),
+            status: RunStatus::Running,
+            goal: "task".into(),
+            turn_count: 5,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        let last = Utc::now() - chrono::Duration::minutes(11);
+        assert!(should_generate_llm_report(&run, 10, None, last));
+    }
+
+    #[test]
+    fn generates_llm_when_run_completed() {
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Completed,
+            goal: "task".into(),
+            turn_count: 5,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        assert!(should_generate_llm_report(
+            &run,
+            10,
+            None,
+            Utc::now() - chrono::Duration::minutes(1)
+        ));
+    }
+
+    #[test]
+    fn skips_llm_when_report_already_current() {
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Completed,
+            goal: "task".into(),
+            turn_count: 5,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        let prior = ReflectionReport {
+            run_id: "r1".into(),
+            goal: "task".into(),
+            original_goal: Some("task".into()),
+            execution_summary: String::new(),
+            outcome: RunOutcome::Success,
+            issues: vec![],
+            risks: vec![],
+            suggestions: vec![],
+            critics: CriticsScore::default(),
+            critic_analyses: Default::default(),
+            generated_at: Utc::now(),
+            dialectical: None,
+            counterfactuals: vec![],
+            estimated_improvement: None,
+            logical_analysis: None,
+            reflection_summary: Some("done".into()),
+            llm_enhanced: true,
+            llm_event_count: 10,
+        };
+        assert!(!should_generate_llm_report(
+            &run,
+            10,
+            Some(&prior),
+            Utc::now() - chrono::Duration::minutes(1)
+        ));
+    }
+
+    #[test]
+    fn is_idle_for_report_after_ten_minutes() {
+        let last = Utc::now() - chrono::Duration::minutes(10);
+        assert!(is_idle_for_report(last));
+        let recent = Utc::now() - chrono::Duration::minutes(9);
+        assert!(!is_idle_for_report(recent));
     }
 }

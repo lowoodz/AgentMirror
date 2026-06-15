@@ -142,6 +142,31 @@ impl Default for CriticsScore {
     }
 }
 
+/// Narrative review for each of the five critic dimensions.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CriticsAnalysis {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub alignment: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub necessity: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub completeness: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub efficiency: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub safety: String,
+}
+
+impl CriticsAnalysis {
+    pub fn any_populated(&self) -> bool {
+        !self.alignment.is_empty()
+            || !self.necessity.is_empty()
+            || !self.completeness.is_empty()
+            || !self.efficiency.is_empty()
+            || !self.safety.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub message: String,
@@ -172,13 +197,19 @@ pub struct CounterfactualNote {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReflectionReport {
     pub run_id: String,
+    /// Latest / current goal after iterative reflection (may differ from original).
     pub goal: String,
+    /// True initial goal identified from the first events (LLM).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_goal: Option<String>,
     pub execution_summary: String,
     pub outcome: RunOutcome,
     pub issues: Vec<Issue>,
     pub risks: Vec<String>,
     pub suggestions: Vec<Suggestion>,
     pub critics: CriticsScore,
+    #[serde(default)]
+    pub critic_analyses: CriticsAnalysis,
     pub generated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dialectical: Option<DialecticalNotes>,
@@ -194,6 +225,9 @@ pub struct ReflectionReport {
     pub reflection_summary: Option<String>,
     #[serde(default)]
     pub llm_enhanced: bool,
+    /// Number of cognitive events included in the last LLM reflection pass.
+    #[serde(default)]
+    pub llm_event_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,7 +308,7 @@ pub struct InsightConfig {
     pub daily_report_hour: u8,
     #[serde(default = "default_retention")]
     pub retention_days: u32,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub llm_critic: bool,
     #[serde(default = "default_critic_group")]
     pub critic_model_group: String,
@@ -293,7 +327,7 @@ fn default_retention() -> u32 {
 }
 
 fn default_critic_group() -> String {
-    "medium".to_string()
+    "high".to_string()
 }
 
 impl Default for InsightConfig {
@@ -303,7 +337,7 @@ impl Default for InsightConfig {
             require_traffic_bodies: true,
             daily_report_hour: default_daily_hour(),
             retention_days: default_retention(),
-            llm_critic: false,
+            llm_critic: true,
             critic_model_group: default_critic_group(),
         }
     }

@@ -1,12 +1,13 @@
+use chrono::Utc;
 use serde::Deserialize;
 
 use crate::llm::LlmClient;
 use crate::models::{
-    CognitiveEvent, CounterfactualNote, DialecticalNotes, EventKind, Issue, ReflectionReport,
-    RunRecord, Suggestion,
+    CognitiveEvent, CounterfactualNote, CriticsAnalysis, CriticsScore, DialecticalNotes, EventKind, Issue, ReflectionReport, RunOutcome, RunRecord, RunStatus, Suggestion,
 };
+use crate::token_budget::{batch_events, format_batch_trajectory, MAX_BATCH_TOKENS};
 
-const MAX_TRAJECTORY_CHARS: usize = 10_000;
+const INITIAL_GOAL_EVENT_COUNT: usize = 10;
 
 #[derive(Debug, Deserialize)]
 struct LlmCriticResponse {
@@ -28,6 +29,10 @@ struct LlmCriticResponse {
     estimated_improvement: Option<String>,
     #[serde(default)]
     critics: Option<LlmCritics>,
+    #[serde(default)]
+    critic_analyses: Option<LlmCriticsAnalysis>,
+    #[serde(default)]
+    current_goal: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +85,20 @@ struct LlmCritics {
     safety: u8,
 }
 
+#[derive(Debug, Deserialize)]
+struct LlmCriticsAnalysis {
+    #[serde(default)]
+    alignment: String,
+    #[serde(default)]
+    necessity: String,
+    #[serde(default)]
+    completeness: String,
+    #[serde(default)]
+    efficiency: String,
+    #[serde(default)]
+    safety: String,
+}
+
 fn default_severity() -> String {
     "medium".to_string()
 }
@@ -90,129 +109,293 @@ fn default_priority() -> String {
 
 const CRITIC_SYSTEM: &str = r#"You are AgentMirror Critic — an expert in agent trajectory analysis, formal logic, and dialectical reasoning.
 
-Your job: critically review an autonomous agent's task run from its cognitive event trace (Goal → Decision → Action → Observation → Result).
+You receive cognitive events in batches. When a prior reflection report is provided, MERGE and REFINE it with the new events — output one complete updated report covering everything seen so far, not just the latest batch.
 
-Method (apply all):
-1. **Logical critique**: Does the action chain support the stated goal? Missing steps? Non sequiturs? Premature conclusions?
-2. **Dialectical analysis** (Hegelian structure):
-   - Thesis: what the agent actually did and why (concrete, cite decisions/actions).
-   - Antithesis: 2–3 credible alternative strategies the agent could have taken instead.
-   - Synthesis: under which conditions the agent's path vs each alternative is preferable.
-3. **Counterfactuals**: For each major Decision in the trace, one alternative path and when it would be better.
-4. **Five critics** (0–100, justify via issues/suggestions):
-   - alignment (goal ↔ actions), necessity (redundancy), completeness (missing phases), efficiency (turns/steps), safety (risky tools).
+Track goals across batches:
+- **original_goal** is fixed (the user's initial intent).
+- **current_goal** may evolve if the user shifts topic; update it when new events show a genuine goal change.
+- Five-dimension alignment must judge actions against **current_goal**, noting drift from **original_goal** when they differ.
 
-Write in the same language as the user's goal (Chinese goal → Chinese output; English → English).
-Be specific and actionable — avoid generic advice. Reference concrete events from the trace.
-Respond with JSON only — no markdown fences, no commentary outside JSON."#;
+Method (apply all in every batch output):
+1. **Logical critique**: Does the action chain support the stated goal? Missing steps? Non sequiturs?
+2. **Dialectical analysis**: Thesis (what agent did), Antithesis (2–3 alternatives), Synthesis (when each wins).
+3. **Counterfactuals**: For major Decisions in the trace seen so far, alternative paths and when better.
+4. **Five critic dimensions** — score (0–100) AND 2–4 sentence analysis each:
+   - alignment: goal + context vs actions — drift?
+   - necessity: essential steps vs redundancy
+   - completeness: thoroughness, missing phases
+   - efficiency: direct path vs detours
+   - safety: risks, dangerous tools, policy issues
 
-/// Run LLM dialectical + logical critic; returns true when the report was enriched.
-pub fn enrich_report_with_llm(
+Write in the same language as the user's goal (Chinese → Chinese; English → English).
+Be specific — cite event seq numbers from the trace.
+Respond with JSON only — no markdown fences."#;
+
+/// LLM-only reflection report: incremental batched event iteration.
+pub fn generate_reflection_report_llm(
     client: Option<&dyn LlmClient>,
     run: &RunRecord,
     events: &[CognitiveEvent],
-    report: &mut ReflectionReport,
-) -> bool {
-    let Some(client) = client else {
-        return false;
-    };
-    if events.len() < 2 {
-        return false;
-    }
-    let trajectory = format_trajectory(events);
-    if trajectory.is_empty() {
-        return false;
+    execution_summary: &str,
+    safety_notes: &[String],
+    prior: Option<&ReflectionReport>,
+) -> Option<ReflectionReport> {
+    let client = client?;
+    if events.is_empty() {
+        return None;
     }
 
-    let user = build_critic_user_prompt(run, report, events, &trajectory);
-    match client.complete(CRITIC_SYSTEM, &user) {
-        Ok(raw) => apply_llm_critic(report, &raw),
-        Err(err) => {
-            tracing::warn!(?err, run_id = %run.run_id, "AgentMirror LLM critic failed");
-            false
+    let event_count = events.len() as u32;
+    if let Some(p) = prior {
+        if p.llm_enhanced && p.llm_event_count >= event_count {
+            return Some(p.clone());
         }
+    }
+
+    let processed = prior.map(|p| p.llm_event_count).unwrap_or(0) as usize;
+    let original_goal = prior
+        .and_then(|p| p.original_goal.clone())
+        .filter(|g| !g.trim().is_empty())
+        .unwrap_or_else(|| infer_initial_goal_llm(client, events, &run.goal));
+    let mut current_goal = prior
+        .map(|p| p.goal.clone())
+        .unwrap_or_else(|| original_goal.clone());
+
+    let skip = if processed > 0 && processed < events.len() {
+        processed
+    } else if processed >= events.len() {
+        return prior.cloned();
+    } else {
+        0
+    };
+    let events_slice = &events[skip..];
+    if events_slice.is_empty() {
+        return prior.cloned();
+    }
+
+    let batches = batch_events(events_slice, MAX_BATCH_TOKENS);
+    let total_batches = batches.len();
+    let mut previous_report_json = prior.and_then(|p| {
+        if p.llm_enhanced {
+            serde_json::to_string(p).ok()
+        } else {
+            None
+        }
+    });
+    let mut final_report: Option<ReflectionReport> = None;
+
+    for (batch_idx, batch) in batches.iter().enumerate() {
+        let batch_num = batch_idx + 1;
+        let trajectory = format_batch_trajectory(batch);
+        let user = build_batched_critic_prompt(
+            run,
+            execution_summary,
+            safety_notes,
+            &original_goal,
+            &current_goal,
+            batch_num,
+            total_batches,
+            previous_report_json.as_deref(),
+            &trajectory,
+        );
+
+        match client.complete(CRITIC_SYSTEM, &user) {
+            Ok(raw) => {
+                let mut report =
+                    report_shell(run, execution_summary, &original_goal, &current_goal, safety_notes);
+                if let Some(p) = prior {
+                    if p.llm_enhanced && batch_idx == 0 {
+                        report = p.clone();
+                        report.execution_summary = execution_summary.to_string();
+                    }
+                }
+                if apply_llm_critic(&mut report, &raw, true, &original_goal) {
+                    report.llm_event_count = event_count;
+                    report.generated_at = Utc::now();
+                    current_goal = report.goal.clone();
+                    previous_report_json = Some(extract_json_object(&raw));
+                    final_report = Some(report);
+                    tracing::debug!(
+                        run_id = %run.run_id,
+                        batch = batch_num,
+                        total = total_batches,
+                        events = event_count,
+                        "AgentMirror LLM critic batch complete"
+                    );
+                } else {
+                    tracing::warn!(
+                        run_id = %run.run_id,
+                        batch = batch_num,
+                        "AgentMirror LLM critic batch returned invalid JSON"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    run_id = %run.run_id,
+                    batch = batch_num,
+                    "AgentMirror LLM critic batch failed"
+                );
+                break;
+            }
+        }
+    }
+
+    if final_report.is_none() {
+        prior.cloned()
+    } else {
+        final_report
     }
 }
 
-fn build_critic_user_prompt(
+fn report_shell(
     run: &RunRecord,
-    report: &ReflectionReport,
-    events: &[CognitiveEvent],
-    trajectory: &str,
-) -> String {
-    let decision_lines: Vec<String> = events
+    execution_summary: &str,
+    original_goal: &str,
+    current_goal: &str,
+    safety_notes: &[String],
+) -> ReflectionReport {
+    let mut report = ReflectionReport {
+        run_id: run.run_id.clone(),
+        goal: current_goal.to_string(),
+        original_goal: Some(original_goal.to_string()),
+        execution_summary: execution_summary.to_string(),
+        outcome: outcome_from_run_status(run.status),
+        issues: Vec::new(),
+        risks: Vec::new(),
+        suggestions: Vec::new(),
+        critics: CriticsScore::default(),
+        critic_analyses: CriticsAnalysis::default(),
+        generated_at: Utc::now(),
+        dialectical: None,
+        counterfactuals: Vec::new(),
+        estimated_improvement: None,
+        logical_analysis: None,
+        reflection_summary: None,
+        llm_enhanced: false,
+        llm_event_count: 0,
+    };
+    merge_safety_issues(&mut report, safety_notes);
+    report
+}
+
+fn merge_safety_issues(report: &mut ReflectionReport, safety_notes: &[String]) {
+    for finding in safety_notes {
+        let issue = Issue {
+            message: finding.clone(),
+            severity: "high".to_string(),
+        };
+        if !report.issues.iter().any(|i| i.message == issue.message) {
+            report.issues.push(issue);
+        }
+    }
+    report.risks = report
+        .issues
         .iter()
-        .filter(|e| e.kind == EventKind::Decision)
-        .map(|e| format!("  seq {}: {}", e.seq, e.summary))
+        .filter(|i| i.severity == "high")
+        .map(|i| i.message.clone())
         .collect();
-    let safety_notes = if report.risks.is_empty() {
+}
+
+fn outcome_from_run_status(status: RunStatus) -> RunOutcome {
+    match status {
+        RunStatus::Completed => RunOutcome::Success,
+        RunStatus::Failed => RunOutcome::Failed,
+        RunStatus::Running | RunStatus::Stale => RunOutcome::Partial,
+    }
+}
+
+fn build_batched_critic_prompt(
+    run: &RunRecord,
+    execution_summary: &str,
+    safety_notes: &[String],
+    original_goal: &str,
+    current_goal: &str,
+    batch_num: usize,
+    total_batches: usize,
+    previous_report_json: Option<&str>,
+    batch_trajectory: &str,
+) -> String {
+    let safety = if safety_notes.is_empty() {
         "none".to_string()
     } else {
-        report.risks.join("; ")
+        safety_notes.join("; ")
     };
+    let prior = previous_report_json.unwrap_or("(none — first batch)");
 
     format!(
         r#"Return JSON with this exact schema:
 {{
-  "goal": "one-line refined goal or null",
-  "reflection_summary": "2-4 sentence executive summary for a human reviewer",
-  "logical_analysis": "paragraph: logical structure of goal→actions→outcome, gaps, invalid leaps",
+  "original_goal": "unchanged initial goal (echo input unless correcting a clear error)",
+  "current_goal": "latest goal after this batch; echo prior current_goal if unchanged",
+  "reflection_summary": "2-4 sentence executive summary",
+  "logical_analysis": "paragraph: logical structure goal→actions→outcome",
   "critics": {{ "alignment": 0-100, "necessity": 0-100, "completeness": 0-100, "efficiency": 0-100, "safety": 0-100 }},
-  "issues": [{{ "message": "specific finding", "severity": "low|medium|high" }}],
-  "suggestions": [{{ "message": "actionable improvement", "rationale": "why", "priority": "low|medium|high", "related_event_seq": null or number }}],
-  "dialectical": {{
-    "thesis": "what the agent did (concrete)",
-    "antithesis": ["alternative strategy 1", "alternative strategy 2"],
-    "synthesis": "when thesis vs alternatives win"
+  "critic_analyses": {{
+    "alignment": "2-4 sentences with event refs; note drift from original_goal if any",
+    "necessity": "2-4 sentences",
+    "completeness": "2-4 sentences",
+    "efficiency": "2-4 sentences",
+    "safety": "2-4 sentences"
   }},
-  "counterfactuals": [{{ "decision": "quoted decision", "alternative": "what to do instead", "when_better": "condition" }}],
-  "estimated_improvement": "+N% efficiency or null"
+  "issues": [{{ "message": "...", "severity": "low|medium|high" }}],
+  "suggestions": [{{ "message": "...", "rationale": "...", "priority": "low|medium|high", "related_event_seq": null or number }}],
+  "dialectical": {{ "thesis": "...", "antithesis": ["...", "..."], "synthesis": "..." }},
+  "counterfactuals": [{{ "decision": "...", "alternative": "...", "when_better": "..." }}],
+  "estimated_improvement": "+N% or null"
 }}
 
 Run context:
 - run_id: {}
 - status: {}
 - turns: {}
-- stated goal: {}
-- rule-based outcome: {:?}
-- rule-based scores: alignment={} necessity={} completeness={} efficiency={} safety={}
+- original_goal (fixed): {}
+- current_goal (may evolve): {}
+- run record goal hint: {}
 - action chain summary: {}
 - safety / policy notes: {}
-- decision events:
+
+Batch {}/{} — events in THIS message (seq, kind, summary):
 {}
 
-Cognitive event trace (seq, kind, summary):
+Prior reflection report JSON (merge original_goal, current_goal, and all fields; cover ALL events seen so far):
 {}
 "#,
         run.run_id,
         run.status.as_str(),
         run.turn_count,
+        original_goal,
+        current_goal,
         run.goal,
-        report.outcome,
-        report.critics.alignment,
-        report.critics.necessity,
-        report.critics.completeness,
-        report.critics.efficiency,
-        report.critics.safety,
-        report.execution_summary,
-        safety_notes,
-        if decision_lines.is_empty() {
-            "  (none extracted)".to_string()
-        } else {
-            decision_lines.join("\n")
-        },
-        trajectory,
+        execution_summary,
+        safety,
+        batch_num,
+        total_batches,
+        batch_trajectory,
+        prior,
     )
 }
 
-fn apply_llm_critic(report: &mut ReflectionReport, raw: &str) -> bool {
+fn apply_llm_critic(
+    report: &mut ReflectionReport,
+    raw: &str,
+    preserve_rule_safety: bool,
+    original_goal: &str,
+) -> bool {
     let json_text = extract_json_object(raw);
     let Ok(parsed) = serde_json::from_str::<LlmCriticResponse>(&json_text) else {
         tracing::warn!("AgentMirror LLM critic returned non-JSON");
         return false;
     };
 
-    if let Some(goal) = parsed.goal.filter(|g| !g.trim().is_empty()) {
+    report.original_goal = Some(original_goal.to_string());
+
+    let latest_goal = parsed
+        .current_goal
+        .filter(|g| !g.trim().is_empty())
+        .or(parsed.goal.filter(|g| !g.trim().is_empty()));
+    if let Some(goal) = latest_goal {
         report.goal = goal;
     }
     report.reflection_summary = parsed
@@ -225,13 +408,20 @@ fn apply_llm_critic(report: &mut ReflectionReport, raw: &str) -> bool {
     if let Some(c) = parsed.critics {
         apply_critic_scores(&mut report.critics, &c);
     }
+    if let Some(a) = parsed.critic_analyses {
+        apply_critic_analyses(&mut report.critic_analyses, &a);
+    }
 
-    let rule_safety: Vec<Issue> = report
-        .issues
-        .iter()
-        .filter(|i| i.severity == "high")
-        .cloned()
-        .collect();
+    let rule_safety: Vec<Issue> = if preserve_rule_safety {
+        report
+            .issues
+            .iter()
+            .filter(|i| i.severity == "high")
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     if !parsed.issues.is_empty() {
         report.issues = parsed
@@ -301,12 +491,31 @@ fn apply_llm_critic(report: &mut ReflectionReport, raw: &str) -> bool {
     report.estimated_improvement = parsed.estimated_improvement;
     report.llm_enhanced = report.reflection_summary.is_some()
         || report.logical_analysis.is_some()
-        || report.dialectical.is_some();
+        || report.dialectical.is_some()
+        || report.critic_analyses.any_populated();
 
     report.llm_enhanced
 }
 
-fn apply_critic_scores(target: &mut crate::models::CriticsScore, c: &LlmCritics) {
+fn apply_critic_analyses(target: &mut CriticsAnalysis, src: &LlmCriticsAnalysis) {
+    if !src.alignment.trim().is_empty() {
+        target.alignment = src.alignment.trim().to_string();
+    }
+    if !src.necessity.trim().is_empty() {
+        target.necessity = src.necessity.trim().to_string();
+    }
+    if !src.completeness.trim().is_empty() {
+        target.completeness = src.completeness.trim().to_string();
+    }
+    if !src.efficiency.trim().is_empty() {
+        target.efficiency = src.efficiency.trim().to_string();
+    }
+    if !src.safety.trim().is_empty() {
+        target.safety = src.safety.trim().to_string();
+    }
+}
+
+fn apply_critic_scores(target: &mut CriticsScore, c: &LlmCritics) {
     if c.alignment > 0 {
         target.alignment = c.alignment;
     }
@@ -324,19 +533,6 @@ fn apply_critic_scores(target: &mut crate::models::CriticsScore, c: &LlmCritics)
     }
 }
 
-fn format_trajectory(events: &[CognitiveEvent]) -> String {
-    let mut out = String::new();
-    for event in events {
-        let line = format!("#{} [{}] {}\n", event.seq, event.kind.as_str(), event.summary);
-        if out.len() + line.len() > MAX_TRAJECTORY_CHARS {
-            out.push_str("…(trajectory truncated)\n");
-            break;
-        }
-        out.push_str(&line);
-    }
-    out
-}
-
 pub fn extract_json_object(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.starts_with('{') {
@@ -350,6 +546,44 @@ pub fn extract_json_object(raw: &str) -> String {
     trimmed.to_string()
 }
 
+pub fn infer_initial_goal_llm(
+    client: &dyn LlmClient,
+    events: &[CognitiveEvent],
+    fallback: &str,
+) -> String {
+    let head: Vec<&CognitiveEvent> = events.iter().take(INITIAL_GOAL_EVENT_COUNT).collect();
+    let trajectory = format_batch_trajectory(&head);
+    if trajectory.is_empty() {
+        return fallback.to_string();
+    }
+    let system = r#"Identify the user's true initial task goal from the FIRST events of an agent run.
+Reply with JSON only: {"original_goal":"one-line goal","confidence":0-1}"#;
+    let user = format!(
+        "First {} event(s) of the run:\n{trajectory}",
+        head.len()
+    );
+    match client.complete(system, &user) {
+        Ok(raw) => {
+            let json_text = extract_json_object(&raw);
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_text) {
+                for key in ["original_goal", "goal"] {
+                    if let Some(g) = v.get(key).and_then(|x| x.as_str()) {
+                        if !g.trim().is_empty() {
+                            return g.trim().to_string();
+                        }
+                    }
+                }
+            }
+            fallback.to_string()
+        }
+        Err(err) => {
+            tracing::warn!(?err, "AgentMirror initial goal LLM failed");
+            fallback.to_string()
+        }
+    }
+}
+
+/// Legacy helper — uses first events only (same as reflection pipeline step 1).
 pub fn infer_goal_llm(
     client: Option<&dyn LlmClient>,
     events: &[CognitiveEvent],
@@ -358,41 +592,30 @@ pub fn infer_goal_llm(
     let Some(client) = client else {
         return fallback.to_string();
     };
-    let summary = format_trajectory(events);
-    if summary.is_empty() {
-        return fallback.to_string();
-    }
-    let system = "Extract the agent task goal. Reply with JSON only: {\"goal\":\"...\",\"confidence\":0-1}";
-    let user = format!("Trajectory:\n{summary}");
-    match client.complete(system, &user) {
-        Ok(raw) => {
-            let json_text = extract_json_object(&raw);
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_text) {
-                if let Some(g) = v.get("goal").and_then(|x| x.as_str()) {
-                    if !g.trim().is_empty() {
-                        return g.trim().to_string();
-                    }
-                }
-            }
-            fallback.to_string()
-        }
-        Err(_) => fallback.to_string(),
-    }
+    infer_initial_goal_llm(client, events, fallback)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{CriticsScore, RunOutcome, RunStatus};
-    use chrono::Utc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
-    struct MockLlm {
+    struct BatchMockLlm {
+        calls: Arc<AtomicUsize>,
         response: String,
     }
 
-    impl LlmClient for MockLlm {
-        fn complete(&self, _system: &str, _user: &str) -> anyhow::Result<String> {
-            Ok(self.response.clone())
+    impl LlmClient for BatchMockLlm {
+        fn complete(&self, _system: &str, user: &str) -> anyhow::Result<String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if user.contains("Batch") {
+                Ok(self.response.clone())
+            } else if user.contains("First ") && user.contains("event(s)") {
+                Ok(r#"{"original_goal":"Fix login timeout","confidence":0.9}"#.to_string())
+            } else {
+                Ok(self.response.clone())
+            }
         }
     }
 
@@ -434,6 +657,29 @@ mod tests {
         ]
     }
 
+    const LLM_JSON: &str = r#"{
+        "original_goal": "Fix login timeout",
+        "current_goal": "Fix login timeout",
+        "reflection_summary": "Agent gathered logs but skipped verification.",
+        "logical_analysis": "Reading logs supports diagnosis but no test validates the fix.",
+        "critics": {"alignment": 82, "necessity": 75, "completeness": 60, "efficiency": 70, "safety": 95},
+        "critic_analyses": {
+            "alignment": "Actions focus on auth logs which match the login timeout goal.",
+            "necessity": "Log reading was necessary; no redundant retries.",
+            "completeness": "Missing verification after the patch.",
+            "efficiency": "Three turns is reasonable for this scope.",
+            "safety": "No destructive commands detected."
+        },
+        "issues": [{"message": "No verification step", "severity": "medium"}],
+        "suggestions": [{"message": "Run integration test", "rationale": "Confirm fix", "priority": "high"}],
+        "dialectical": {
+            "thesis": "Read logs then patch auth module",
+            "antithesis": ["Reproduce with minimal test first", "Check metrics dashboard"],
+            "synthesis": "Reproduction first when bug is intermittent"
+        },
+        "counterfactuals": [{"decision": "I'll read the auth logs first", "alternative": "Write failing test", "when_better": "When bug is reproducible"}]
+    }"#;
+
     #[test]
     fn extracts_json_from_fenced_response() {
         let raw = r#"Here is the analysis:
@@ -443,22 +689,11 @@ mod tests {
     }
 
     #[test]
-    fn llm_critic_enriches_dialectical_fields() {
-        let llm_json = r#"{
-            "reflection_summary": "Agent gathered logs but skipped verification.",
-            "logical_analysis": "Reading logs supports diagnosis but no test validates the fix.",
-            "critics": {"alignment": 82, "necessity": 75, "completeness": 60, "efficiency": 70, "safety": 95},
-            "issues": [{"message": "No verification step", "severity": "medium"}],
-            "suggestions": [{"message": "Run integration test", "rationale": "Confirm fix", "priority": "high"}],
-            "dialectical": {
-                "thesis": "Read logs then patch auth module",
-                "antithesis": ["Reproduce with minimal test first", "Check metrics dashboard"],
-                "synthesis": "Reproduction first when bug is intermittent"
-            },
-            "counterfactuals": [{"decision": "I'll read the auth logs first", "alternative": "Write failing test", "when_better": "When bug is reproducible"}]
-        }"#;
-        let mock = MockLlm {
-            response: llm_json.to_string(),
+    fn llm_only_report_from_batched_pipeline() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mock = BatchMockLlm {
+            calls: Arc::clone(&calls),
+            response: LLM_JSON.to_string(),
         };
         let run = RunRecord {
             run_id: "r1".into(),
@@ -472,28 +707,68 @@ mod tests {
             messages_seen: 0,
             graph_path: None,
         };
-        let events = sample_events();
-        let mut report = ReflectionReport {
-            run_id: "r1".into(),
-            goal: run.goal.clone(),
-            execution_summary: "Read".into(),
-            outcome: RunOutcome::Partial,
-            issues: vec![],
-            risks: vec![],
-            suggestions: vec![],
-            critics: CriticsScore::default(),
-            generated_at: Utc::now(),
-            dialectical: None,
-            counterfactuals: vec![],
-            estimated_improvement: None,
-            logical_analysis: None,
-            reflection_summary: None,
-            llm_enhanced: false,
-        };
-        assert!(enrich_report_with_llm(Some(&mock), &run, &events, &mut report));
+        let report = generate_reflection_report_llm(
+            Some(&mock),
+            &run,
+            &sample_events(),
+            "Read auth logs",
+            &[],
+            None,
+        )
+        .expect("report");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(report.llm_enhanced);
+        assert_eq!(report.original_goal.as_deref(), Some("Fix login timeout"));
+        assert_eq!(report.goal, "Fix login timeout");
         assert!(report.dialectical.is_some());
         assert_eq!(report.critics.completeness, 60);
-        assert!(!report.counterfactuals.is_empty());
+        assert!(report.critic_analyses.completeness.contains("verification"));
+    }
+
+    #[test]
+    fn multi_batch_calls_llm_per_batch() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mock = BatchMockLlm {
+            calls: Arc::clone(&calls),
+            response: LLM_JSON.to_string(),
+        };
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: None,
+            status: RunStatus::Running,
+            goal: "Research task".into(),
+            turn_count: 100,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        let mut events = Vec::new();
+        let long_summary = "查".repeat(600);
+        for i in 0..200 {
+            events.push(CognitiveEvent {
+                id: format!("e{i}"),
+                run_id: "r1".into(),
+                seq: i,
+                kind: EventKind::Action,
+                timestamp: Utc::now(),
+                summary: format!("{long_summary} step {i}"),
+                audit_id: "a1".into(),
+                confidence: 1.0,
+                metadata: serde_json::Value::Null,
+            });
+        }
+        let report = generate_reflection_report_llm(
+            Some(&mock),
+            &run,
+            &events,
+            "many steps",
+            &[],
+            None,
+        )
+        .expect("report");
+        assert!(calls.load(Ordering::SeqCst) > 2);
+        assert!(report.llm_enhanced);
     }
 }

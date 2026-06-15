@@ -70,11 +70,11 @@ insight:
   require_traffic_bodies: true   # auto-enables logging.save_traffic_bodies
   daily_report_hour: 8
   retention_days: 30
-  llm_critic: false              # set true for dialectical + logical LLM reflection reports
-  critic_model_group: medium     # fallback group for insight LLM calls
+  llm_critic: true               # default on — dialectical + logical LLM reflection reports
+  critic_model_group: high       # fallback group for insight LLM calls
 ```
 
-When `llm_critic: true`, each run report gets a **rule baseline** plus an **LLM Critic** pass (logical critique, thesis/antithesis/synthesis, counterfactuals, five critic scores). One LLM call per report refresh; trajectory truncated to ~10k chars. High-severity safety issues from rules are preserved when merging LLM output.
+When `llm_critic: true` (default), reflection reports are **LLM-only**: (1) infer **original goal** from the first 10 events; (2) batch remaining events (≤100k estimated tokens per batch) with iterative five-dimension critique, tracking **current goal** when the user shifts topic; (3) store **original goal + current goal + final reflection**. Rule baseline only when LLM is unavailable.
 
 ---
 
@@ -106,7 +106,7 @@ Nav order: **AgentMirror** first.
 - Trajectory modal: **Graph / Timeline / Events / Raw traffic**
 - Graph tab: **directed graph** (layered DAG), **mind map** (radial from Goal), or list fallback; edges show causal labels
 - Daily report date picker + viewer
-- Reflection report modal: rule baseline + **LLM dialectical** blocks when enabled (`reflection_summary`, `logical_analysis`, thesis/antithesis/synthesis, counterfactuals)
+- Reflection report modal: **五维审视** (score + narrative per dimension), summary, dialectical blocks when LLM enabled
 
 ---
 
@@ -118,7 +118,7 @@ Nav order: **AgentMirror** first.
 | Run boundary (multi-turn) | ✅ |
 | Rule parser / extractor / decision graph | ✅ |
 | Five critics (rule-based) | ✅ |
-| LLM goal + critic + dialectical/counterfactual | ✅ (`llm_critic: true`) |
+| LLM goal + critic + dialectical/counterfactual | ✅ (default on; `llm_critic: false` to disable) |
 | Safety critic ↔ ops rules | ✅ |
 | Run merge / split + goal edit | ✅ |
 | Daily report SQL + Markdown files | ✅ (`data/insight/daily/`) |

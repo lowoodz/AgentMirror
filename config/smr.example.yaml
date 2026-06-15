@@ -31,8 +31,9 @@ insight:
   require_traffic_bodies: true
   daily_report_hour: 8
   retention_days: 30
-  llm_critic: false  # set true for dialectical + logical LLM reflection reports (uses critic_model_group)
-  critic_model_group: medium  # fallback group for AgentMirror critic / goal LLM calls
+  llm_critic: true  # dialectical + logical LLM reflection reports (uses critic_model_group); set false to skip LLM calls
+  critic_model_group: high  # fallback group for AgentMirror critic / goal LLM calls
+  # Runs with no new events for 10+ minutes are finalized and get an LLM reflection report.
 
 fallback_groups:
   high:

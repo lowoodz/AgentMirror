@@ -10,7 +10,7 @@ use tracing::{debug, error, warn};
 use crate::llm::LlmClient;
 use crate::models::{InsightConfig, TraceTurn};
 use crate::pipeline::Pipeline;
-use crate::report::{daily_report_markdown, generate_daily_report};
+use crate::report::{daily_report_markdown, generate_daily_report, sweep_idle_running_runs};
 use crate::safety::SafetyScanner;
 use crate::store::InsightStore;
 
@@ -53,6 +53,12 @@ impl InsightService {
             Arc::clone(&config_slot),
         );
         spawn_daily_scheduler(Arc::clone(&store), Arc::clone(&config_slot));
+        spawn_idle_run_sweeper(
+            Arc::clone(&store),
+            Arc::clone(&safety),
+            Arc::clone(&llm),
+            Arc::clone(&config_slot),
+        );
 
         Ok(Arc::new(Self {
             config: config_slot,
@@ -134,6 +140,19 @@ impl InsightService {
         let cfg = self.config.read().clone();
         Pipeline::new(store, scanner, llm_client, cfg).process_turn(turn)
     }
+
+    /// After traffic replay: complete open runs and generate LLM reflection reports.
+    pub fn finalize_replayed_runs(&self) -> anyhow::Result<usize> {
+        let cfg = self.config.read().clone();
+        let scanner = self.safety.lock().clone();
+        let llm = self.llm.lock().clone();
+        crate::report::finalize_runs_for_llm_reports(
+            &self.store,
+            scanner.as_deref(),
+            llm.as_deref(),
+            cfg.llm_critic,
+        )
+    }
 }
 
 /// Own Tokio runtime on a background thread so InsightService works from Tauri/GUI
@@ -203,4 +222,40 @@ fn spawn_daily_scheduler(store: Arc<InsightStore>, config: Arc<parking_lot::RwLo
             });
         })
         .expect("spawn AgentMirror daily scheduler thread");
+}
+
+fn spawn_idle_run_sweeper(
+    store: Arc<InsightStore>,
+    safety: SafetySlot,
+    llm: LlmSlot,
+    config: Arc<parking_lot::RwLock<InsightConfig>>,
+) {
+    thread::Builder::new()
+        .name("agentmirror-idle".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("AgentMirror idle sweeper runtime");
+            rt.block_on(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    if !config.read().enabled || !config.read().llm_critic {
+                        continue;
+                    }
+                    let scanner = safety.lock().clone();
+                    let llm_client = llm.lock().clone();
+                    let llm_critic = config.read().llm_critic;
+                    if let Err(err) = sweep_idle_running_runs(
+                        &store,
+                        scanner.as_deref(),
+                        llm_client.as_deref(),
+                        llm_critic,
+                    ) {
+                        warn!(?err, "AgentMirror idle run sweep failed");
+                    }
+                }
+            });
+        })
+        .expect("spawn AgentMirror idle sweeper thread");
 }

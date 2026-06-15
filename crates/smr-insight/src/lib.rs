@@ -13,6 +13,7 @@ pub mod report;
 pub mod safety;
 pub mod separator;
 pub mod store;
+pub mod token_budget;
 pub mod worker;
 
 pub use models::{InsightConfig, TraceTurn};

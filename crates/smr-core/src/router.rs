@@ -126,10 +126,7 @@ impl Router {
     ) -> Result<RouteResult> {
         let mut last_error: Option<RouteAttempt> = None;
         let mut chain: Vec<String> = Vec::new();
-        let mut endpoints = filter_endpoints_for_client(group, opts.client_protocol);
-        if endpoints.is_empty() && opts.allow_cross_protocol {
-            endpoints = group.to_vec();
-        }
+        let mut endpoints = endpoints_for_forward(group, &opts);
         if endpoints.is_empty() {
             return Err(anyhow!(
                 "fallback group '{group_name}' has no upstream with protocol {:?}",
@@ -309,8 +306,18 @@ pub fn convert_response_body(
 fn should_fallback_status(status: StatusCode) -> bool {
     matches!(
         status.as_u16(),
-        401 | 403 | 404 | 408 | 429 | 500 | 502 | 503 | 504
+        401 | 403 | 404 | 408 | 415 | 429 | 500 | 502 | 503 | 504
     )
+}
+
+fn endpoints_for_forward(group: &[ModelEndpoint], opts: &ForwardOptions) -> Vec<ModelEndpoint> {
+    if opts.allow_cross_protocol {
+        // Explicit fallback group: honor config order; forward_once converts per upstream.
+        group.to_vec()
+    } else {
+        // Virtual model id (saferoute-high): only native protocol matches.
+        filter_endpoints_for_client(group, opts.client_protocol)
+    }
 }
 
 fn filter_endpoints_for_client(
@@ -735,6 +742,7 @@ data: [DONE]
         assert!(should_fallback_status(StatusCode::FORBIDDEN));
         assert!(!should_fallback_status(StatusCode::OK));
         assert!(should_fallback_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(should_fallback_status(StatusCode::UNSUPPORTED_MEDIA_TYPE));
     }
 
     #[test]
@@ -776,6 +784,52 @@ data: [DONE]
         let anth = filter_endpoints_for_client(&group, ApiProtocol::Anthropic);
         assert_eq!(anth.len(), 1);
         assert_eq!(anth[0].id, "anthropic");
+    }
+
+    #[test]
+    fn explicit_fallback_uses_full_group_order() {
+        use crate::config::ModelEndpoint;
+
+        let anthropic = ModelEndpoint {
+            id: "anthropic".into(),
+            base_url: "https://open.bigmodel.cn/api/anthropic".into(),
+            model: "glm-4.7".into(),
+            api_key: None,
+            api_key_env: None,
+            timeout_secs: 30,
+            protocol: Some("anthropic".into()),
+        };
+        let openai = ModelEndpoint {
+            id: "openai-a".into(),
+            base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-v4-flash".into(),
+            api_key: None,
+            api_key_env: None,
+            timeout_secs: 30,
+            protocol: None,
+        };
+        let group = vec![anthropic.clone(), openai.clone()];
+        let strict = endpoints_for_forward(
+            &group,
+            &ForwardOptions {
+                client_protocol: ApiProtocol::OpenAi,
+                allow_cross_protocol: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(strict.len(), 1);
+        assert_eq!(strict[0].id, "openai-a");
+        let explicit = endpoints_for_forward(
+            &group,
+            &ForwardOptions {
+                client_protocol: ApiProtocol::OpenAi,
+                allow_cross_protocol: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(explicit.len(), 2);
+        assert_eq!(explicit[0].id, "anthropic");
+        assert_eq!(explicit[1].id, "openai-a");
     }
 
     #[test]

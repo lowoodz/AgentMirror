@@ -3,11 +3,10 @@ use std::sync::Arc;
 use crate::critic::{evaluate, CriticInput};
 use crate::extract::{drafts_to_events, extract_from_turn, ExtractContext};
 use crate::graph::build_graph;
-use crate::infer::infer_goal_llm;
 use crate::llm::LlmClient;
 use crate::models::{EventKind, InsightConfig, RunRecord, RunStatus, TraceTurn};
 use crate::parser::{apply_messages_delta, parse_request, parse_response};
-use crate::report::{build_reflection_report, outcome_from_status};
+use crate::report::{build_reflection_report, finalize_run_if_idle, last_activity_at, outcome_from_status};
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::separator::{
     infer_goal_from_request, is_bootstrap_goal, is_weak_goal, new_run_id, resolve_agent,
@@ -147,12 +146,6 @@ impl Pipeline {
         }
 
         let all_events = self.store.list_events(&run.run_id)?;
-        if self.config.llm_critic && run.turn_count == 1 {
-            let refined = infer_goal_llm(self.llm.as_deref(), &all_events, &run.goal);
-            if refined != run.goal {
-                run.goal = refined;
-            }
-        }
 
         let graph = build_graph(&run.run_id, &all_events);
         let graph_json = serde_json::to_string_pretty(&graph)?;
@@ -160,7 +153,7 @@ impl Pipeline {
         run.graph_path = Some(graph_path);
 
         let safety_findings = scan_action_events(&all_events, self.safety.as_deref());
-        let (_, _, _, outcome) = evaluate(CriticInput {
+        let (_, _, _, _, outcome) = evaluate(CriticInput {
             events: &all_events,
             turn_count: run.turn_count,
             goal: &run.goal,
@@ -169,6 +162,12 @@ impl Pipeline {
         run.status = outcome_from_status(run.status, outcome);
 
         self.store.update_run(&run)?;
+
+        let last_activity = last_activity_at(&run, &all_events);
+        finalize_run_if_idle(&mut run, last_activity);
+        if run.status == RunStatus::Completed {
+            self.store.update_run(&run)?;
+        }
 
         let report = build_reflection_report(
             &self.store,

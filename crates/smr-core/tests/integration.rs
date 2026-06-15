@@ -834,3 +834,63 @@ async fn openai_client_rejects_anthropic_only_fallback_group() {
 
     assert!(result.is_err(), "OpenAI client must not route to Anthropic-only group");
 }
+
+#[tokio::test]
+async fn explicit_fallback_tries_anthropic_first_with_openai_client() {
+    let anthropic = spawn_mock_anthropic_upstream().await;
+    let openai = spawn_mock_upstream(false).await;
+    let mut config = test_config(&openai);
+    config.fallback_groups.insert(
+        "high".into(),
+        vec![
+            ModelEndpoint {
+                id: "anthropic-first".into(),
+                base_url: anthropic,
+                model: "claude-mock".into(),
+                api_key: Some("test-key".into()),
+                api_key_env: None,
+                timeout_secs: 10,
+                protocol: Some("anthropic".into()),
+            },
+            ModelEndpoint {
+                id: "openai-second".into(),
+                base_url: openai.clone(),
+                model: "mock-model".into(),
+                api_key: Some("test-key".into()),
+                api_key_env: None,
+                timeout_secs: 10,
+                protocol: None,
+            },
+        ],
+    );
+
+    let (app, proxy) = make_app(config);
+
+    let body = serde_json::json!({
+        "model": "mock-model",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::CONTENT_TYPE, "application/json".parse().unwrap());
+
+    let (status, _, _) = proxy
+        .handle_api_request(ProxyRequest {
+            session_id: "sess-explicit-mixed",
+            fallback_group: Some("high"),
+            method: Method::POST,
+            path: "/v1/chat/completions",
+            query: None,
+            headers,
+            body: Bytes::from(serde_json::to_vec(&body).unwrap()),
+        })
+        .await
+        .unwrap();
+
+    assert!(status.is_success());
+    let audits = app.storage.list_audits(20).unwrap();
+    let audit = audits
+        .iter()
+        .find(|a| a.session_id == "sess-explicit-mixed")
+        .expect("audit row");
+    assert_eq!(audit.final_model.as_deref(), Some("claude-mock"));
+}
