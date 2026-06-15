@@ -654,6 +654,94 @@ mod file_session_tests {
         );
     }
 
+    #[test]
+    fn postscript_pdf_stream_whole_blocks_when_session_active() {
+        let tmp = TempDir::new().unwrap();
+        let secret = "X".repeat(80);
+        let fname = "Deep Learning For Anomaly Detection - A Survey, Sydney.pdf";
+        let zone = tmp.path().join("Surveys");
+        fs::create_dir_all(&zone).unwrap();
+        let pdf = zone.join(fname);
+        fs::write(&pdf, format!("{secret}\n\nAbstract body text")).unwrap();
+
+        let config = AppConfig {
+            server: ServerConfig {
+                ui_language: UiLanguage::Zh,
+                ..Default::default()
+            },
+            pipeline: PipelineConfig {
+                dlp_enabled: true,
+                ..Default::default()
+            },
+            logging: LoggingConfig::default(),
+            fallback_groups: Default::default(),
+            content_rules: vec![],
+            file_rules: vec![FileRule {
+                id: "surveys".into(),
+                path: zone.clone(),
+                enabled: true,
+                recursive: true,
+                trigger_window: 15,
+                match_mode: MatchMode::Fragment,
+                min_fragment_len: Some(65),
+                min_fragment_ratio: Some(0.5),
+                formats: vec!["pdf".into(), "txt".into()],
+                index: Default::default(),
+            }],
+            operation_rules: vec![],
+            path_protection_rules: vec![],
+            insight: Default::default(),
+        };
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        dlp.reload(&config).unwrap();
+        for _ in 0..400 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(dlp.is_file_index_ready());
+
+        let session = "postscript-bypass";
+        let zone_str = zone.to_string_lossy().replace('\\', "/");
+        let pdf_path = pdf.to_string_lossy().replace('\\', "/");
+        let postscript = "BT /F45 17 Tf [(D)]TJ/F45 13 Tf [(E)-61(A)-62(R)-62(N)-62(I)-62(N)-61(G)]TJ ET";
+        let request = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "read pdf"},
+                {"role": "assistant", "content": null, "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": format!(r#"{{"command":"python3 -c \"open('{pdf_path}')\""}}"#)
+                    }
+                }]},
+                {"role": "tool", "tool_call_id": "c1", "content": postscript}
+            ]
+        });
+
+        dlp.register_path_triggers(session, &request);
+        assert!(
+            dlp.sessions().active_snapshot(session).is_some(),
+            "pdf path in exec should activate file DLP session"
+        );
+        let extracted = extract_texts(&request).unwrap();
+        let (repl, count) = dlp.process_request(session, &extracted, &request, false)
+            .unwrap();
+        let expected = UiLanguage::Zh.file_tool_output_block_message();
+        let postscript_out = repl
+            .iter()
+            .find(|(item, _)| item.text.contains("]TJ"))
+            .map(|(_, t)| t.as_str())
+            .unwrap_or("");
+        assert_eq!(
+            postscript_out, expected,
+            "PostScript stream should be wholly blocked (replacements={count}, repl={repl:?})"
+        );
+    }
+
     /// Replays a captured OpenClaw traffic body against the live user config + file index.
     #[test]
     fn repro_openclaw_understanding_tables_traffic() {

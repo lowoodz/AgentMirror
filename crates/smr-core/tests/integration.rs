@@ -356,7 +356,7 @@ async fn openai_client_skips_non_matching_upstream_protocol() {
     let (status, _, _) = proxy
         .handle_api_request(ProxyRequest {
             session_id: "sess-protocol-order",
-            fallback_group: Some("high"),
+            fallback_group: None,
             method: Method::POST,
             path: "/v1/chat/completions",
             query: None,

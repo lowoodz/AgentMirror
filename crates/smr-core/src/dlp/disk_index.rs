@@ -26,7 +26,8 @@ use crate::dlp::charset::{
 use crate::dlp::doc_extract;
 use crate::dlp::file::{
     basename_trigger_match, file_under_working_dir, normalize_path_str, path_basename,
-    path_trigger_match, paths_equivalent, strip_verbatim_path_prefix,
+    path_trigger_match, paths_equivalent, protected_document_stream_heuristic,
+    strip_verbatim_path_prefix, triggered_basename_in_haystack,
 };
 use crate::dlp::fragment::{file_fragment_meets_threshold, file_min_fragment_len};
 use crate::dlp::normalize::{normalize_with_map, Normalized};
@@ -1421,9 +1422,17 @@ fn scan_haystack(
     if haystack.is_empty() {
         return haystack.to_string();
     }
-    if whole_block_on_match && rule.path.is_dir() {
-        let rule_base = normalize_path_str(&rule.path.to_string_lossy());
-        if path_trigger_match(&rule_base, haystack) {
+    if whole_block_on_match {
+        if rule.path.is_dir() {
+            let rule_base = normalize_path_str(&rule.path.to_string_lossy());
+            if path_trigger_match(&rule_base, haystack) {
+                return tool_output_block_message.to_string();
+            }
+        }
+        if triggered_basename_in_haystack(allowed_paths, haystack) {
+            return tool_output_block_message.to_string();
+        }
+        if protected_document_stream_heuristic(haystack) {
             return tool_output_block_message.to_string();
         }
     }

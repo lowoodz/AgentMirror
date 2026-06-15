@@ -399,6 +399,35 @@ pub fn basename_trigger_match(basename: &str, text: &str) -> bool {
     text.to_ascii_lowercase().contains(&base)
 }
 
+/// True when tool output names a triggered indexed file (e.g. directory `ls` listings).
+pub fn triggered_basename_in_haystack(allowed_paths: &std::collections::HashSet<String>, haystack: &str) -> bool {
+    allowed_paths
+        .iter()
+        .any(|path| basename_trigger_match(&path_basename(path), haystack))
+}
+
+/// PostScript/PDF streams and raw PDF bytes often bypass plain-text fragment matching.
+pub fn protected_document_stream_heuristic(haystack: &str) -> bool {
+    if haystack.len() < 32 {
+        return false;
+    }
+    if haystack.contains("%PDF-") {
+        return true;
+    }
+    if haystack.contains("]TJ") && haystack.contains(" Tf") {
+        return true;
+    }
+    if haystack.contains("/FlateDecode")
+        && (haystack.contains("stream") || haystack.contains("<<"))
+    {
+        return true;
+    }
+    if haystack.contains(" cm\n") && haystack.contains(" re f") && haystack.contains(" Tf ") {
+        return true;
+    }
+    false
+}
+
 pub(crate) fn normalize_path_str(path: &str) -> String {
     path.replace('\\', "/")
 }
@@ -1072,5 +1101,25 @@ mod tests {
             activated.iter().any(|p| p.contains("Aibaba")),
             "expected Aibaba pdf activated, got {activated:?}"
         );
+    }
+
+    #[test]
+    fn protected_document_stream_heuristic_detects_postscript_and_pdf_markers() {
+        let postscript = "BT /F45 17 Tf [(D)]TJ/F45 13 Tf [(E)-61(A)-62(R)]TJ ET";
+        assert!(protected_document_stream_heuristic(postscript));
+        assert!(protected_document_stream_heuristic(
+            "%PDF-1.5\n<< /Filter /FlateDecode /Length 3400 >>\nstream\n"
+        ));
+        assert!(!protected_document_stream_heuristic("hello world"));
+    }
+
+    #[test]
+    fn triggered_basename_in_haystack_matches_ls_listing() {
+        use std::collections::HashSet;
+        let path = "/zone/Deep Learning For Anomaly Detection - A Survey, Sydney.pdf".into();
+        let allowed: HashSet<String> = HashSet::from([path]);
+        let listing = "total 32\n-rw-r--r-- Deep Learning For Anomaly Detection - A Survey, Sydney.pdf\n";
+        assert!(triggered_basename_in_haystack(&allowed, listing));
+        assert!(!triggered_basename_in_haystack(&allowed, "unrelated output"));
     }
 }

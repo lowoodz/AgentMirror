@@ -44,12 +44,36 @@ from test_common import (  # noqa: E402
 BASE = os.environ.get("SMR_BASE", "http://127.0.0.1:8080").rstrip("/")
 DEFAULT_SURVEYS = str(Path.home() / "Documents/AI/Cyber-Security/Surveys")
 TRAFFIC_DIR = Path.home() / "Library/Application Support/securemodelroute/traffic"
-INDEX_RULE = "file-1781089475590"
+DEFAULT_INDEX_RULE = "file-1781489736337"
+INDIA_SIDECAR = "61f6b69c2efbc14a.txt"
+
+
+def surveys_index_rule_id() -> str:
+    env = os.environ.get("SMR_SURVEYS_RULE_ID", "").strip()
+    if env:
+        return env
+    cfg = Path.home() / "Library/Application Support/securemodelroute/smr.yaml"
+    if cfg.is_file():
+        try:
+            import yaml  # type: ignore
+
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+            surveys = str(surveys_dir())
+            for rule in data.get("file_rules") or []:
+                path = str(rule.get("path") or "")
+                if surveys in path or path in surveys:
+                    rid = str(rule.get("id") or "").strip()
+                    if rid:
+                        return rid
+        except Exception:
+            pass
+    return DEFAULT_INDEX_RULE
+
+
 DEFAULT_CANARY = (
     "Abstract: Cyber crime is proliferating everywhere exploiting every kind of "
     "vulnerability to computing environment"
 )
-INDIA_SIDECAR = "61f6b69c2efbc14a.txt"
 
 
 def surveys_dir() -> Path:
@@ -57,10 +81,11 @@ def surveys_dir() -> Path:
 
 
 def indexed_pdf_paths() -> list[Path]:
+    rule_id = surveys_index_rule_id()
     files_json = (
         Path.home()
         / "Library/Application Support/securemodelroute/file-index"
-        / INDEX_RULE
+        / rule_id
         / "gen"
     )
     if not files_json.is_dir():
@@ -92,14 +117,17 @@ def pick_pdf() -> Path:
             if path.name == preferred_name:
                 return path
         return indexed[0]
-    raise SystemExit(f"No PDF under {d} and no indexed paths in file-index/{INDEX_RULE}")
+    raise SystemExit(
+        f"No PDF under {d} and no indexed paths in file-index/{surveys_index_rule_id()}"
+    )
 
 
 def india_sidecar_text(max_chars: int = 2500) -> str:
+    rule_id = surveys_index_rule_id()
     sidecar = (
         Path.home()
         / "Library/Application Support/securemodelroute/file-index"
-        / INDEX_RULE
+        / rule_id
         / "extracted"
         / INDIA_SIDECAR
     )
