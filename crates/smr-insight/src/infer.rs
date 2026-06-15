@@ -1,9 +1,12 @@
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use serde::Deserialize;
 
 use crate::llm::LlmClient;
+use crate::locale::ReportLanguage;
 use crate::models::{
-    CognitiveEvent, CounterfactualNote, CriticsAnalysis, CriticsScore, DialecticalNotes, EventKind, Issue, ReflectionReport, RunOutcome, RunRecord, RunStatus, Suggestion,
+    CognitiveEvent, CounterfactualNote, CriticsAnalysis, CriticsScore, DailyAgentSection,
+    DailyReport, DialecticalNotes, Issue, ReflectionReport, RunOutcome, RunRecord,
+    RunStatus, Suggestion,
 };
 use crate::token_budget::{batch_events, format_batch_trajectory, MAX_BATCH_TOKENS};
 
@@ -107,7 +110,7 @@ fn default_priority() -> String {
     "medium".to_string()
 }
 
-const CRITIC_SYSTEM: &str = r#"You are AgentMirror Critic — an expert in agent trajectory analysis, formal logic, and dialectical reasoning.
+const CRITIC_SYSTEM_TEMPLATE: &str = r#"You are AgentMirror Critic — an expert in agent trajectory analysis, formal logic, and dialectical reasoning.
 
 You receive cognitive events in batches. When a prior reflection report is provided, MERGE and REFINE it with the new events — output one complete updated report covering everything seen so far, not just the latest batch.
 
@@ -127,9 +130,16 @@ Method (apply all in every batch output):
    - efficiency: direct path vs detours
    - safety: risks, dangerous tools, policy issues
 
-Write in the same language as the user's goal (Chinese → Chinese; English → English).
+{language_instruction}
 Be specific — cite event seq numbers from the trace.
 Respond with JSON only — no markdown fences."#;
+
+fn critic_system_prompt(language: ReportLanguage) -> String {
+    CRITIC_SYSTEM_TEMPLATE.replace(
+        "{language_instruction}",
+        language.write_instruction(),
+    )
+}
 
 /// LLM-only reflection report: incremental batched event iteration.
 pub fn generate_reflection_report_llm(
@@ -139,6 +149,7 @@ pub fn generate_reflection_report_llm(
     execution_summary: &str,
     safety_notes: &[String],
     prior: Option<&ReflectionReport>,
+    language: ReportLanguage,
 ) -> Option<ReflectionReport> {
     let client = client?;
     if events.is_empty() {
@@ -156,7 +167,7 @@ pub fn generate_reflection_report_llm(
     let original_goal = prior
         .and_then(|p| p.original_goal.clone())
         .filter(|g| !g.trim().is_empty())
-        .unwrap_or_else(|| infer_initial_goal_llm(client, events, &run.goal));
+        .unwrap_or_else(|| infer_initial_goal_llm(client, events, &run.goal, language));
     let mut current_goal = prior
         .map(|p| p.goal.clone())
         .unwrap_or_else(|| original_goal.clone());
@@ -199,7 +210,7 @@ pub fn generate_reflection_report_llm(
             &trajectory,
         );
 
-        match client.complete(CRITIC_SYSTEM, &user) {
+        match client.complete(&critic_system_prompt(language), &user) {
             Ok(raw) => {
                 let mut report =
                     report_shell(run, execution_summary, &original_goal, &current_goal, safety_notes);
@@ -550,19 +561,24 @@ pub fn infer_initial_goal_llm(
     client: &dyn LlmClient,
     events: &[CognitiveEvent],
     fallback: &str,
+    language: ReportLanguage,
 ) -> String {
     let head: Vec<&CognitiveEvent> = events.iter().take(INITIAL_GOAL_EVENT_COUNT).collect();
     let trajectory = format_batch_trajectory(&head);
     if trajectory.is_empty() {
         return fallback.to_string();
     }
-    let system = r#"Identify the user's true initial task goal from the FIRST events of an agent run.
-Reply with JSON only: {"original_goal":"one-line goal","confidence":0-1}"#;
+    let system = format!(
+        r#"Identify the user's true initial task goal from the FIRST events of an agent run.
+Reply with JSON only: {{"original_goal":"one-line goal","confidence":0-1}}
+{}"#,
+        language.write_instruction()
+    );
     let user = format!(
         "First {} event(s) of the run:\n{trajectory}",
         head.len()
     );
-    match client.complete(system, &user) {
+    match client.complete(&system, &user) {
         Ok(raw) => {
             let json_text = extract_json_object(&raw);
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_text) {
@@ -583,21 +599,169 @@ Reply with JSON only: {"original_goal":"one-line goal","confidence":0-1}"#;
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct LlmDailyResponse {
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    tasks_overview: Option<String>,
+    #[serde(default)]
+    progress_narrative: Option<String>,
+    #[serde(default)]
+    top_issues: Vec<String>,
+    #[serde(default)]
+    top_suggestions: Vec<String>,
+    #[serde(default)]
+    agent_sections: Vec<LlmDailyAgentSection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmDailyAgentSection {
+    agent_id: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    run_count: u32,
+}
+
+const DAILY_SYSTEM_TEMPLATE: &str = r#"You are AgentMirror Daily Analyst — synthesize one executive daily report across ALL agents (智能体) for a single calendar day.
+
+You receive per-run reflection reports and run metadata. Produce a cohesive day-level narrative covering:
+1. **Tasks** — what agents worked on (goals, themes)
+2. **Progress** — outcomes, completions, in-flight work
+3. **Issues** — cross-agent problems, risks, blockers
+4. **Suggestions** — actionable recommendations for tomorrow
+
+{language_instruction}
+Respond with JSON only — no markdown fences."#;
+
+fn daily_system_prompt(language: ReportLanguage) -> String {
+    DAILY_SYSTEM_TEMPLATE.replace(
+        "{language_instruction}",
+        language.write_instruction(),
+    )
+}
+
+/// Enhance a rule-built daily report using reflection reports as LLM input.
+pub fn generate_daily_report_llm(
+    client: &dyn LlmClient,
+    date: NaiveDate,
+    baseline: &DailyReport,
+    run_inputs: &[DailyRunReflectionInput],
+    language: ReportLanguage,
+) -> Option<DailyReport> {
+    let mut user = format!(
+        "Date: {}\nStats: {} runs — {} completed, {} running, {} failed, {} turns total.\n\nPer-run reflection inputs:\n",
+        date,
+        baseline.run_summaries.len(),
+        baseline.runs_completed,
+        baseline.runs_running,
+        baseline.runs_failed,
+        baseline.total_turns,
+    );
+    for (idx, input) in run_inputs.iter().take(80).enumerate() {
+        user.push_str(&format!(
+            "\n--- Run {} ---\nAgent: {} ({})\nGoal: {}\nStatus: {} · {} turns\n",
+            idx + 1,
+            input.display_name,
+            input.agent_id,
+            input.goal,
+            input.status,
+            input.turn_count,
+        ));
+        if let Some(summary) = &input.reflection_summary {
+            user.push_str(&format!("Reflection summary: {summary}\n"));
+        }
+        if !input.issues.is_empty() {
+            user.push_str(&format!("Issues: {}\n", input.issues.join("; ")));
+        }
+        if !input.suggestions.is_empty() {
+            user.push_str(&format!("Suggestions: {}\n", input.suggestions.join("; ")));
+        }
+    }
+    if run_inputs.len() > 80 {
+        user.push_str(&format!(
+            "\n(... {} additional runs omitted for length)\n",
+            run_inputs.len() - 80
+        ));
+    }
+
+    let raw = client.complete(&daily_system_prompt(language), &user).ok()?;
+    let json_text = extract_json_object(&raw);
+    let parsed: LlmDailyResponse = serde_json::from_str(&json_text).ok()?;
+
+    let mut report = baseline.clone();
+    if !parsed.summary.trim().is_empty() {
+        report.summary = parsed.summary.trim().to_string();
+    }
+    report.tasks_overview = parsed
+        .tasks_overview
+        .filter(|s| !s.trim().is_empty());
+    report.progress_narrative = parsed
+        .progress_narrative
+        .filter(|s| !s.trim().is_empty());
+    if !parsed.top_issues.is_empty() {
+        report.top_issues = parsed.top_issues;
+    }
+    if !parsed.top_suggestions.is_empty() {
+        report.top_suggestions = parsed.top_suggestions;
+    }
+    if !parsed.agent_sections.is_empty() {
+        report.agent_sections = parsed
+            .agent_sections
+            .into_iter()
+            .map(|s| {
+                let agent_id = s.agent_id.clone();
+                DailyAgentSection {
+                    agent_id,
+                    display_name: if s.display_name.trim().is_empty() {
+                        s.agent_id
+                    } else {
+                        s.display_name
+                    },
+                    summary: s.summary,
+                    run_count: s.run_count,
+                }
+            })
+            .collect();
+    }
+    report.llm_enhanced = report.tasks_overview.is_some()
+        || report.progress_narrative.is_some()
+        || !report.summary.is_empty();
+    Some(report)
+}
+
+/// Per-run slice fed into daily LLM synthesis.
+pub struct DailyRunReflectionInput {
+    pub agent_id: String,
+    pub display_name: String,
+    pub goal: String,
+    pub status: String,
+    pub turn_count: u32,
+    pub reflection_summary: Option<String>,
+    pub issues: Vec<String>,
+    pub suggestions: Vec<String>,
+}
+
 /// Legacy helper — uses first events only (same as reflection pipeline step 1).
 pub fn infer_goal_llm(
     client: Option<&dyn LlmClient>,
     events: &[CognitiveEvent],
     fallback: &str,
+    language: ReportLanguage,
 ) -> String {
     let Some(client) = client else {
         return fallback.to_string();
     };
-    infer_initial_goal_llm(client, events, fallback)
+    infer_initial_goal_llm(client, events, fallback, language)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::EventKind;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -714,6 +878,7 @@ mod tests {
             "Read auth logs",
             &[],
             None,
+            ReportLanguage::En,
         )
         .expect("report");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -766,6 +931,7 @@ mod tests {
             "many steps",
             &[],
             None,
+            ReportLanguage::En,
         )
         .expect("report");
         assert!(calls.load(Ordering::SeqCst) > 2);

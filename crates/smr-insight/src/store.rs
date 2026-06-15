@@ -410,17 +410,33 @@ impl InsightStore {
             }
             return Ok(Vec::new());
         }
+        // Default: one global report for all agents.
         let mut stmt = conn.prepare(
-            "SELECT report_json FROM insight_daily_reports WHERE date = ?1 ORDER BY agent_id",
+            "SELECT report_json FROM insight_daily_reports WHERE date = ?1 AND agent_id = ?2",
         )?;
-        let rows = stmt.query_map(params![date], |row| {
+        let mut rows = stmt.query(params![date, crate::models::DAILY_REPORT_ALL_AGENTS])?;
+        if let Some(row) = rows.next()? {
             let json: String = row.get(0)?;
-            Ok(json)
-        })?;
-        Ok(rows
-            .filter_map(|r| r.ok())
-            .filter_map(|json| serde_json::from_str::<DailyReport>(&json).ok())
-            .collect())
+            return Ok(vec![serde_json::from_str(&json)?]);
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn runs_on_date(&self, date: NaiveDate) -> Result<Vec<RunRecord>> {
+        let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let end = date.and_hms_opt(23, 59, 59).unwrap().and_utc();
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
+             FROM insight_runs
+             WHERE started_at >= ?1 AND started_at <= ?2
+             ORDER BY started_at ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![start.to_rfc3339(), end.to_rfc3339()],
+            map_run,
+        )?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn runs_for_agent_on_date(&self, agent_id: &str, date: NaiveDate) -> Result<Vec<RunRecord>> {

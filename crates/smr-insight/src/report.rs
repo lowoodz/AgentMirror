@@ -2,11 +2,12 @@ use chrono::{DateTime, NaiveDate, Utc};
 
 use crate::critic::{evaluate, CriticInput};
 use crate::graph::{build_graph, execution_summary};
-use crate::infer::generate_reflection_report_llm;
+use crate::infer::{generate_daily_report_llm, generate_reflection_report_llm, DailyRunReflectionInput};
 use crate::llm::LlmClient;
+use crate::locale::ReportLanguage;
 use crate::models::{
-    CognitiveEvent, DailyReport, DailyRunSummary, Issue, ReflectionReport, RunOutcome,
-    RunRecord, RunStatus,
+    CognitiveEvent, DailyAgentSection, DailyReport, DailyRunSummary, DAILY_REPORT_ALL_AGENTS,
+    Issue, ReflectionReport, RunOutcome, RunRecord, RunStatus,
 };
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::store::InsightStore;
@@ -36,6 +37,7 @@ pub fn build_reflection_report(
     safety: Option<&dyn SafetyScanner>,
     llm: Option<&dyn LlmClient>,
     llm_critic: bool,
+    language: ReportLanguage,
 ) -> anyhow::Result<ReflectionReport> {
     let events = store.list_events(&run.run_id)?;
     let safety_findings = scan_action_events(&events, safety);
@@ -60,6 +62,7 @@ pub fn build_reflection_report(
             &execution_summary,
             &safety_findings,
             prior.as_ref(),
+            language,
         ) {
             return Ok(report);
         }
@@ -197,6 +200,7 @@ pub fn finalize_runs_for_llm_reports(
     safety: Option<&dyn SafetyScanner>,
     llm: Option<&dyn LlmClient>,
     llm_critic: bool,
+    language: ReportLanguage,
 ) -> anyhow::Result<usize> {
     if !llm_critic {
         return Ok(0);
@@ -211,26 +215,30 @@ pub fn finalize_runs_for_llm_reports(
             run.ended_at = Some(Utc::now());
         }
         store.update_run(&run)?;
-        let report = build_reflection_report(store, &run, safety, llm, llm_critic)?;
+        let report = build_reflection_report(store, &run, safety, llm, llm_critic, language)?;
         store.save_report(&report)?;
         updated += 1;
     }
     Ok(updated)
 }
 
-pub fn generate_daily_report(
+pub fn generate_all_agents_daily_report(
     store: &InsightStore,
-    agent_id: &str,
     date: NaiveDate,
+    llm: Option<&dyn LlmClient>,
+    llm_daily: bool,
+    language: ReportLanguage,
 ) -> anyhow::Result<Option<DailyReport>> {
-    let agent = match store.get_agent(agent_id)? {
-        Some(a) => a,
-        None => return Ok(None),
-    };
-    let runs = store.runs_for_agent_on_date(agent_id, date)?;
+    let runs = store.runs_on_date(date)?;
     if runs.is_empty() {
         return Ok(None);
     }
+
+    let agents = store.list_agents(500)?;
+    let agent_names: std::collections::HashMap<String, String> = agents
+        .into_iter()
+        .map(|a| (a.agent_id.clone(), a.display_name))
+        .collect();
 
     let mut runs_completed = 0u32;
     let mut runs_failed = 0u32;
@@ -239,9 +247,13 @@ pub fn generate_daily_report(
     let mut top_issues = Vec::new();
     let mut top_suggestions = Vec::new();
     let mut run_summaries = Vec::new();
+    let mut run_inputs = Vec::new();
+    let mut per_agent_runs: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
 
     for run in &runs {
         total_turns += run.turn_count;
+        *per_agent_runs.entry(run.agent_id.clone()).or_insert(0) += 1;
         match run.status {
             RunStatus::Completed => runs_completed += 1,
             RunStatus::Failed => runs_failed += 1,
@@ -254,22 +266,66 @@ pub fn generate_daily_report(
             status: run.status.as_str().to_string(),
             turn_count: run.turn_count,
         });
+
+        let display_name = agent_names
+            .get(&run.agent_id)
+            .cloned()
+            .unwrap_or_else(|| run.agent_id.clone());
+
+        let mut reflection_summary = None;
+        let mut issue_msgs = Vec::new();
+        let mut suggestion_msgs = Vec::new();
         if let Ok(Some(report)) = store.get_report(&run.run_id) {
-            for issue in report.issues.iter().take(2) {
+            reflection_summary = report
+                .reflection_summary
+                .clone()
+                .or_else(|| {
+                    if !report.execution_summary.is_empty() {
+                        Some(report.execution_summary.clone())
+                    } else {
+                        None
+                    }
+                });
+            for issue in report.issues.iter().take(3) {
                 if !top_issues.contains(&issue.message) {
                     top_issues.push(issue.message.clone());
                 }
+                issue_msgs.push(issue.message.clone());
             }
-            for sug in report.suggestions.iter().take(2) {
+            for sug in report.suggestions.iter().take(3) {
                 if !top_suggestions.contains(&sug.message) {
                     top_suggestions.push(sug.message.clone());
                 }
+                suggestion_msgs.push(sug.message.clone());
             }
         }
+        run_inputs.push(DailyRunReflectionInput {
+            agent_id: run.agent_id.clone(),
+            display_name,
+            goal: run.goal.clone(),
+            status: run.status.as_str().to_string(),
+            turn_count: run.turn_count,
+            reflection_summary,
+            issues: issue_msgs,
+            suggestions: suggestion_msgs,
+        });
     }
 
-    top_issues.truncate(5);
-    top_suggestions.truncate(5);
+    top_issues.truncate(8);
+    top_suggestions.truncate(8);
+
+    let agent_sections: Vec<DailyAgentSection> = per_agent_runs
+        .into_iter()
+        .map(|(agent_id, run_count)| DailyAgentSection {
+            display_name: agent_names
+                .get(&agent_id)
+                .cloned()
+                .unwrap_or_else(|| agent_id.clone()),
+            agent_id,
+            summary: String::new(),
+            run_count,
+        })
+        .collect();
 
     let summary = format!(
         "{} runs on {} — {} completed, {} in progress, {} failed, {} LLM turns total.",
@@ -281,10 +337,10 @@ pub fn generate_daily_report(
         total_turns
     );
 
-    Ok(Some(DailyReport {
+    let mut report = DailyReport {
         date: date.to_string(),
-        agent_id: agent_id.to_string(),
-        display_name: agent.display_name.clone(),
+        agent_id: DAILY_REPORT_ALL_AGENTS.to_string(),
+        display_name: language.daily_all_agents_label().to_string(),
         summary,
         runs_completed,
         runs_failed,
@@ -294,7 +350,37 @@ pub fn generate_daily_report(
         top_suggestions,
         run_summaries,
         generated_at: Utc::now(),
-    }))
+        tasks_overview: None,
+        progress_narrative: None,
+        llm_enhanced: false,
+        agent_sections,
+    };
+
+    if llm_daily {
+        if let Some(client) = llm {
+            if let Some(enhanced) =
+                generate_daily_report_llm(client, date, &report, &run_inputs, language)
+            {
+                report = enhanced;
+            } else {
+                tracing::warn!(
+                    date = %date,
+                    "AgentMirror daily LLM unavailable — using rule baseline"
+                );
+            }
+        }
+    }
+
+    Ok(Some(report))
+}
+
+/// Per-agent daily reports are deprecated; kept as alias for tests/scripts.
+pub fn generate_daily_report(
+    store: &InsightStore,
+    _agent_id: &str,
+    date: NaiveDate,
+) -> anyhow::Result<Option<DailyReport>> {
+    generate_all_agents_daily_report(store, date, None, false, ReportLanguage::En)
 }
 
 pub fn daily_report_markdown(report: &DailyReport) -> String {
@@ -305,6 +391,21 @@ pub fn daily_report_markdown(report: &DailyReport) -> String {
         "- Completed: {}\n- Running: {}\n- Failed: {}\n- Turns: {}\n\n",
         report.runs_completed, report.runs_running, report.runs_failed, report.total_turns
     ));
+    if let Some(tasks) = &report.tasks_overview {
+        out.push_str(&format!("## Tasks\n{tasks}\n\n"));
+    }
+    if let Some(progress) = &report.progress_narrative {
+        out.push_str(&format!("## Progress\n{progress}\n\n"));
+    }
+    if !report.agent_sections.is_empty() {
+        out.push_str("## Agents\n");
+        for a in &report.agent_sections {
+            out.push_str(&format!(
+                "### {} ({} runs)\n{}\n\n",
+                a.display_name, a.run_count, a.summary
+            ));
+        }
+    }
     if !report.run_summaries.is_empty() {
         out.push_str("## Runs\n");
         for r in &report.run_summaries {
@@ -352,6 +453,7 @@ pub fn sweep_idle_running_runs(
     safety: Option<&dyn SafetyScanner>,
     llm: Option<&dyn LlmClient>,
     llm_critic: bool,
+    language: ReportLanguage,
 ) -> anyhow::Result<usize> {
     if !llm_critic {
         return Ok(0);
@@ -371,7 +473,7 @@ pub fn sweep_idle_running_runs(
         }
         finalize_run_if_idle(&mut run, last);
         store.update_run(&run)?;
-        let report = build_reflection_report(store, &run, safety, llm, llm_critic)?;
+        let report = build_reflection_report(store, &run, safety, llm, llm_critic, language)?;
         store.save_report(&report)?;
         if report.llm_enhanced {
             updated += 1;

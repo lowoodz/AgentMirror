@@ -10,7 +10,7 @@ use tracing::{debug, error, warn};
 use crate::llm::LlmClient;
 use crate::models::{InsightConfig, TraceTurn};
 use crate::pipeline::Pipeline;
-use crate::report::{daily_report_markdown, generate_daily_report, sweep_idle_running_runs};
+use crate::report::{daily_report_markdown, generate_all_agents_daily_report, sweep_idle_running_runs};
 use crate::safety::SafetyScanner;
 use crate::store::InsightStore;
 
@@ -52,7 +52,11 @@ impl InsightService {
             Arc::clone(&llm),
             Arc::clone(&config_slot),
         );
-        spawn_daily_scheduler(Arc::clone(&store), Arc::clone(&config_slot));
+        spawn_daily_scheduler(
+            Arc::clone(&store),
+            Arc::clone(&llm),
+            Arc::clone(&config_slot),
+        );
         spawn_idle_run_sweeper(
             Arc::clone(&store),
             Arc::clone(&safety),
@@ -112,20 +116,25 @@ impl InsightService {
     }
 
     pub fn generate_daily_for_date(&self, date: NaiveDate) -> anyhow::Result<usize> {
-        let agents = self.store.list_agents(500)?;
-        let mut count = 0;
+        let cfg = self.config.read().clone();
+        let llm = self.llm.lock().clone();
         let daily_dir = self.store.daily_reports_dir();
         std::fs::create_dir_all(&daily_dir)?;
-        for agent in agents {
-            if let Some(report) = generate_daily_report(&self.store, &agent.agent_id, date)? {
-                self.store.save_daily_report(&report)?;
-                let md = daily_report_markdown(&report);
-                let path = daily_dir.join(format!("{}_{}.md", report.date, report.agent_id));
-                let _ = std::fs::write(path, md);
-                count += 1;
-            }
+        if let Some(report) = generate_all_agents_daily_report(
+            &self.store,
+            date,
+            llm.as_deref(),
+            cfg.llm_daily,
+            cfg.report_language(),
+        )? {
+            self.store.save_daily_report(&report)?;
+            let md = daily_report_markdown(&report);
+            let path = daily_dir.join(format!("{}_all.md", report.date));
+            let _ = std::fs::write(path, md);
+            Ok(1)
+        } else {
+            Ok(0)
         }
-        Ok(count)
     }
 
     pub fn reset(&self) -> anyhow::Result<crate::store::ResetStats> {
@@ -151,6 +160,7 @@ impl InsightService {
             scanner.as_deref(),
             llm.as_deref(),
             cfg.llm_critic,
+            cfg.report_language(),
         )
     }
 }
@@ -188,7 +198,11 @@ fn spawn_worker(
         .expect("spawn AgentMirror worker thread");
 }
 
-fn spawn_daily_scheduler(store: Arc<InsightStore>, config: Arc<parking_lot::RwLock<InsightConfig>>) {
+fn spawn_daily_scheduler(
+    store: Arc<InsightStore>,
+    llm: LlmSlot,
+    config: Arc<parking_lot::RwLock<InsightConfig>>,
+) {
     thread::Builder::new()
         .name("agentmirror-daily".into())
         .spawn(move || {
@@ -199,20 +213,23 @@ fn spawn_daily_scheduler(store: Arc<InsightStore>, config: Arc<parking_lot::RwLo
             rt.block_on(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-                    let hour = config.read().daily_report_hour;
+                    let cfg = config.read().clone();
+                    let hour = cfg.daily_report_hour;
                     if Local::now().hour() != u32::from(hour) {
                         continue;
                     }
                     let yesterday = (Local::now() - chrono::Duration::days(1)).date_naive();
-                    let agents = store.list_agents(500).unwrap_or_default();
-                    for agent in agents {
-                        if let Ok(Some(report)) =
-                            generate_daily_report(&store, &agent.agent_id, yesterday)
-                        {
-                            let _ = store.save_daily_report(&report);
-                        }
+                    let llm_client = llm.lock().clone();
+                    if let Ok(Some(report)) = generate_all_agents_daily_report(
+                        &store,
+                        yesterday,
+                        llm_client.as_deref(),
+                        cfg.llm_daily,
+                        cfg.report_language(),
+                    ) {
+                        let _ = store.save_daily_report(&report);
                     }
-                    let retention = config.read().retention_days;
+                    let retention = cfg.retention_days;
                     if retention > 0 {
                         if let Err(err) = store.purge_older_than(retention) {
                             warn!(?err, "AgentMirror scheduled retention purge failed");
@@ -246,11 +263,13 @@ fn spawn_idle_run_sweeper(
                     let scanner = safety.lock().clone();
                     let llm_client = llm.lock().clone();
                     let llm_critic = config.read().llm_critic;
+                    let language = config.read().report_language();
                     if let Err(err) = sweep_idle_running_runs(
                         &store,
                         scanner.as_deref(),
                         llm_client.as_deref(),
                         llm_critic,
+                        language,
                     ) {
                         warn!(?err, "AgentMirror idle run sweep failed");
                     }

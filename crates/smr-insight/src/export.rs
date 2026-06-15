@@ -15,6 +15,27 @@ pub fn daily_reports_html(reports: &[DailyReport], title: &str) -> String {
             rep.total_turns,
             html_escape(&rep.summary),
         ));
+        if let Some(tasks) = &rep.tasks_overview {
+            if !tasks.is_empty() {
+                body.push_str(&format!("<h3>Tasks</h3><p>{}</p>", html_escape(tasks)));
+            }
+        }
+        if let Some(progress) = &rep.progress_narrative {
+            if !progress.is_empty() {
+                body.push_str(&format!("<h3>Progress</h3><p>{}</p>", html_escape(progress)));
+            }
+        }
+        if !rep.agent_sections.is_empty() {
+            body.push_str("<h3>Agents</h3>");
+            for a in &rep.agent_sections {
+                body.push_str(&format!(
+                    "<h4>{} ({} runs)</h4><p>{}</p>",
+                    html_escape(&a.display_name),
+                    a.run_count,
+                    html_escape(&a.summary),
+                ));
+            }
+        }
         if !rep.run_summaries.is_empty() {
             body.push_str("<h3>Runs</h3><ul>");
             for r in &rep.run_summaries {

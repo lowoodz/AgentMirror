@@ -33,6 +33,8 @@ insight:
   retention_days: 30
   llm_critic: true  # dialectical + logical LLM reflection reports (uses critic_model_group); set false to skip LLM calls
   critic_model_group: high  # fallback group for AgentMirror critic / goal LLM calls
+  llm_daily: true  # LLM daily report for all agents (uses reflection reports as input)
+  # report_language follows server.ui_language (en/zh) automatically
   # Runs with no new events for 10+ minutes are finalized and get an LLM reflection report.
 
 fallback_groups:

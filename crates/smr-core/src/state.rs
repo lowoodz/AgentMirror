@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::RwLock;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, UiLanguage};
 use crate::dlp::{DlpEngine, SessionGuard};
 use crate::events::{EventKind, EventLog};
 use crate::ops::OperationSecurity;
@@ -124,13 +124,20 @@ impl SharedApp {
         drop(inner);
         self.insight
             .set_safety_scanner(Some(Arc::new(crate::insight_ops::OpsSafetyScanner(ops))));
-        if cfg.llm_critic {
+        if cfg.llm_critic || cfg.llm_daily {
             self.insight.set_llm_client(Some(Arc::new(
                 crate::insight_llm::RouterLlmClient::new(router, &cfg.critic_model_group),
             )));
         } else {
             self.insight.set_llm_client(None);
         }
+    }
+
+    fn sync_insight_report_language(config: &mut AppConfig) {
+        config.insight.report_language = match config.server.ui_language {
+            UiLanguage::Zh => "zh".to_string(),
+            UiLanguage::En => "en".to_string(),
+        };
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {
@@ -171,7 +178,8 @@ impl SharedApp {
     }
 
     pub fn reload(&self) -> Result<()> {
-        let config = AppConfig::load(&self.config_path)?;
+        let mut config = AppConfig::load(&self.config_path)?;
+        Self::sync_insight_report_language(&mut config);
         self.traffic.apply_policy(&config.logging);
         self.insight.apply_config(&config.insight);
         self.replace_engines(config)?;
@@ -188,6 +196,7 @@ impl SharedApp {
         config.pipeline.normalize_modes();
         config.logging.normalize_traffic_policy();
         config.insight.normalize();
+        Self::sync_insight_report_language(&mut config);
         if config.insight.enabled && config.insight.require_traffic_bodies {
             config.logging.save_traffic_bodies = true;
         }
@@ -223,7 +232,8 @@ impl SharedApp {
             crate::paths::init_default_config(example_yaml)?
         };
 
-        let config = AppConfig::load(&path)?;
+        let mut config = AppConfig::load(&path)?;
+        SharedApp::sync_insight_report_language(&mut config);
         let insight = InsightService::open(
             &crate::paths::data_dir(),
             crate::paths::insight_graphs_dir(),

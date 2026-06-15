@@ -175,6 +175,7 @@ impl Pipeline {
             self.safety.as_deref(),
             self.llm.as_deref(),
             self.config.llm_critic,
+            self.config.report_language(),
         )?;
         self.store.save_report(&report)?;
 

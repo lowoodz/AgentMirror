@@ -95,7 +95,7 @@ async fn api_insight_reset(
 
 async fn api_insight_status(State(s): State<HttpState>) -> Json<serde_json::Value> {
     let cfg = s.app.config();
-    let critic_llm = if cfg.insight.llm_critic {
+    let critic_llm = if cfg.insight.llm_critic || cfg.insight.llm_daily {
         let snap = s.app.snapshot();
         Some(crate::insight_llm::probe_critic_group(
             snap.router,

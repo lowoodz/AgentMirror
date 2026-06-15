@@ -4,6 +4,7 @@ pub mod extract;
 pub mod graph;
 pub mod infer;
 pub mod llm;
+pub mod locale;
 pub mod models;
 pub mod parser;
 pub mod pattern;
@@ -16,6 +17,7 @@ pub mod store;
 pub mod token_budget;
 pub mod worker;
 
+pub use locale::ReportLanguage;
 pub use models::{InsightConfig, TraceTurn};
 pub use llm::LlmClient;
 pub use safety::SafetyScanner;

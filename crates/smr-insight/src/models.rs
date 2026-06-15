@@ -230,6 +230,9 @@ pub struct ReflectionReport {
     pub llm_event_count: u32,
 }
 
+/// One global daily report row id (all agents combined).
+pub const DAILY_REPORT_ALL_AGENTS: &str = "_all";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyReport {
     pub date: String,
@@ -244,6 +247,25 @@ pub struct DailyReport {
     pub top_suggestions: Vec<String>,
     pub run_summaries: Vec<DailyRunSummary>,
     pub generated_at: DateTime<Utc>,
+    /// LLM narrative: tasks and goals across agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks_overview: Option<String>,
+    /// LLM narrative: progress and outcomes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_narrative: Option<String>,
+    #[serde(default)]
+    pub llm_enhanced: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_sections: Vec<DailyAgentSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyAgentSection {
+    pub agent_id: String,
+    pub display_name: String,
+    pub summary: String,
+    #[serde(default)]
+    pub run_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,6 +334,15 @@ pub struct InsightConfig {
     pub llm_critic: bool,
     #[serde(default = "default_critic_group")]
     pub critic_model_group: String,
+    /// Report language: `en` or `zh` (synced from server.ui_language).
+    #[serde(default = "default_report_language")]
+    pub report_language: String,
+    #[serde(default = "default_true")]
+    pub llm_daily: bool,
+}
+
+fn default_report_language() -> String {
+    "en".to_string()
 }
 
 fn default_true() -> bool {
@@ -339,11 +370,17 @@ impl Default for InsightConfig {
             retention_days: default_retention(),
             llm_critic: true,
             critic_model_group: default_critic_group(),
+            report_language: default_report_language(),
+            llm_daily: true,
         }
     }
 }
 
 impl InsightConfig {
+    pub fn report_language(&self) -> crate::locale::ReportLanguage {
+        crate::locale::ReportLanguage::parse(&self.report_language)
+    }
+
     pub fn normalize(&mut self) {
         if self.retention_days == 0 {
             self.retention_days = default_retention();
