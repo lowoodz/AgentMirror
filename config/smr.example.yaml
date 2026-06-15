@@ -31,8 +31,8 @@ insight:
   require_traffic_bodies: true
   daily_report_hour: 8
   retention_days: 30
-  llm_critic: false
-  critic_model_group: medium
+  llm_critic: false  # set true for dialectical + logical LLM reflection reports (uses critic_model_group)
+  critic_model_group: medium  # fallback group for AgentMirror critic / goal LLM calls
 
 fallback_groups:
   high:

@@ -2,10 +2,8 @@ use chrono::{NaiveDate, Utc};
 
 use crate::critic::{evaluate, CriticInput};
 use crate::graph::{build_graph, execution_summary};
-use crate::models::{
-    DailyReport, DailyRunSummary, ReflectionReport, RunOutcome, RunRecord, RunStatus,
-};
-use crate::infer::maybe_llm_enrich;
+use crate::models::{DailyReport, DailyRunSummary, ReflectionReport, RunOutcome, RunRecord, RunStatus};
+use crate::infer::enrich_report_with_llm;
 use crate::llm::LlmClient;
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::store::InsightStore;
@@ -52,10 +50,13 @@ pub fn build_reflection_report(
         dialectical: None,
         counterfactuals: Vec::new(),
         estimated_improvement: None,
+        logical_analysis: None,
+        reflection_summary: None,
+        llm_enhanced: false,
     };
 
-    if llm_critic && run.status != RunStatus::Running {
-        maybe_llm_enrich(llm, run, &events, &mut report);
+    if llm_critic {
+        enrich_report_with_llm(llm, run, &events, &mut report);
     }
 
     Ok(report)

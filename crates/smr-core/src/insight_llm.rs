@@ -45,8 +45,8 @@ impl LlmClient for RouterLlmClient {
                     {"role": "user", "content": user}
                 ],
                 "stream": false,
-                "max_tokens": 1500,
-                "temperature": 0.2
+                "max_tokens": 4096,
+                "temperature": 0.25
             });
             let req = ForwardRequest {
                 method: Method::POST,

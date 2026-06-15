@@ -70,11 +70,11 @@ insight:
   require_traffic_bodies: true   # auto-enables logging.save_traffic_bodies
   daily_report_hour: 8
   retention_days: 30
-  llm_critic: false              # set true to enable LLM goal + critic enrichment
+  llm_critic: false              # set true for dialectical + logical LLM reflection reports
   critic_model_group: medium     # fallback group for insight LLM calls
 ```
 
-When `llm_critic: true`, AgentMirror calls the configured SafeRoute model group (1–2 calls per completed run; trajectory truncated to ~6k chars).
+When `llm_critic: true`, each run report gets a **rule baseline** plus an **LLM Critic** pass (logical critique, thesis/antithesis/synthesis, counterfactuals, five critic scores). One LLM call per report refresh; trajectory truncated to ~10k chars. High-severity safety issues from rules are preserved when merging LLM output.
 
 ---
 
@@ -106,7 +106,7 @@ Nav order: **AgentMirror** first.
 - Trajectory modal: **Graph / Timeline / Events / Raw traffic**
 - Graph tab: **directed graph** (layered DAG), **mind map** (radial from Goal), or list fallback; edges show causal labels
 - Daily report date picker + viewer
-- Reflection report with dialectical + counterfactual (when LLM enabled)
+- Reflection report modal: rule baseline + **LLM dialectical** blocks when enabled (`reflection_summary`, `logical_analysis`, thesis/antithesis/synthesis, counterfactuals)
 
 ---
 

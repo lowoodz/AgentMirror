@@ -186,6 +186,14 @@ pub struct ReflectionReport {
     pub counterfactuals: Vec<CounterfactualNote>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_improvement: Option<String>,
+    /// LLM-produced logical critique (goal-action chain, gaps, reasoning quality).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_analysis: Option<String>,
+    /// Short executive summary of the reflection (LLM when available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflection_summary: Option<String>,
+    #[serde(default)]
+    pub llm_enhanced: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
