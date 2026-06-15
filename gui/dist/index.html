@@ -458,7 +458,7 @@
         <div class="connect-icon" aria-hidden="true">↗</div>
         <div class="connect-meta-wrap">
           <div class="connect-name" id="providerName">LLM-SafeRoute</div>
-          <div class="connect-meta"><span data-i18n="overview.providerSub">OpenAI-compatible provider</span><span id="providerId" hidden>saferoute</span></div>
+          <div class="connect-meta"><span data-i18n="overview.providerSub">OpenAI &amp; Anthropic compatible provider</span><span id="providerId" hidden>saferoute</span></div>
         </div>
       </div>
       <div class="field-block">
@@ -750,7 +750,7 @@
 const I18N={
 en:{
 'securityMaster':'Security master switch','nav.reflection':'Agent Reflection','nav.overview':'Overview','nav.routing':'Routing','nav.dlp':'DLP','nav.path':'Path protection','nav.ops':'Operations','nav.logs':'Logs','nav.advanced':'Advanced Configs',
-'overview.pageHint':'Tracked agents at a glance, plus proxy connection and security status.','overview.agentsTitle':'AgentMirror','overview.agentCount':'agents','overview.recentRunsTitle':'Recent runs','overview.recentRuns':'recent runs','overview.openReflection':'Open Agent Reflection','overview.noAgents':'No agents tracked yet — route agent traffic through AgentMirror.','overview.baseUrl':'Base URL','overview.providerSub':'OpenAI-compatible provider','overview.modelsTitle':'Models','overview.openclawConfig':'OpenClaw configuration','overview.openclawSnippet':'# OpenClaw — one provider, three tier models','overview.proxyHint':'One base URL for OpenAI and Anthropic clients. AgentMirror detects the protocol and converts to each upstream model in the fallback group.','overview.defaultGroup':'Default group','overview.dlp':'DLP','overview.ops':'Operation security','overview.path':'Path protection','overview.index':'File index','overview.copyModel':'Copy id',
+'overview.pageHint':'Tracked agents at a glance, plus proxy connection and security status.','overview.agentsTitle':'AgentMirror','overview.agentCount':'agents','overview.recentRunsTitle':'Recent runs','overview.recentRuns':'recent runs','overview.openReflection':'Open Agent Reflection','overview.noAgents':'No agents tracked yet — route agent traffic through AgentMirror.','overview.baseUrl':'Base URL','overview.providerSub':'OpenAI & Anthropic compatible provider','overview.modelsTitle':'Models','overview.openclawConfig':'OpenClaw configuration','overview.openclawSnippet':'# OpenClaw — one provider, three tier models','overview.proxyHint':'One base URL for OpenAI and Anthropic clients. AgentMirror detects the protocol and converts to each upstream model in the fallback group.','overview.defaultGroup':'Default group','overview.dlp':'DLP','overview.ops':'Operation security','overview.path':'Path protection','overview.index':'File index','overview.copyModel':'Copy id',
 'mode.observe':'Observe','mode.enforce':'Enforce',
 'copy':'Copy','add':'Add','refresh':'Refresh',
 'routing.hint':'Drag to reorder fallback within each tier. Clients select a tier via model id on the shared base URL. Click Save routing to apply.','routing.save':'Save routing','group.high':'High precision','group.medium':'Balanced','group.low':'Lightweight',
@@ -766,7 +766,7 @@ en:{
 },
 zh:{
 'securityMaster':'安全防护总开关','nav.reflection':'智能体反思','nav.overview':'概览','nav.routing':'模型路由','nav.dlp':'数据防泄露','nav.path':'重要路径防护','nav.ops':'操作拦截','nav.logs':'日志','nav.advanced':'高级配置',
-'overview.pageHint':'智能体追踪概况一览，以及代理连接与安全状态。','overview.agentsTitle':'AgentMirror','overview.agentCount':'个智能体','overview.recentRunsTitle':'最近任务','overview.recentRuns':'条近期运行','overview.openReflection':'打开智能体反思','overview.noAgents':'尚无追踪记录 — 请将 Agent 流量经 AgentMirror 转发。','overview.baseUrl':'接口地址','overview.providerSub':'OpenAI 兼容 Provider','overview.modelsTitle':'模型','overview.openclawConfig':'OpenClaw 配置示例','overview.openclawSnippet':'# OpenClaw — 一个 Provider，三个档位模型','overview.proxyHint':'同一 base URL 兼容 OpenAI 与 Anthropic 客户端；AgentMirror 按请求自动识别协议，并在 fallback 组内转换为对应上游 API。','overview.defaultGroup':'默认组','overview.dlp':'DLP','overview.ops':'操作安全','overview.path':'路径防护','overview.index':'文件索引','overview.copyModel':'复制 ID',
+'overview.pageHint':'智能体追踪概况一览，以及代理连接与安全状态。','overview.agentsTitle':'AgentMirror','overview.agentCount':'个智能体','overview.recentRunsTitle':'最近任务','overview.recentRuns':'条近期运行','overview.openReflection':'打开智能体反思','overview.noAgents':'尚无追踪记录 — 请将 Agent 流量经 AgentMirror 转发。','overview.baseUrl':'接口地址','overview.providerSub':'OpenAI&Anthropic 兼容 Provider','overview.modelsTitle':'模型','overview.openclawConfig':'OpenClaw 配置示例','overview.openclawSnippet':'# OpenClaw — 一个 Provider，三个档位模型','overview.proxyHint':'同一 base URL 兼容 OpenAI 与 Anthropic 客户端；AgentMirror 按请求自动识别协议，并在 fallback 组内转换为对应上游 API。','overview.defaultGroup':'默认组','overview.dlp':'DLP','overview.ops':'操作安全','overview.path':'路径防护','overview.index':'文件索引','overview.copyModel':'复制 ID',
 'mode.observe':'观察','mode.enforce':'拦截',
 'copy':'复制','add':'添加','refresh':'刷新',
 'routing.hint':'按住 ⠿ 拖拽调整组内 fallback 顺序。客户端在同一 base URL 下用 model id 选档。点击「保存路由」后生效。','routing.save':'保存路由','group.high':'高精度','group.medium':'平衡','group.low':'轻量',
