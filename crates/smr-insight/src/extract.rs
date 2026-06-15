@@ -6,12 +6,12 @@ use uuid::Uuid;
 use crate::models::{CognitiveEvent, EventKind, TraceTurn};
 use crate::parser::{ParsedMessage, ParsedRequest, ParsedResponse, ToolCall};
 
-const OBS_SUMMARY_LIMIT: usize = 300;
-const ACTION_ARGS_LIMIT: usize = 120;
-const RESULT_SUMMARY_LIMIT: usize = 300;
-const REFLECTION_SUMMARY_LIMIT: usize = 250;
-const GOAL_SUMMARY_LIMIT: usize = 120;
-const DECISION_SUMMARY_LIMIT: usize = 160;
+const OBS_SUMMARY_LIMIT: usize = 600;
+const ACTION_ARGS_LIMIT: usize = 240;
+const RESULT_SUMMARY_LIMIT: usize = 600;
+const REFLECTION_SUMMARY_LIMIT: usize = 500;
+const GOAL_SUMMARY_LIMIT: usize = 240;
+const DECISION_SUMMARY_LIMIT: usize = 320;
 
 pub struct ExtractedTurn {
     pub events: Vec<CognitiveEventDraft>,
@@ -272,11 +272,11 @@ fn decision_patterns() -> &'static Vec<Regex> {
     static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
     PATTERNS.get_or_init(|| {
         vec![
-            Regex::new(r"(?i)(I'll|I will|Let me|First,? I'll|我先|我将|让我先|接下来|首先)(.{5,160})")
+            Regex::new(r"(?i)(I'll|I will|Let me|First,? I'll|我先|我将|让我先|接下来|首先)(.{5,320})")
                 .unwrap(),
-            Regex::new(r"(?i)(I need to|I should|我需要|我应该|打算|计划)(.{5,160})").unwrap(),
+            Regex::new(r"(?i)(I need to|I should|我需要|我应该|打算|计划)(.{5,320})").unwrap(),
             Regex::new(
-                r"(先|首先|接下来).{4,80}(查询|搜索|了解|收集|分析|检查|尝试|处理|实现|修复|编写|运行|调用)",
+                r"(先|首先|接下来).{4,160}(查询|搜索|了解|收集|分析|检查|尝试|处理|实现|修复|编写|运行|调用)",
             )
             .unwrap(),
         ]

@@ -411,9 +411,10 @@ pub fn infer_goal_from_request(req: &ParsedRequest) -> String {
 }
 
 fn truncate_goal(s: &str) -> String {
+    const GOAL_LIMIT: usize = 240;
     let s = s.lines().next().unwrap_or(s).trim();
-    if s.chars().count() > 120 {
-        format!("{}…", s.chars().take(120).collect::<String>())
+    if s.chars().count() > GOAL_LIMIT {
+        format!("{}…", s.chars().take(GOAL_LIMIT).collect::<String>())
     } else {
         s.to_string()
     }
