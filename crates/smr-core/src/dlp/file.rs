@@ -428,6 +428,28 @@ pub fn protected_document_stream_heuristic(haystack: &str) -> bool {
     false
 }
 
+/// GNU `hexdump -C` output encodes file bytes without matching text index fragments.
+pub fn hexdump_output_heuristic(haystack: &str) -> bool {
+    if haystack.len() < 64 {
+        return false;
+    }
+    haystack.lines().take(8).any(|line| {
+        let b = line.as_bytes();
+        b.len() >= 20
+            && b.get(8) == Some(&b' ')
+            && line.chars().take(8).all(|c| c.is_ascii_hexdigit())
+            && line.contains('|')
+    })
+}
+
+/// Short head/tail reads of shell scripts often stay below fragment length thresholds.
+pub fn shell_source_heuristic(haystack: &str) -> bool {
+    haystack.starts_with("#!/usr/bin/env")
+        || haystack.starts_with("#!/bin/bash")
+        || haystack.starts_with("#!/bin/sh")
+        || haystack.starts_with("#!/usr/bin/python")
+}
+
 pub(crate) fn normalize_path_str(path: &str) -> String {
     path.replace('\\', "/")
 }
@@ -1111,6 +1133,14 @@ mod tests {
             "%PDF-1.5\n<< /Filter /FlateDecode /Length 3400 >>\nstream\n"
         ));
         assert!(!protected_document_stream_heuristic("hello world"));
+    }
+
+    #[test]
+    fn hexdump_and_shell_source_heuristics_detect_script_bypasses() {
+        let hexdump = "00000000  23 21 2f 75 73 72 2f 62  69 6e 2f 65 6e 76 20 70  |#!/usr/bin/env p|";
+        assert!(hexdump_output_heuristic(hexdump));
+        assert!(shell_source_heuristic("#!/usr/bin/env python3\n\"\"\"doc\"\"\""));
+        assert!(!shell_source_heuristic("hello world"));
     }
 
     #[test]

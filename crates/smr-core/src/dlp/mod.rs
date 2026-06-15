@@ -742,6 +742,103 @@ mod file_session_tests {
         );
     }
 
+    #[test]
+    fn hexdump_and_partial_script_read_whole_block_when_session_active() {
+        let tmp = TempDir::new().unwrap();
+        let secret = "X".repeat(80);
+        let fname = "openclaw_surveys_dlp_verify.py";
+        let zone = tmp.path().join("scripts");
+        fs::create_dir_all(&zone).unwrap();
+        let script = zone.join(fname);
+        fs::write(
+            &script,
+            format!("#!/usr/bin/env python3\n\"\"\"secret module\"\"\"\n{secret}\n"),
+        )
+        .unwrap();
+
+        let config = AppConfig {
+            server: ServerConfig {
+                ui_language: UiLanguage::Zh,
+                ..Default::default()
+            },
+            pipeline: PipelineConfig {
+                dlp_enabled: true,
+                ..Default::default()
+            },
+            logging: LoggingConfig::default(),
+            fallback_groups: Default::default(),
+            content_rules: vec![],
+            file_rules: vec![FileRule {
+                id: "scripts".into(),
+                path: zone.clone(),
+                enabled: true,
+                recursive: true,
+                trigger_window: 15,
+                match_mode: MatchMode::Fragment,
+                min_fragment_len: Some(65),
+                min_fragment_ratio: Some(0.5),
+                formats: vec!["py".into()],
+                index: Default::default(),
+            }],
+            operation_rules: vec![],
+            path_protection_rules: vec![],
+            insight: Default::default(),
+        };
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        dlp.reload(&config).unwrap();
+        for _ in 0..400 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(dlp.is_file_index_ready());
+
+        let session = "scripts-hex-bypass";
+        let script_path = script.to_string_lossy().replace('\\', "/");
+        let partial = "#!/usr/bin/env python3\n\"\"\"secret module\"\"\"\n";
+        let hexdump = "00000000  23 21 2f 75 73 72 2f 62  69 6e 2f 65 6e 76 20 70  |#!/usr/bin/env p|";
+        let request = serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "read script"},
+                {"role": "assistant", "content": null, "tool_calls": [{
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": format!(r#"{{"command":"perl -ne 'print' \"{script_path}\""}}"#)
+                    }
+                }]},
+                {"role": "tool", "tool_call_id": "c1", "content": partial},
+                {"role": "assistant", "content": null, "tool_calls": [{
+                    "id": "c2",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": format!(r#"{{"command":"hexdump -C \"{script_path}\""}}"#)
+                    }
+                }]},
+                {"role": "tool", "tool_call_id": "c2", "content": hexdump}
+            ]
+        });
+
+        dlp.register_path_triggers(session, &request);
+        let extracted = extract_texts(&request).unwrap();
+        let (repl, _) = dlp.process_request(session, &extracted, &request, false)
+            .unwrap();
+        let expected = UiLanguage::Zh.file_tool_output_block_message();
+        for label in ["partial", "hexdump"] {
+            let needle = if label == "partial" { "#!/usr/bin/env" } else { "00000000" };
+            let out = repl
+                .iter()
+                .find(|(item, _)| item.text.contains(needle))
+                .map(|(_, t)| t.as_str())
+                .unwrap_or("");
+            assert_eq!(out, expected, "{label} tool output should be wholly blocked");
+        }
+    }
+
     /// Replays a captured OpenClaw traffic body against the live user config + file index.
     #[test]
     fn repro_openclaw_understanding_tables_traffic() {

@@ -26,7 +26,8 @@ use crate::dlp::charset::{
 use crate::dlp::doc_extract;
 use crate::dlp::file::{
     basename_trigger_match, file_under_working_dir, normalize_path_str, path_basename,
-    path_trigger_match, paths_equivalent, protected_document_stream_heuristic,
+    path_trigger_match, paths_equivalent, hexdump_output_heuristic,
+    protected_document_stream_heuristic, shell_source_heuristic,
     strip_verbatim_path_prefix, triggered_basename_in_haystack,
 };
 use crate::dlp::fragment::{file_fragment_meets_threshold, file_min_fragment_len};
@@ -1433,6 +1434,12 @@ fn scan_haystack(
             return tool_output_block_message.to_string();
         }
         if protected_document_stream_heuristic(haystack) {
+            return tool_output_block_message.to_string();
+        }
+        if hexdump_output_heuristic(haystack) {
+            return tool_output_block_message.to_string();
+        }
+        if shell_source_heuristic(haystack) {
             return tool_output_block_message.to_string();
         }
     }
