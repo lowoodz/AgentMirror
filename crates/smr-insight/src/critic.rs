@@ -1,4 +1,3 @@
-use crate::extract::is_research_goal;
 use crate::models::{CognitiveEvent, CriticsScore, EventKind, Issue, RunOutcome, Suggestion};
 
 pub struct CriticInput<'a> {
@@ -10,38 +9,26 @@ pub struct CriticInput<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaskKind {
-    Research,
+    Explore,
     Coding,
     Chat,
 }
 
-fn infer_task_kind(goal: &str, events: &[CognitiveEvent]) -> TaskKind {
-    if is_research_goal(goal) {
-        return TaskKind::Research;
-    }
-    let has_research_actions = events.iter().any(|e| {
-        e.kind == EventKind::Action
-            && (e.summary.starts_with("WebSearch")
-                || e.summary.contains("search")
-                || e.summary.contains("调研"))
-    });
-    if has_research_actions {
-        return TaskKind::Research;
-    }
+fn infer_task_kind(events: &[CognitiveEvent]) -> TaskKind {
     let has_coding_actions = events.iter().any(|e| {
         e.kind == EventKind::Action
             && (e.summary.contains("Edit")
-                || e.summary.contains("Read(")
-                || e.summary.contains("Bash")
-                || e.summary.contains("patch"))
+                || e.summary.contains("Write(")
+                || e.summary.contains("patch")
+                || e.summary.contains("ApplyPatch"))
     });
     if has_coding_actions {
-        TaskKind::Coding
-    } else if events.iter().any(|e| e.kind == EventKind::Action) {
-        TaskKind::Research
-    } else {
-        TaskKind::Chat
+        return TaskKind::Coding;
     }
+    if events.iter().any(|e| e.kind == EventKind::Action) {
+        return TaskKind::Explore;
+    }
+    TaskKind::Chat
 }
 
 pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Suggestion>, RunOutcome) {
@@ -49,7 +36,7 @@ pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Sugges
     let mut issues = Vec::new();
     let mut suggestions = Vec::new();
 
-    let task_kind = infer_task_kind(input.goal, input.events);
+    let task_kind = infer_task_kind(input.events);
     let has_goal = input
         .events
         .iter()
@@ -81,7 +68,7 @@ pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Sugges
     }
 
     score.completeness = match task_kind {
-        TaskKind::Research => {
+        TaskKind::Explore => {
             if has_result {
                 90
             } else if has_observation && !actions.is_empty() {
@@ -124,10 +111,11 @@ pub fn evaluate(input: CriticInput<'_>) -> (CriticsScore, Vec<Issue>, Vec<Sugges
         });
     }
 
-    if task_kind == TaskKind::Research && !has_result && input.turn_count >= 3 {
+    if task_kind == TaskKind::Explore && !has_result && input.turn_count >= 3 {
         suggestions.push(Suggestion {
-            message: "Summarize findings with an explicit investment or research conclusion".to_string(),
-            rationale: "Research runs are easier to review when they end with a clear recommendation".to_string(),
+            message: "Summarize findings with an explicit conclusion for the original goal".to_string(),
+            rationale: "Multi-step agent runs are easier to review when they end with a clear outcome"
+                .to_string(),
             priority: "medium".to_string(),
         });
     }
@@ -213,16 +201,16 @@ mod tests {
     }
 
     #[test]
-    fn research_run_skips_verification_penalty() {
+    fn explore_run_skips_verification_penalty() {
         let events = vec![
-            event(EventKind::Goal, "调研珠海金智维是否值得投资"),
-            event(EventKind::Action, "WebSearch(金智维)"),
-            event(EventKind::Observation, "公司成立于2010年"),
+            event(EventKind::Goal, "收集并对比三种缓存方案"),
+            event(EventKind::Action, "WebSearch(redis vs memcached)"),
+            event(EventKind::Observation, "found comparison articles"),
         ];
         let (score, issues, _, _) = evaluate(CriticInput {
             events: &events,
             turn_count: 4,
-            goal: "调研珠海金智维是否值得投资",
+            goal: "收集并对比三种缓存方案",
             safety_findings: &[],
         });
         assert!(score.completeness >= 70);

@@ -126,13 +126,18 @@ Nav order: **AgentMirror** first.
 | Pattern mining / agent profile | ✅ V2 |
 | DLP cross-highlight on runs | ✅ V2 |
 | Daily report print / PDF export | ✅ V2 (browser print) |
-| OpenClaw research sessions (message delta, exec→search, CN patterns) | ✅ V2.1 |
+| Multi-turn sessions (message delta, tool normalization, generic CN/EN patterns) | ✅ V2.1 |
 
-**OpenClaw / 调研类会话（V2.1）**
+**Multi-turn / OpenClaw-style sessions（V2.1 — 通用规则，无行业限定）**
 
-- 每轮请求只处理 `messages[]` 增量（`messages_seen`），避免 Goal/Action/Observation 重复入库
-- `exec`/shell 在调研语境下归一化为 `WebSearch`；Agent 类型可识别为 `research`
-- 中文 Decision/Result 模式（结论、投资建议、是否值得等）；调研 Run 不因 Partial 提前 Completed
+认知事件抽取 **仅依赖对话结构与工具语义**，不绑定金融、投资、调研等垂直领域关键词。
+
+- 每轮请求只处理 `messages[]` 增量（`messages_seen`），避免 Goal/Action/Observation 重复入库（OpenClaw 等客户端每轮重发全量 history）
+- `exec`/shell 按 **参数语义** 归一化：含 `http`/`curl`/`search` 等 → `WebSearch`；否则 → `Exec`（与 goal 文案无关）
+- **Decision**：统一中英文计划句正则（I'll / 我先 / 接下来 / 打算… + 通用动词：查询、实现、修复、运行…）
+- **Result**：通用完成信号（done/完成/已修复）+ 结论文（结论、总结、综上、in conclusion…）+ 长度门槛；**不按行业词**（如投资建议）触发
+- **Agent 类型** `explore`：由 tools/platform 推断（search/browser、OpenClaw/Hermes、exec-only），非 goal 关键词；旧数据 `research` 仍兼容显示
+- **Critic** `TaskKind::Explore`：由 Action 序列推断（Edit/Write → Coding；有 Action → Explore）；Partial **不**提前将 Run 标为 Completed
 - 推理图：Goal/SubGoal 作为根节点，不再从链尾错误挂接
 
 **Reset / replay**

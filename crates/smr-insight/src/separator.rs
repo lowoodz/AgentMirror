@@ -69,13 +69,9 @@ fn short_hash(data: &[u8]) -> String {
     format!("{:016x}", xxh64(data, 0))
 }
 
-fn infer_agent_type(system: &str, tools: &[String], goal: String, platform: &PlatformInfo) -> String {
+fn infer_agent_type(system: &str, tools: &[String], _goal: String, platform: &PlatformInfo) -> String {
     let lower = system.to_ascii_lowercase();
     let tool_str = tools.join(" ").to_ascii_lowercase();
-    let goal_lower = goal.to_ascii_lowercase();
-    if crate::extract::is_research_goal(&goal) {
-        return "research".to_string();
-    }
     if platform.platform_id == "claude_code"
         || platform.platform_id == "codex"
         || platform.platform_id == "aider"
@@ -85,14 +81,14 @@ fn infer_agent_type(system: &str, tools: &[String], goal: String, platform: &Pla
     {
         "coding".to_string()
     } else if tool_str.contains("browser") || tool_str.contains("search") || tool_str.contains("web") {
-        "research".to_string()
+        "explore".to_string()
     } else if platform.platform_id == "openclaw" || platform.platform_id == "hermes" {
-        "research".to_string()
+        "explore".to_string()
     } else if tools.iter().any(|t| {
         let n = t.to_ascii_lowercase();
         n == "exec" || n == "bash" || n == "shell"
-    }) && (goal.contains("调研") || goal.contains("研究") || goal_lower.contains("research")) {
-        "research".to_string()
+    }) && !tool_str.contains("edit") && !tool_str.contains("write") {
+        "explore".to_string()
     } else if tools.is_empty() {
         "chat".to_string()
     } else {
@@ -514,8 +510,8 @@ mod tests {
     }
 
     #[test]
-    fn infers_research_agent_for_exec_tools_and_goal() {
-        let body = r#"{"messages":[{"role":"user","content":"帮我调研珠海金智维，看看是否值得投资"}],"tools":[{"type":"function","function":{"name":"exec"}}]}"#.as_bytes();
+    fn infers_explore_agent_for_exec_only_openclaw() {
+        let body = r#"{"messages":[{"role":"user","content":"Compare three HTTP client libraries"}],"tools":[{"type":"function","function":{"name":"exec"}}]}"#.as_bytes();
         let req = parse_request(body);
         let turn = TraceTurn {
             audit_id: "a1".into(),
@@ -527,7 +523,7 @@ mod tests {
         };
         let ctx = resolve_agent(&turn, &req, None);
         assert_eq!(ctx.agent_record.display_name, "OpenClaw");
-        assert_eq!(ctx.agent_record.agent_type, "research");
+        assert_eq!(ctx.agent_record.agent_type, "explore");
     }
 
     #[test]

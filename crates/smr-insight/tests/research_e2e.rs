@@ -3,14 +3,14 @@ use smr_insight::models::EventKind;
 use smr_insight::{InsightService, TraceTurn};
 
 #[tokio::test]
-async fn research_session_deduplicates_history_and_builds_graph() {
+async fn multi_turn_session_deduplicates_history_and_builds_graph() {
     let dir = tempfile::tempdir().unwrap();
     let graphs = dir.path().join("graphs");
     let svc = InsightService::open(dir.path(), graphs, Default::default()).unwrap();
 
     let turn1_req = r#"{
         "messages": [
-            {"role": "user", "content": "帮我调研一下珠海金智维，看看是否值得投资"}
+            {"role": "user", "content": "Compare three Rust HTTP client libraries and recommend one"}
         ],
         "tools": [{"type": "function", "function": {"name": "exec", "description": "run shell"}}]
     }"#
@@ -19,11 +19,11 @@ async fn research_session_deduplicates_history_and_builds_graph() {
         "choices": [{
             "message": {
                 "role": "assistant",
-                "content": "我先搜索珠海金智维的基本信息和主营业务。",
+                "content": "我先搜索这三个库的最新文档和社区评价。",
                 "tool_calls": [{
                     "id": "c1",
                     "type": "function",
-                    "function": {"name": "exec", "arguments": "{\"command\":\"curl https://example.com/search?q=zhuhai\"}"}
+                    "function": {"name": "exec", "arguments": "{\"command\":\"curl https://example.com/search?q=rust+http+clients\"}"}
                 }]
             },
             "finish_reason": "tool_calls"
@@ -33,7 +33,7 @@ async fn research_session_deduplicates_history_and_builds_graph() {
 
     svc.submit_turn(TraceTurn {
         audit_id: "audit-r1".into(),
-        session_id: "session-research".into(),
+        session_id: "session-explore".into(),
         agent_header: None,
         timestamp: Utc::now(),
         request_body: turn1_req.to_vec(),
@@ -43,9 +43,9 @@ async fn research_session_deduplicates_history_and_builds_graph() {
 
     let turn2_req = r#"{
         "messages": [
-            {"role": "user", "content": "帮我调研一下珠海金智维，看看是否值得投资"},
-            {"role": "assistant", "content": "我先搜索珠海金智维的基本信息和主营业务。"},
-            {"role": "tool", "content": "珠海金智维信息科技有限公司，主营 RPA 与 AI 解决方案，成立于 2015 年。"}
+            {"role": "user", "content": "Compare three Rust HTTP client libraries and recommend one"},
+            {"role": "assistant", "content": "我先搜索这三个库的最新文档和社区评价。"},
+            {"role": "tool", "content": "reqwest: async-first, widely used. ureq: blocking, minimal deps. hyper: low-level building block."}
         ],
         "tools": [{"type": "function", "function": {"name": "exec"}}]
     }"#
@@ -54,11 +54,11 @@ async fn research_session_deduplicates_history_and_builds_graph() {
         "choices": [{
             "message": {
                 "role": "assistant",
-                "content": "接下来我会继续查询融资与竞争格局。",
+                "content": "接下来我会继续查询各库的维护活跃度。",
                 "tool_calls": [{
                     "id": "c2",
                     "type": "function",
-                    "function": {"name": "exec", "arguments": "{\"command\":\"curl https://example.com/search?q=funding\"}"}
+                    "function": {"name": "exec", "arguments": "{\"command\":\"curl https://example.com/search?q=crates.io+activity\"}"}
                 }]
             },
             "finish_reason": "tool_calls"
@@ -68,7 +68,7 @@ async fn research_session_deduplicates_history_and_builds_graph() {
 
     svc.submit_turn(TraceTurn {
         audit_id: "audit-r2".into(),
-        session_id: "session-research".into(),
+        session_id: "session-explore".into(),
         agent_header: None,
         timestamp: Utc::now(),
         request_body: turn2_req.to_vec(),
@@ -81,7 +81,7 @@ async fn research_session_deduplicates_history_and_builds_graph() {
         "choices": [{
             "message": {
                 "role": "assistant",
-                "content": "综合以上调研，珠海金智维在 RPA 领域具备一定优势，但估值偏高、竞争加剧。结论：谨慎关注，暂不建议重仓投资，可等待下一轮融资后再评估。"
+                "content": "综合以上信息，reqwest 生态最成熟，ureq 适合简单同步场景，hyper 适合自定义栈。结论：默认推荐 reqwest，同步 CLI 可选 ureq。"
             },
             "finish_reason": "stop"
         }]
@@ -90,7 +90,7 @@ async fn research_session_deduplicates_history_and_builds_graph() {
 
     svc.submit_turn(TraceTurn {
         audit_id: "audit-r3".into(),
-        session_id: "session-research".into(),
+        session_id: "session-explore".into(),
         agent_header: None,
         timestamp: Utc::now(),
         request_body: turn3_req.to_vec(),
@@ -100,7 +100,7 @@ async fn research_session_deduplicates_history_and_builds_graph() {
 
     let store = svc.store();
     let runs = store.list_runs(None, 10).unwrap();
-    assert_eq!(runs.len(), 1, "research session should stay in one run");
+    assert_eq!(runs.len(), 1, "multi-turn session should stay in one run");
     assert_eq!(runs[0].turn_count, 3);
 
     let events = store.list_events(&runs[0].run_id).unwrap();
@@ -112,18 +112,18 @@ async fn research_session_deduplicates_history_and_builds_graph() {
 
     assert!(
         events.iter().any(|e| e.summary.contains("WebSearch")),
-        "exec should normalize to WebSearch: {:?}",
+        "exec with http args should normalize to WebSearch: {:?}",
         events.iter().map(|e| &e.summary).collect::<Vec<_>>()
     );
     assert!(
         events.iter().any(|e| e.kind == EventKind::Result),
-        "investment conclusion should be captured as Result"
+        "explicit conclusion should be captured as Result"
     );
 
     let agents = store.list_agents(10).unwrap();
     assert!(
-        agents.iter().any(|a| a.agent_type == "research"),
-        "OpenClaw exec-only agent with research goal should classify as research"
+        agents.iter().any(|a| a.agent_type == "explore"),
+        "OpenClaw exec-only agent should classify as explore from tools/platform"
     );
 
     let graph = store.load_graph_json(&runs[0].run_id).unwrap().unwrap();
