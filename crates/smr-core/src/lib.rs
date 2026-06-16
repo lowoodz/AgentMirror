@@ -19,6 +19,7 @@ pub mod proxy_path;
 pub mod provider;
 pub mod request;
 pub mod router;
+pub mod security_notice;
 pub mod server;
 pub mod session_key;
 pub mod sse_sanitize;

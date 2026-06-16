@@ -18,7 +18,10 @@ pub use session::SessionGuard;
 pub use vault::TokenVault;
 
 use crate::config::{AppConfig, UiLanguage};
-use smr_protocol::{extract_tool_call_texts, is_model_input, is_tool_result_content, ExtractedText};
+use smr_protocol::{
+    extract_tool_call_texts, is_model_input, is_tool_result_content,
+    ExtractedText,
+};
 
 pub struct DlpEngine {
     content: ContentDlp,
@@ -100,9 +103,9 @@ impl DlpEngine {
         extracted: &[ExtractedText],
         request_json: &serde_json::Value,
         reboost_windows: bool,
-    ) -> anyhow::Result<(Vec<(ExtractedText, String)>, usize)> {
+    ) -> anyhow::Result<(Vec<(ExtractedText, String)>, usize, bool)> {
         if !self.enabled {
-            return Ok((Vec::new(), 0));
+            return Ok((Vec::new(), 0, false));
         }
 
         self.apply_path_triggers(session_id, request_json);
@@ -114,6 +117,7 @@ impl DlpEngine {
             }
         }
         let mut replacements = Vec::new();
+        let mut needs_system_notice = false;
         for item in extracted {
             let scan_files = is_model_input(item, request_json);
             let whole_block = scan_files && is_tool_result_content(item, request_json);
@@ -125,11 +129,19 @@ impl DlpEngine {
                 whole_block,
             )?;
             if sanitized != item.text {
-                replacements.push((item.clone(), sanitized));
+                replacements.push((item.clone(), sanitized.clone()));
+                if self.replacement_requires_system_notice(
+                    item,
+                    &item.text,
+                    &sanitized,
+                    request_json,
+                ) {
+                    needs_system_notice = true;
+                }
             }
         }
         let count = replacements.len();
-        Ok((replacements, count))
+        Ok((replacements, count, needs_system_notice))
     }
 
     /// Response-side: restore tool-call fields; redact other fields that still contain secrets.
@@ -226,6 +238,49 @@ impl DlpEngine {
                 self.sessions.activate(sid, rule, files, rule.trigger_window);
             });
     }
+
+    /// True when upstream should receive an extra system notice (excludes reversible tool-arg tokens).
+    fn replacement_requires_system_notice(
+        &self,
+        item: &ExtractedText,
+        old: &str,
+        new: &str,
+        request_json: &serde_json::Value,
+    ) -> bool {
+        if is_tool_result_content(item, request_json) {
+            return true;
+        }
+        if !self.reversible {
+            return true;
+        }
+        if is_pure_reversible_token_substitution(old, new) {
+            return false;
+        }
+        true
+    }
+}
+
+/// `new` differs from `old` only by replacing contiguous spans with `[[smr:…]]` tokens.
+fn is_pure_reversible_token_substitution(old: &str, new: &str) -> bool {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static TOKEN_SPLIT: OnceLock<Regex> = OnceLock::new();
+    let re = TOKEN_SPLIT.get_or_init(|| Regex::new(r"\[\[smr:[0-9a-f]{8}\]\]").expect("token re"));
+    if !re.is_match(new) {
+        return false;
+    }
+    let mut rest = old;
+    for part in re.split(new) {
+        if part.is_empty() {
+            continue;
+        }
+        let Some(pos) = rest.find(part) else {
+            return false;
+        };
+        rest = &rest[pos + part.len()..];
+    }
+    true
 }
 
 /// Tool-call / tool_use arguments only — used for path triggers (not tool-result listings).
@@ -328,7 +383,7 @@ mod file_session_tests {
             "messages": [{"role": "user", "content": format!("leak {secret}")}]
         });
         let extracted2 = extract_texts(&leak).unwrap();
-        let (repl, count) = dlp.process_request(session, &extracted2, &leak, false)
+        let (repl, count, _) = dlp.process_request(session, &extracted2, &leak, false)
             .unwrap();
 
         assert!(count > 0, "expected file DLP replacements");
@@ -539,7 +594,7 @@ mod file_session_tests {
         });
 
         let extracted = extract_texts(&request).unwrap();
-        let (repl, count) = dlp.process_request(session, &extracted, &request, false)
+        let (repl, count, notice) = dlp.process_request(session, &extracted, &request, false)
             .unwrap();
 
         assert!(count > 0, "expected file DLP replacements on tool result");
@@ -635,7 +690,7 @@ mod file_session_tests {
         );
 
         let extracted = extract_texts(&request).unwrap();
-        let (repl, count) = dlp.process_request(session, &extracted, &request, false)
+        let (repl, count, notice) = dlp.process_request(session, &extracted, &request, false)
             .unwrap();
         assert!(count > 0, "expected file DLP replacements");
         let expected = UiLanguage::Zh.file_tool_output_block_message();
@@ -728,7 +783,7 @@ mod file_session_tests {
             "pdf path in exec should activate file DLP session"
         );
         let extracted = extract_texts(&request).unwrap();
-        let (repl, count) = dlp.process_request(session, &extracted, &request, false)
+        let (repl, count, notice) = dlp.process_request(session, &extracted, &request, false)
             .unwrap();
         let expected = UiLanguage::Zh.file_tool_output_block_message();
         let postscript_out = repl
@@ -825,7 +880,7 @@ mod file_session_tests {
 
         dlp.register_path_triggers(session, &request);
         let extracted = extract_texts(&request).unwrap();
-        let (repl, _) = dlp.process_request(session, &extracted, &request, false)
+        let (repl, _, notice) = dlp.process_request(session, &extracted, &request, false)
             .unwrap();
         let expected = UiLanguage::Zh.file_tool_output_block_message();
         for label in ["partial", "hexdump"] {
@@ -896,7 +951,7 @@ mod file_session_tests {
             .collect();
         eprintln!("model-input tool-like fields: {}", tool_items.len());
 
-        let (repl, count) = dlp.process_request(session, &extracted, &body, false).unwrap();
+        let (repl, count, notice) = dlp.process_request(session, &extracted, &body, false).unwrap();
         eprintln!("fragment mode dlp replacements count: {count}");
 
         // Same traffic with Full match mode (isolates fragment/normalization issues).
@@ -917,7 +972,7 @@ mod file_session_tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         dlp_full.register_path_triggers(session, &body);
-        let (repl_full, count_full) =
+        let (repl_full, count_full, _) =
             dlp_full.process_request(session, &extracted, &body, false).unwrap();
         eprintln!("full mode dlp replacements count: {count_full}");
         if count_full > 0 {

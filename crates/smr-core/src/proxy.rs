@@ -19,6 +19,7 @@ use crate::router::{convert_response_body, ForwardOptions, RouteBody, RouteResul
 use crate::sse_sanitize::sanitize_openai_client_json;
 use crate::sse_stream::SseTransformConfig;
 use crate::state::SharedApp;
+use crate::security_notice::{append_dlp_system_notice, append_ops_system_notices};
 use crate::streaming::{
     force_upstream_non_stream, is_sse_content_type, openai_chat_completion_to_sse,
     process_sse_response, request_has_tools, request_wants_stream,
@@ -126,6 +127,11 @@ impl ProxyService {
                 safety_observations += observes;
                 if !ops_replacements.is_empty() {
                     inject_texts(&mut json, &ops_replacements)?;
+                    append_ops_system_notices(
+                        &mut json,
+                        &ops_replacements,
+                        snap.config.server.ui_language,
+                    );
                     events.push(
                         EventKind::OpBlock,
                         format!("blocked {} dangerous request tool_call(s)", ops_replacements.len()),
@@ -139,7 +145,7 @@ impl ProxyService {
                 .is_some_and(|before| before != &json);
 
             if snap.config.pipeline.dlp_active() {
-                let (dlp_replacements, count) = snap.dlp.process_request(
+                let (dlp_replacements, count, dlp_notice) = snap.dlp.process_request(
                     session_id,
                     &extracted,
                     &json,
@@ -149,6 +155,9 @@ impl ProxyService {
                 if !dlp_replacements.is_empty() {
                     info!(count = dlp_replacements.len(), "DLP sanitized request fields");
                     inject_texts(&mut json, &dlp_replacements)?;
+                    if dlp_notice {
+                        append_dlp_system_notice(&mut json, snap.config.server.ui_language);
+                    }
                     events.push(
                         EventKind::DlpReplace,
                         format!("sanitized {} field(s)", dlp_replacements.len()),

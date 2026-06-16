@@ -331,6 +331,26 @@ fn extract_anthropic_block(block: &Value, mi: usize, bi: usize, out: &mut Vec<Ex
     }
 }
 
+/// Append a system-role message to an OpenAI-style chat request body.
+pub fn append_system_message(body: &mut Value, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        messages.push(json!({"role": "system", "content": text}));
+        return;
+    }
+    if let Some(system) = body.get_mut("system") {
+        if let Some(existing) = system.as_str() {
+            if existing.is_empty() {
+                *system = json!(text);
+            } else {
+                *system = json!(format!("{existing}\n{text}"));
+            }
+        }
+    }
+}
+
 /// Write sanitized texts back into the JSON body (request).
 pub fn inject_texts(body: &mut Value, replacements: &[(ExtractedText, String)]) -> Result<()> {
     for (extracted, new_text) in replacements {
@@ -526,5 +546,24 @@ mod tests {
         let ops_fields = filter_ops_request_fields(&body, &extracted);
         assert_eq!(ops_fields.len(), 1);
         assert_eq!(ops_fields[0].text, "ls /tmp");
+    }
+
+    #[test]
+    fn append_system_message_pushes_openai_message() {
+        let mut body = json!({
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        append_system_message(&mut body, "policy notice");
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["role"], "system");
+        assert_eq!(messages[1]["content"], "policy notice");
+    }
+
+    #[test]
+    fn append_system_message_appends_anthropic_system_field() {
+        let mut body = json!({ "system": "base" });
+        append_system_message(&mut body, "extra");
+        assert_eq!(body["system"], "base\nextra");
     }
 }

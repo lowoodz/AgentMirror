@@ -52,6 +52,42 @@ impl UiLanguage {
             }
         }
     }
+
+    /// Extra upstream system notice after non-reversible DLP redaction.
+    pub fn dlp_security_system_notice(self) -> &'static str {
+        match self {
+            Self::En => {
+                "Your recent action violated DLP policy. Stop immediately and do not retry."
+            }
+            Self::Zh => {
+                "你刚才执行的操作已经触犯DLP安全规则，请立即停止该行为且不要重复尝试！"
+            }
+        }
+    }
+
+    /// Extra upstream system notice after path protection blocks a request field.
+    pub fn path_protection_system_notice(self) -> &'static str {
+        match self {
+            Self::En => {
+                "Your recent action violated path protection policy. Stop immediately and do not retry."
+            }
+            Self::Zh => {
+                "你刚才执行的操作已经触犯重要路径防护规则，请立即停止该行为且不要重复尝试！"
+            }
+        }
+    }
+
+    /// Extra upstream system notice after operation security blocks a request field.
+    pub fn operation_security_system_notice(self) -> &'static str {
+        match self {
+            Self::En => {
+                "Your recent action violated operation security policy. Stop immediately and do not retry."
+            }
+            Self::Zh => {
+                "你刚才执行的操作已经触犯操作安全规则，请立即停止该行为且不要重复尝试！"
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -43,10 +43,11 @@ mod reversible_tests {
             "messages": [{"role": "user", "content": "login with password ssh-secret-pass"}]
         });
         let extracted = extract_texts(&request).unwrap();
-        let (req_repl, _) = dlp
+        let (req_repl, _, notice) = dlp
             .process_request(session, &extracted, &request, false)
             .unwrap();
         assert!(!req_repl.is_empty());
+        assert!(!notice, "user-message reversible token substitution should not need system notice");
         let mut forward = request.clone();
         smr_protocol::inject_texts(&mut forward, &req_repl).unwrap();
         let user = forward["messages"][0]["content"].as_str().unwrap();
@@ -90,9 +91,10 @@ mod reversible_tests {
             ]
         });
         let extracted = extract_texts(&request).unwrap();
-        let (repl, _) = dlp
+        let (repl, _, notice) = dlp
             .process_request(session, &extracted, &request, false)
             .unwrap();
+        assert!(notice, "tool result redaction should trigger system notice");
         assert!(!repl.is_empty());
         let sanitized = repl
             .iter()
@@ -184,9 +186,10 @@ mod reversible_tests {
         });
 
         let extracted = extract_texts(&request).unwrap();
-        let (repl, _) = dlp
+        let (repl, _, notice) = dlp
             .process_request(session, &extracted, &request, false)
             .unwrap();
+        assert!(notice, "tool result redaction should trigger system notice");
         let sanitized = repl
             .iter()
             .find(|(item, _)| item.text == tool_body)
@@ -284,9 +287,10 @@ mod reversible_tests {
         });
 
         let extracted = extract_texts(&request).unwrap();
-        let (repl, _) = dlp
+        let (repl, _, notice) = dlp
             .process_request(session, &extracted, &request, false)
             .unwrap();
+        assert!(notice, "tool result redaction should trigger system notice");
         let sanitized = repl
             .iter()
             .find(|(item, _)| item.text == tool_body)
