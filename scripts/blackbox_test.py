@@ -556,7 +556,7 @@ def run_all_scenarios(report: Report, secrets_dir: Path) -> None:
     scenario_file_session_guard(report, secrets_dir)
     scenario_exec_cd_relative_file_dlp(report, secrets_dir)
     scenario_file_scoped_sibling_not_scrubbed(report, secrets_dir)
-    scenario_directory_listing_activates_file_dlp(report, secrets_dir)
+    scenario_directory_listing_does_not_activate_file_dlp(report, secrets_dir)
     scenario_most_specific_child_file_scoped(report, secrets_dir)
     scenario_session_window_exhaustion(report, secrets_dir)
     scenario_request_ops_block(report)
@@ -884,14 +884,15 @@ def scenario_file_scoped_sibling_not_scrubbed(report: Report, secrets_dir: Path)
     )
 
 
-def scenario_directory_listing_activates_file_dlp(report: Report, secrets_dir: Path) -> None:
-    """Directory listing (list_dir / ls) activates file DLP for indexed files under that folder."""
+def scenario_directory_listing_does_not_activate_file_dlp(report: Report, secrets_dir: Path) -> None:
+    """Directory-only list_dir must not activate file DLP for files under that folder."""
     story = "Agent：文件路径 DLP"
     dir_str = str(secrets_dir).replace("\\", "/")
     session = "blackbox-dir-only-session"
     trigger = {
         "model": "glm-4-flash",
         "messages": [
+            {"role": "user", "content": "List directory"},
             {
                 "role": "assistant",
                 "content": None,
@@ -905,7 +906,7 @@ def scenario_directory_listing_activates_file_dlp(report: Report, secrets_dir: P
                         },
                     }
                 ],
-            }
+            },
         ],
         "max_tokens": 8,
     }
@@ -915,23 +916,25 @@ def scenario_directory_listing_activates_file_dlp(report: Report, secrets_dir: P
         body=trigger,
         headers={"X-SMR-Session-Id": session},
     )
-    code2, t2, ms2 = chat_openai(
-        [{"role": "user", "content": f"After dir trigger: {FILE_SECRET}"}],
-        session=session,
-        max_tokens=24,
-    )
-    leaked = FILE_SECRET in (
-        json.loads(t2)["choices"][0]["message"]["content"] if code2 == 200 else ""
-    )
-    audit = latest_audit(BASE)
-    dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
-    ok = code2 == 200 and dlp >= 1 and not leaked
+    chat_result: dict[str, object] = {}
+
+    def do_chat() -> None:
+        code, text, ms = chat_openai(
+            [{"role": "user", "content": f"After dir trigger: {FILE_SECRET}"}],
+            session=session,
+            max_tokens=24,
+        )
+        chat_result.update(code=code, text=text, ms=ms)
+
+    dlp = dlp_after_chat(BASE, session, do_chat)
+    code2 = int(chat_result.get("code", 0))
+    ok = code1 == 200 and code2 == 200 and dlp == 0
     report.add(
         story,
-        "directory_listing_activates_file_dlp",
+        "directory_listing_does_not_activate_file_dlp",
         ok,
-        f"trigger_status={code1}, dlp={dlp}, file_secret_leaked={leaked}",
-        ms1 + ms2,
+        f"trigger_status={code1}, dlp={dlp}",
+        ms1 + float(chat_result.get("ms", 0.0)),
     )
 
 
