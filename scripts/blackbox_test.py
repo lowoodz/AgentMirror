@@ -841,6 +841,7 @@ def scenario_file_scoped_sibling_not_scrubbed(report: Report, secrets_dir: Path)
     trigger = {
         "model": "glm-4-flash",
         "messages": [
+            {"role": "user", "content": "Read project file"},
             {
                 "role": "assistant",
                 "content": None,
@@ -854,7 +855,7 @@ def scenario_file_scoped_sibling_not_scrubbed(report: Report, secrets_dir: Path)
                         },
                     }
                 ],
-            }
+            },
         ],
         "max_tokens": 8,
     }
@@ -864,23 +865,30 @@ def scenario_file_scoped_sibling_not_scrubbed(report: Report, secrets_dir: Path)
         body=trigger,
         headers={"X-SMR-Session-Id": session},
     )
-    code2, t2, ms2 = chat_openai(
-        [{"role": "user", "content": f"Sibling leak: {OTHER_FILE_SECRET}"}],
-        session=session,
-        max_tokens=24,
-    )
+    wait_server_idle(BASE, timeout=30.0)
+    chat_result: dict[str, object] = {}
+
+    def do_chat() -> None:
+        code, text, ms = chat_openai(
+            [{"role": "user", "content": f"Sibling leak: {OTHER_FILE_SECRET}"}],
+            session=session,
+            max_tokens=24,
+        )
+        chat_result.update(code=code, text=text, ms=ms)
+
+    dlp = dlp_after_chat(BASE, session, do_chat)
+    code2 = int(chat_result.get("code", 0))
+    t2 = str(chat_result.get("text", ""))
     leaked = OTHER_FILE_SECRET in (
         json.loads(t2)["choices"][0]["message"]["content"] if code2 == 200 else ""
     )
-    audit = latest_audit(BASE)
-    dlp = int(audit.get("dlp_replacements", 0)) if audit else 0
-    ok = code2 == 200 and dlp == 0
+    ok = code1 == 200 and code2 == 200 and dlp == 0
     report.add(
         story,
         "file_scoped_sibling_not_scrubbed",
         ok,
-        f"dlp={dlp}, sibling_leaked={leaked}",
-        ms1 + ms2,
+        f"trigger_status={code1}, dlp={dlp}, sibling_leaked={leaked}",
+        ms1 + float(chat_result.get("ms", 0.0)),
     )
 
 
