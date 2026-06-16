@@ -60,10 +60,7 @@ INCOMPLETE_REPLY = re.compile(
     re.I,
 )
 
-WEATHER_HINTS = re.compile(
-    r"珠海|zhuhai|天气|weather|气温|温度|temp|rain|雨|cloud|晴|阴|℃|°C|无法|抱歉|查询",
-    re.I,
-)
+WEATHER_PASS_TERMS = re.compile(r"气温|温度|雨|风|云|晴|阴|摄氏度")
 
 
 @dataclass
@@ -557,6 +554,21 @@ def run_claude(
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def has_weather_content(text: str) -> bool:
+    return bool(WEATHER_PASS_TERMS.search(text))
+
+
+def weather_healthy_reply(text: str, stderr: str = "", *, agent_status: str = "") -> tuple[bool, str]:
+    """Pass when the reply mentions concrete weather (even with leading agent planning text)."""
+    if has_weather_content(normalize_agent_text(text)):
+        combined = f"{text}\n{stderr}"
+        for pat in FAIL_PATTERNS:
+            if re.search(pat, combined, re.I):
+                return False, f"matched /{pat}/i"
+        return True, "weather content present"
+    return healthy_reply(text, stderr, agent_status=agent_status)
+
+
 def healthy_reply(text: str, stderr: str = "", *, agent_status: str = "") -> tuple[bool, str]:
     combined = f"{text}\n{stderr}"
     for pat in FAIL_PATTERNS:
@@ -678,6 +690,7 @@ def run_openclaw_pair(
     patcher: OpenClawConfigPatcher,
     check_reply,
     timeout: int = 300,
+    healthy_check=healthy_reply,
 ) -> None:
     if not openclaw_bin():
         report.add(f"openclaw/{label}", False, "openclaw not installed")
@@ -706,8 +719,8 @@ def run_openclaw_pair(
         f"{session_prefix}-proxy", message, timeout=timeout
     )
 
-    ok_d, why_d = healthy_reply(normalize_agent_text(reply_d), err_d, agent_status=status_d)
-    ok_p, why_p = healthy_reply(normalize_agent_text(reply_p), err_p, agent_status=status_p)
+    ok_d, why_d = healthy_check(normalize_agent_text(reply_d), err_d, agent_status=status_d)
+    ok_p, why_p = healthy_check(normalize_agent_text(reply_p), err_p, agent_status=status_p)
     audit_ok, audit_detail = audit_clean_since(smr_base, before_ids=before_ids)
     content_ok, content_detail = check_reply(
         normalize_agent_text(reply_d), normalize_agent_text(reply_p)
@@ -743,6 +756,7 @@ def run_claude_pair(
     stream: bool = False,
     max_turns: int = 1,
     skip_permissions: bool = False,
+    healthy_check=healthy_reply,
 ) -> None:
     if not claude_bin():
         report.add(f"claude/{label}", False, "claude not installed")
@@ -760,8 +774,8 @@ def run_claude_pair(
     )
     reply_d, reply_p = out_d.strip(), out_p.strip()
 
-    ok_d, why_d = healthy_reply(reply_d, err_d)
-    ok_p, why_p = healthy_reply(reply_p, err_p)
+    ok_d, why_d = healthy_check(reply_d, err_d)
+    ok_p, why_p = healthy_check(reply_p, err_p)
     content_ok, content_detail = check_reply(reply_d, reply_p)
     audit_ok, audit_detail = audit_clean_since(smr_base, before_ids=before_ids)
     if not audit_ok and ok_d and ok_p and content_ok:
@@ -839,9 +853,18 @@ def main() -> int:
     )
 
     def check_weather(d: str, p: str) -> tuple[bool, str]:
-        if not WEATHER_HINTS.search(d) or not WEATHER_HINTS.search(p):
-            return False, "missing weather/zhuhai hints in one or both replies"
-        return True, "both mention weather/zhuhai"
+        nd = normalize_agent_text(d)
+        np = normalize_agent_text(p)
+        ok_d = has_weather_content(nd)
+        ok_p = has_weather_content(np)
+        if ok_d and ok_p:
+            return True, "both replies contain weather terms"
+        missing = []
+        if not ok_d:
+            missing.append("direct")
+        if not ok_p:
+            missing.append("proxy")
+        return False, f"missing weather terms in {'/'.join(missing)} replies"
 
     def check_count(d: str, p: str) -> tuple[bool, str]:
         nd = extract_count_number(d, expected=expected_files)
@@ -903,6 +926,7 @@ def main() -> int:
                     model_id=model_openai,
                     patcher=patcher,
                     check_reply=check_weather,
+                    healthy_check=weather_healthy_reply,
                     timeout=300,
                 )
                 run_openclaw_pair(
@@ -931,6 +955,7 @@ def main() -> int:
                 api_key=ant["api_key"],
                 model=ant["model"],
                 check_reply=check_weather,
+                healthy_check=weather_healthy_reply,
                 stream=False,
                 max_turns=2,
             )
@@ -944,6 +969,7 @@ def main() -> int:
                 api_key=ant["api_key"],
                 model=ant["model"],
                 check_reply=check_weather,
+                healthy_check=weather_healthy_reply,
                 stream=True,
                 max_turns=2,
             )
