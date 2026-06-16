@@ -3,7 +3,7 @@
 
 Benign prompts (no DLP/block expected):
   - Zhuhai weather (plain chat)
-  - Count files under SMR_TRANSPARENCY_COUNT_DIR (exec tool)
+  - Count regular files only (recursive, exclude folders) under SMR_TRANSPARENCY_COUNT_DIR (exec tool)
 
 Compares direct API access vs SafeRoute proxy with security+DLP+enforce ON and
 empty rules. Proxy runs must show dlp_replacements=0 and no blocks.
@@ -60,7 +60,12 @@ INCOMPLETE_REPLY = re.compile(
     re.I,
 )
 
-WEATHER_PASS_TERMS = re.compile(r"气温|温度|雨|风|云|晴|阴|摄氏度")
+WEATHER_PASS_TERMS = re.compile(
+    r"气温|温度|雨|风|云|晴|阴|摄氏度|"
+    r"temperature|temp|rain|rainy|wind|windy|breeze|cloud|cloudy|sunny|clear|overcast|"
+    r"celsius|°C|℃",
+    re.I,
+)
 
 
 @dataclass
@@ -118,6 +123,7 @@ def default_count_dir() -> Path:
 
 
 def count_files(root: Path) -> int:
+    """Count regular files under root recursively; directories are excluded."""
     if not root.is_dir():
         raise FileNotFoundError(root)
     if os.name == "nt":
@@ -848,8 +854,8 @@ def main() -> int:
         "请用一两句话简要说明珠海今天的大致天气。"
     )
     count_prompt = (
-        f"Use exec once to count files (including subdirectories) under this directory, "
-        f"then reply with only the integer count: {count_dir}"
+        f"Use exec once to count only regular files (not directories or folders) "
+        f"recursively under this directory, then reply with only the integer: {count_dir}"
     )
 
     def check_weather(d: str, p: str) -> tuple[bool, str]:

@@ -23,5 +23,5 @@ echo "==> HTTP wire transparency (mock upstream, SSE + JSON)"
 python3 "${ROOT}/scripts/transparency_pass_through_test.py" --release
 
 echo ""
-echo "==> Client live E2E (openclaw + claude, direct vs SafeRoute)"
+echo "==> Client live E2E (openclaw + claude, direct vs SafeRoute; file count = files only)"
 python3 "${ROOT}/scripts/transparency_client_live_test.py" "$@"
