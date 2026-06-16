@@ -208,6 +208,9 @@ impl DlpEngine {
         if scan_files {
             if let Some(active) = session_active {
                 let block_message = self.tool_output_block_message();
+                // Whole-block tool output only for pure file-index hits; api-key / password /
+                // secret / content rules stay span-level (see `content_protected` early return).
+                let file_whole_block = whole_block_on_match && !content_protected;
                 Ok(self.sessions.sanitize_with_active(
                     &sanitized,
                     active,
@@ -217,7 +220,7 @@ impl DlpEngine {
                     } else {
                         None
                     },
-                    whole_block_on_match,
+                    file_whole_block,
                     &block_message,
                 ))
             } else {
@@ -398,7 +401,7 @@ mod file_session_tests {
     }
 
     #[test]
-    fn protected_directory_ls_activates_session() {
+    fn protected_directory_ls_does_not_activate_session() {
         let tmp = TempDir::new().unwrap();
         let probe = tmp.path().join("probe.txt");
         fs::write(&probe, "Q".repeat(65)).unwrap();
@@ -457,13 +460,13 @@ mod file_session_tests {
         });
         dlp.register_path_triggers(session, &trigger);
         assert!(
-            dlp.sessions().active_snapshot(session).is_some(),
-            "ls on protected directory must activate file DLP"
+            dlp.sessions().active_snapshot(session).is_none(),
+            "directory-only ls must not activate file DLP"
         );
     }
 
     #[test]
-    fn cd_ls_tool_call_activates_session() {
+    fn cd_ls_directory_only_does_not_activate_session() {
         let tmp = TempDir::new().unwrap();
         let zone = tmp.path().join("protected-zone");
         fs::create_dir_all(&zone).unwrap();
@@ -525,8 +528,8 @@ mod file_session_tests {
         });
         dlp.register_path_triggers(session, &trigger);
         assert!(
-            dlp.sessions().active_snapshot(session).is_some(),
-            "cd + ls tool-call args must activate file DLP for indexed files under the directory"
+            dlp.sessions().active_snapshot(session).is_none(),
+            "cd + directory-only ls must not activate file DLP"
         );
     }
 
@@ -710,7 +713,7 @@ mod file_session_tests {
     }
 
     #[test]
-    fn postscript_pdf_stream_whole_blocks_when_session_active() {
+    fn postscript_pdf_stream_passes_when_no_fragment_match() {
         let tmp = TempDir::new().unwrap();
         let secret = "X".repeat(80);
         let fname = "Deep Learning For Anomaly Detection - A Survey, Sydney.pdf";
@@ -783,22 +786,28 @@ mod file_session_tests {
             "pdf path in exec should activate file DLP session"
         );
         let extracted = extract_texts(&request).unwrap();
-        let (repl, count, notice) = dlp.process_request(session, &extracted, &request, false)
+        let (repl, count, _notice) = dlp.process_request(session, &extracted, &request, false)
             .unwrap();
-        let expected = UiLanguage::Zh.file_tool_output_block_message();
         let postscript_out = repl
             .iter()
             .find(|(item, _)| item.text.contains("]TJ"))
             .map(|(_, t)| t.as_str())
-            .unwrap_or("");
+            .unwrap_or_else(|| {
+                extracted
+                    .iter()
+                    .find(|e| e.text.contains("]TJ"))
+                    .map(|e| e.text.as_str())
+                    .unwrap_or("")
+            });
         assert_eq!(
-            postscript_out, expected,
-            "PostScript stream should be wholly blocked (replacements={count}, repl={repl:?})"
+            postscript_out,
+            postscript,
+            "PostScript without indexed fragment match should pass through (replacements={count}, repl={repl:?})"
         );
     }
 
     #[test]
-    fn hexdump_and_partial_script_read_whole_block_when_session_active() {
+    fn hexdump_and_partial_script_pass_without_fragment_match() {
         let tmp = TempDir::new().unwrap();
         let secret = "X".repeat(80);
         let fname = "openclaw_surveys_dlp_verify.py";
@@ -880,17 +889,25 @@ mod file_session_tests {
 
         dlp.register_path_triggers(session, &request);
         let extracted = extract_texts(&request).unwrap();
-        let (repl, _, notice) = dlp.process_request(session, &extracted, &request, false)
+        let (repl, _, _notice) = dlp.process_request(session, &extracted, &request, false)
             .unwrap();
-        let expected = UiLanguage::Zh.file_tool_output_block_message();
         for label in ["partial", "hexdump"] {
             let needle = if label == "partial" { "#!/usr/bin/env" } else { "00000000" };
             let out = repl
                 .iter()
                 .find(|(item, _)| item.text.contains(needle))
                 .map(|(_, t)| t.as_str())
-                .unwrap_or("");
-            assert_eq!(out, expected, "{label} tool output should be wholly blocked");
+                .unwrap_or_else(|| {
+                    extracted
+                        .iter()
+                        .find(|e| e.text.contains(needle))
+                        .map(|e| e.text.as_str())
+                        .unwrap_or("")
+                });
+            assert!(
+                out.contains(needle),
+                "{label} tool output should pass through without indexed fragment match"
+            );
         }
     }
 

@@ -69,15 +69,6 @@ impl FileDlp {
                         .index
                         .resolve_triggered_files_by_basename(&indexed.rule.id, tool_text);
                 }
-                // Directory listing (`ls`, `Get-ChildItem`): activate indexed files under the
-                // working dir even when the command only names the folder, not each basename.
-                if resolved.is_empty() && !work_dirs.is_empty() {
-                    resolved = self.index.resolve_all_indexed_files_under_working_dirs(
-                        &indexed.rule.id,
-                        &work_dirs,
-                        &indexed.rule.formats,
-                    );
-                }
             }
             if resolved.is_empty() {
                 continue;
@@ -399,57 +390,6 @@ pub fn basename_trigger_match(basename: &str, text: &str) -> bool {
     text.to_ascii_lowercase().contains(&base)
 }
 
-/// True when tool output names a triggered indexed file (e.g. directory `ls` listings).
-pub fn triggered_basename_in_haystack(allowed_paths: &std::collections::HashSet<String>, haystack: &str) -> bool {
-    allowed_paths
-        .iter()
-        .any(|path| basename_trigger_match(&path_basename(path), haystack))
-}
-
-/// PostScript/PDF streams and raw PDF bytes often bypass plain-text fragment matching.
-pub fn protected_document_stream_heuristic(haystack: &str) -> bool {
-    if haystack.len() < 32 {
-        return false;
-    }
-    if haystack.contains("%PDF-") {
-        return true;
-    }
-    if haystack.contains("]TJ") && haystack.contains(" Tf") {
-        return true;
-    }
-    if haystack.contains("/FlateDecode")
-        && (haystack.contains("stream") || haystack.contains("<<"))
-    {
-        return true;
-    }
-    if haystack.contains(" cm\n") && haystack.contains(" re f") && haystack.contains(" Tf ") {
-        return true;
-    }
-    false
-}
-
-/// GNU `hexdump -C` output encodes file bytes without matching text index fragments.
-pub fn hexdump_output_heuristic(haystack: &str) -> bool {
-    if haystack.len() < 64 {
-        return false;
-    }
-    haystack.lines().take(8).any(|line| {
-        let b = line.as_bytes();
-        b.len() >= 20
-            && b.get(8) == Some(&b' ')
-            && line.chars().take(8).all(|c| c.is_ascii_hexdigit())
-            && line.contains('|')
-    })
-}
-
-/// Short head/tail reads of shell scripts often stay below fragment length thresholds.
-pub fn shell_source_heuristic(haystack: &str) -> bool {
-    haystack.starts_with("#!/usr/bin/env")
-        || haystack.starts_with("#!/bin/bash")
-        || haystack.starts_with("#!/bin/sh")
-        || haystack.starts_with("#!/usr/bin/python")
-}
-
 pub(crate) fn normalize_path_str(path: &str) -> String {
     path.replace('\\', "/")
 }
@@ -653,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn directory_only_exec_activates_indexed_files_under_working_dir() {
+    fn directory_only_exec_does_not_activate_indexed_files_under_working_dir() {
         use std::thread;
         use std::time::Duration;
         use tempfile::TempDir;
@@ -695,7 +635,10 @@ mod tests {
             activated.lock().unwrap().extend(files.iter().cloned());
         });
         let resolved = activated.lock().unwrap().clone();
-        assert!(!resolved.is_empty(), "expected indexed files under {zone_str}");
+        assert!(
+            resolved.is_empty(),
+            "directory-only Get-ChildItem must not activate indexed files under {zone_str}"
+        );
     }
 
     #[test]
@@ -804,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn directory_only_exec_activates_indexed_files_under_working_dir_ls() {
+    fn directory_only_exec_does_not_activate_indexed_files_under_working_dir_ls() {
         use std::thread;
         use std::time::Duration;
         use tempfile::TempDir;
@@ -841,8 +784,8 @@ mod tests {
             *activated.lock().unwrap() = true;
         });
         assert!(
-            *activated.lock().unwrap(),
-            "directory ls command must activate indexed files under the folder"
+            !*activated.lock().unwrap(),
+            "directory-only ls command must not activate file DLP"
         );
     }
 
@@ -1123,33 +1066,5 @@ mod tests {
             activated.iter().any(|p| p.contains("Aibaba")),
             "expected Aibaba pdf activated, got {activated:?}"
         );
-    }
-
-    #[test]
-    fn protected_document_stream_heuristic_detects_postscript_and_pdf_markers() {
-        let postscript = "BT /F45 17 Tf [(D)]TJ/F45 13 Tf [(E)-61(A)-62(R)]TJ ET";
-        assert!(protected_document_stream_heuristic(postscript));
-        assert!(protected_document_stream_heuristic(
-            "%PDF-1.5\n<< /Filter /FlateDecode /Length 3400 >>\nstream\n"
-        ));
-        assert!(!protected_document_stream_heuristic("hello world"));
-    }
-
-    #[test]
-    fn hexdump_and_shell_source_heuristics_detect_script_bypasses() {
-        let hexdump = "00000000  23 21 2f 75 73 72 2f 62  69 6e 2f 65 6e 76 20 70  |#!/usr/bin/env p|";
-        assert!(hexdump_output_heuristic(hexdump));
-        assert!(shell_source_heuristic("#!/usr/bin/env python3\n\"\"\"doc\"\"\""));
-        assert!(!shell_source_heuristic("hello world"));
-    }
-
-    #[test]
-    fn triggered_basename_in_haystack_matches_ls_listing() {
-        use std::collections::HashSet;
-        let path = "/zone/Deep Learning For Anomaly Detection - A Survey, Sydney.pdf".into();
-        let allowed: HashSet<String> = HashSet::from([path]);
-        let listing = "total 32\n-rw-r--r-- Deep Learning For Anomaly Detection - A Survey, Sydney.pdf\n";
-        assert!(triggered_basename_in_haystack(&allowed, listing));
-        assert!(!triggered_basename_in_haystack(&allowed, "unrelated output"));
     }
 }

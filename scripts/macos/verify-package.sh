@@ -41,6 +41,16 @@ check_file() {
 }
 
 check_file "$CLI_TAR" "CLI tar"
+if smr_host_is_apple_silicon; then
+  check_file "${ROOT}/dist/smr-${VERSION}-darwin-x86_64.tar.gz" "CLI tar (x86_64 cross)"
+  if [[ -f "${ROOT}/dist/smr-x86_64" ]]; then
+    if ! file "${ROOT}/dist/smr-x86_64" 2>/dev/null | grep -qE 'x86_64|386'; then
+      failures+=("dist/smr-x86_64 is not an x86_64 binary")
+    elif [[ "$QUIET" != true ]]; then
+      echo "[OK] x86_64 CLI binary ($(ls -lh "${ROOT}/dist/smr-x86_64" | awk '{print $5}')): smr-x86_64"
+    fi
+  fi
+fi
 [[ "$REQUIRE_APP" == true ]] && check_file "$APP_TAR" "App tar"
 if [[ "$REQUIRE_DMG" == true ]]; then
   check_file "$DMG" "DMG"
