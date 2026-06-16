@@ -96,6 +96,26 @@ fn normalize_token(s: &str) -> String {
     }
 }
 
+/// True when this run's action sequence contains the pattern's steps in order.
+pub fn pattern_matches_run(pattern: &ActionPattern, actions: &[String]) -> bool {
+    let n = pattern.steps.len();
+    if n == 0 || actions.len() < n {
+        return false;
+    }
+    let norm: Vec<String> = actions.iter().map(|a| normalize_token(a)).collect();
+    (0..=norm.len() - n).any(|start| {
+        pattern
+            .steps
+            .iter()
+            .enumerate()
+            .all(|(j, step)| step_matches(step, &norm[start + j]))
+    })
+}
+
+fn step_matches(step: &str, action: &str) -> bool {
+    action.contains(step) || step.contains(action)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +141,22 @@ mod tests {
             .iter()
             .find(|p| p.steps.len() == 2 && p.steps[0].contains("read") && p.steps[1].contains("apply"));
         assert!(read_apply.is_some());
+    }
+
+    #[test]
+    fn pattern_matches_run_subsequence() {
+        let pattern = ActionPattern {
+            steps: vec!["read file".into(), "apply patch".into()],
+            success_count: 2,
+            failure_count: 0,
+            outcome_hint: "success".into(),
+        };
+        let actions = vec![
+            "read file".into(),
+            "apply patch".into(),
+            "run tests".into(),
+        ];
+        assert!(pattern_matches_run(&pattern, &actions));
+        assert!(!pattern_matches_run(&pattern, &["read file".into(), "run tests".into()]));
     }
 }

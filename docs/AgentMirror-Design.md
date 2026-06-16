@@ -102,7 +102,7 @@ POST /api/insight/reset              # wipe insight_* + graphs; optional traffic
 
 Nav order: **AgentMirror** first.
 
-- Agent list + run cards (checkbox merge, edit goal)
+- Agent list + run cards (checkbox merge)
 - Trajectory modal: **Graph / Timeline / Events / Raw traffic**
 - Graph tab: **directed graph** (layered DAG), **mind map** (radial from Goal), or list fallback; edges show causal labels
 - Daily report date picker + viewer
@@ -120,7 +120,7 @@ Nav order: **AgentMirror** first.
 | Five critics (rule-based) | ✅ |
 | LLM goal + critic + dialectical/counterfactual | ✅ (default on; `llm_critic: false` to disable) |
 | Safety critic ↔ ops rules | ✅ |
-| Run merge / split + goal edit | ✅ |
+| Run merge / split | ✅ |
 | Daily report SQL + Markdown files | ✅ (`data/insight/daily/`) |
 | Raw traffic tab (audit → snapshot) | ✅ |
 | Pattern mining / agent profile | ✅ V2 |

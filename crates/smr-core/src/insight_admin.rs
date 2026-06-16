@@ -10,7 +10,8 @@ use serde_json::Value;
 use crate::http_state::HttpState;
 use crate::insight_risk::{load_audits_for_ids, risk_for_run, risk_for_runs};
 use smr_insight::export::daily_reports_html;
-use smr_insight::pattern::mine_patterns;
+use smr_insight::models::EventKind;
+use smr_insight::pattern::{mine_patterns, pattern_matches_run};
 use smr_insight::profile::build_profile;
 
 #[derive(Deserialize)]
@@ -40,11 +41,6 @@ struct SplitRunRequest {
     after_seq: u32,
 }
 
-#[derive(Deserialize)]
-struct PatchRunRequest {
-    goal: Option<String>,
-}
-
 pub fn router() -> Router<HttpState> {
     Router::new()
         .route("/api/insight/status", get(api_insight_status))
@@ -52,7 +48,7 @@ pub fn router() -> Router<HttpState> {
         .route("/api/insight/agents/{agent_id}/profile", get(api_insight_agent_profile))
         .route("/api/insight/agents/{agent_id}/patterns", get(api_insight_agent_patterns))
         .route("/api/insight/runs", get(api_insight_runs))
-        .route("/api/insight/runs/{run_id}", get(api_insight_run).patch(api_insight_patch_run))
+        .route("/api/insight/runs/{run_id}", get(api_insight_run))
         .route("/api/insight/runs/{run_id}/graph", get(api_insight_graph))
         .route("/api/insight/runs/{run_id}/report", get(api_insight_report))
         .route("/api/insight/runs/merge", post(api_insight_merge_runs))
@@ -191,24 +187,6 @@ async fn api_insight_run(
     Ok(Json(serde_json::json!({ "run": run, "events": events, "risk": risk })))
 }
 
-async fn api_insight_patch_run(
-    State(s): State<HttpState>,
-    Path(run_id): Path<String>,
-    Json(req): Json<PatchRunRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let store = s.app.insight.store();
-    if store.get_run(&run_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.is_none() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-    if let Some(goal) = req.goal.filter(|g| !g.trim().is_empty()) {
-        store
-            .update_run_goal(&run_id, goal.trim())
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    let run = store.get_run(&run_id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "run": run })))
-}
-
 async fn api_insight_graph(
     State(s): State<HttpState>,
     Path(run_id): Path<String>,
@@ -232,13 +210,47 @@ async fn api_insight_report(
     Path(run_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let store = s.app.insight.store();
+    let run = store
+        .get_run(&run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let report = store
         .get_report(&run_id)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let events = store
+        .list_events(&run_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    match report {
-        Some(r) => Ok(Json(serde_json::json!({ "report": r }))),
-        None => Err(StatusCode::NOT_FOUND),
-    }
+    let run_actions: Vec<String> = events
+        .iter()
+        .filter(|e| e.kind == EventKind::Action)
+        .map(|e| e.summary.clone())
+        .collect();
+
+    let sequences = store
+        .list_action_sequences(&run.agent_id, 200)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let sample_runs = sequences.len();
+    let action_patterns: Vec<serde_json::Value> = mine_patterns(&sequences)
+        .into_iter()
+        .map(|p| {
+            let matched_run = pattern_matches_run(&p, &run_actions);
+            serde_json::json!({
+                "steps": p.steps,
+                "success_count": p.success_count,
+                "failure_count": p.failure_count,
+                "outcome_hint": p.outcome_hint,
+                "matched_run": matched_run,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "report": report,
+        "action_patterns": action_patterns,
+        "sample_runs": sample_runs,
+    })))
 }
 
 async fn api_insight_merge_runs(
