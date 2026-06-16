@@ -239,24 +239,51 @@ pub struct DailyReport {
     pub agent_id: String,
     pub display_name: String,
     pub summary: String,
+    #[serde(default)]
+    pub active_agents: u32,
     pub runs_completed: u32,
     pub runs_failed: u32,
     pub runs_running: u32,
     pub total_turns: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_progress: Vec<DailyTaskProgress>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily_issues: Vec<DailyIssueItem>,
     pub top_issues: Vec<String>,
     pub top_suggestions: Vec<String>,
     pub run_summaries: Vec<DailyRunSummary>,
     pub generated_at: DateTime<Utc>,
-    /// LLM narrative: tasks and goals across agents.
+    /// Deprecated — kept for stored-report compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tasks_overview: Option<String>,
-    /// LLM narrative: progress and outcomes.
+    /// Deprecated — kept for stored-report compatibility.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_narrative: Option<String>,
     #[serde(default)]
     pub llm_enhanced: bool,
+    /// Deprecated — kept for stored-report compatibility.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_sections: Vec<DailyAgentSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyTaskProgress {
+    pub run_id: String,
+    pub goal: String,
+    pub status: String,
+    pub turn_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_minutes: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyIssueItem {
+    pub run_id: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dimension: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

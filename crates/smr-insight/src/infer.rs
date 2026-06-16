@@ -4,8 +4,7 @@ use serde::Deserialize;
 use crate::llm::LlmClient;
 use crate::locale::ReportLanguage;
 use crate::models::{
-    CognitiveEvent, CounterfactualNote, CriticsAnalysis, CriticsScore, DailyAgentSection,
-    DailyReport, DialecticalNotes, Issue, ReflectionReport, RunOutcome, RunRecord,
+    CognitiveEvent, CounterfactualNote, CriticsAnalysis, CriticsScore, DailyReport, DialecticalNotes, Issue, ReflectionReport, RunOutcome, RunRecord,
     RunStatus, Suggestion,
 };
 use crate::token_budget::{batch_events, format_batch_trajectory, MAX_BATCH_TOKENS};
@@ -602,40 +601,23 @@ Reply with JSON only: {{"original_goal":"one-line goal","confidence":0-1}}
 #[derive(Debug, Deserialize)]
 struct LlmDailyResponse {
     #[serde(default)]
-    summary: String,
+    task_progress: Vec<crate::models::DailyTaskProgress>,
     #[serde(default)]
-    tasks_overview: Option<String>,
-    #[serde(default)]
-    progress_narrative: Option<String>,
-    #[serde(default)]
-    top_issues: Vec<String>,
+    daily_issues: Vec<crate::models::DailyIssueItem>,
     #[serde(default)]
     top_suggestions: Vec<String>,
-    #[serde(default)]
-    agent_sections: Vec<LlmDailyAgentSection>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LlmDailyAgentSection {
-    agent_id: String,
-    #[serde(default)]
-    display_name: String,
-    #[serde(default)]
-    summary: String,
-    #[serde(default)]
-    run_count: u32,
 }
 
 const DAILY_SYSTEM_TEMPLATE: &str = r#"You are AgentMirror Daily Analyst — synthesize one executive daily report across ALL agents (智能体) for a single calendar day.
 
-You receive per-run reflection reports and run metadata. Produce a cohesive day-level narrative covering:
-1. **Tasks** — what agents worked on (goals, themes)
-2. **Progress** — outcomes, completions, in-flight work
-3. **Issues** — cross-agent problems, risks, blockers
-4. **Suggestions** — actionable recommendations for tomorrow
+You receive per-run reflection reports and run metadata. Produce JSON with:
+1. **task_progress** — ordered list of tasks for the day. Each item: run_id, goal (concise), status (completed|running|failed), turn_count, duration_minutes (optional).
+2. **daily_issues** — up to 6 cross-run problems/risks. Each item: run_id, message, dimension (Alignment|Necessity|Completeness|Efficiency|Safety), score (0-100).
+3. **top_suggestions** — up to 6 actionable recommendations for tomorrow (strings).
 
 {language_instruction}
-Respond with JSON only — no markdown fences."#;
+Respond with JSON only — no markdown fences. Schema:
+{"task_progress":[{"run_id":"...","goal":"...","status":"completed","turn_count":12,"duration_minutes":23}],"daily_issues":[{"run_id":"...","message":"...","dimension":"Completeness","score":62}],"top_suggestions":["..."]}"#;
 
 fn daily_system_prompt(language: ReportLanguage) -> String {
     DAILY_SYSTEM_TEMPLATE.replace(
@@ -663,14 +645,19 @@ pub fn generate_daily_report_llm(
     );
     for (idx, input) in run_inputs.iter().take(80).enumerate() {
         user.push_str(&format!(
-            "\n--- Run {} ---\nAgent: {} ({})\nGoal: {}\nStatus: {} · {} turns\n",
+            "\n--- Run {} ({}) ---\nAgent: {} ({})\nGoal: {}\nStatus: {} · {} turns",
             idx + 1,
+            input.run_id,
             input.display_name,
             input.agent_id,
             input.goal,
             input.status,
             input.turn_count,
         ));
+        if let Some(mins) = input.duration_minutes {
+            user.push_str(&format!(" · {mins} min"));
+        }
+        user.push('\n');
         if let Some(summary) = &input.reflection_summary {
             user.push_str(&format!("Reflection summary: {summary}\n"));
         }
@@ -693,53 +680,48 @@ pub fn generate_daily_report_llm(
     let parsed: LlmDailyResponse = serde_json::from_str(&json_text).ok()?;
 
     let mut report = baseline.clone();
-    if !parsed.summary.trim().is_empty() {
-        report.summary = parsed.summary.trim().to_string();
+    let has_tasks = !parsed.task_progress.is_empty();
+    let has_issues = !parsed.daily_issues.is_empty();
+    let has_suggestions = !parsed.top_suggestions.is_empty();
+    if has_tasks {
+        report.task_progress = parsed.task_progress;
     }
-    report.tasks_overview = parsed
-        .tasks_overview
-        .filter(|s| !s.trim().is_empty());
-    report.progress_narrative = parsed
-        .progress_narrative
-        .filter(|s| !s.trim().is_empty());
-    if !parsed.top_issues.is_empty() {
-        report.top_issues = parsed.top_issues;
-    }
-    if !parsed.top_suggestions.is_empty() {
-        report.top_suggestions = parsed.top_suggestions;
-    }
-    if !parsed.agent_sections.is_empty() {
-        report.agent_sections = parsed
-            .agent_sections
-            .into_iter()
-            .map(|s| {
-                let agent_id = s.agent_id.clone();
-                DailyAgentSection {
-                    agent_id,
-                    display_name: if s.display_name.trim().is_empty() {
-                        s.agent_id
-                    } else {
-                        s.display_name
-                    },
-                    summary: s.summary,
-                    run_count: s.run_count,
-                }
+    if has_issues {
+        report.daily_issues = parsed.daily_issues;
+        report.daily_issues.truncate(6);
+        report.top_issues = report
+            .daily_issues
+            .iter()
+            .map(|i| {
+                format!(
+                    "Run #{}: {}{}",
+                    crate::report::run_short_id(&i.run_id),
+                    i.message,
+                    match (&i.dimension, i.score) {
+                        (Some(dim), Some(score)) => format!(" ({dim} {score})"),
+                        _ => String::new(),
+                    }
+                )
             })
             .collect();
     }
-    report.llm_enhanced = report.tasks_overview.is_some()
-        || report.progress_narrative.is_some()
-        || !report.summary.is_empty();
+    if has_suggestions {
+        report.top_suggestions = parsed.top_suggestions;
+        report.top_suggestions.truncate(6);
+    }
+    report.llm_enhanced = has_tasks || has_issues || has_suggestions;
     Some(report)
 }
 
 /// Per-run slice fed into daily LLM synthesis.
 pub struct DailyRunReflectionInput {
+    pub run_id: String,
     pub agent_id: String,
     pub display_name: String,
     pub goal: String,
     pub status: String,
     pub turn_count: u32,
+    pub duration_minutes: Option<u32>,
     pub reflection_summary: Option<String>,
     pub issues: Vec<String>,
     pub suggestions: Vec<String>,

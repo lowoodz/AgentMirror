@@ -6,14 +6,49 @@ use crate::infer::{generate_daily_report_llm, generate_reflection_report_llm, Da
 use crate::llm::LlmClient;
 use crate::locale::ReportLanguage;
 use crate::models::{
-    CognitiveEvent, DailyAgentSection, DailyReport, DailyRunSummary, DAILY_REPORT_ALL_AGENTS,
-    Issue, ReflectionReport, RunOutcome, RunRecord, RunStatus,
+    CognitiveEvent, DailyAgentSection, DailyIssueItem, DailyReport, DailyRunSummary,
+    DailyTaskProgress, CriticsScore, DAILY_REPORT_ALL_AGENTS, Issue, ReflectionReport,
+    RunOutcome, RunRecord, RunStatus,
 };
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::store::InsightStore;
 
 /// No new traffic for this long → treat run as done and generate LLM reflection report.
 pub const RUN_REPORT_IDLE_MINUTES: i64 = 10;
+const DAILY_LIST_MAX: usize = 6;
+
+fn run_duration_minutes(run: &RunRecord) -> Option<u32> {
+    let end = run.ended_at.unwrap_or_else(Utc::now);
+    let mins = end.signed_duration_since(run.started_at).num_minutes();
+    if mins >= 0 {
+        Some(mins.min(i64::from(u32::MAX)) as u32)
+    } else {
+        None
+    }
+}
+
+pub fn run_short_id(run_id: &str) -> String {
+    let s = run_id.trim();
+    if s.len() <= 8 {
+        s.to_string()
+    } else {
+        s[s.len().saturating_sub(6)..].to_string()
+    }
+}
+
+fn lowest_critic_dimension(critics: &CriticsScore) -> (String, u8) {
+    let dims = [
+        ("Alignment", critics.alignment),
+        ("Necessity", critics.necessity),
+        ("Completeness", critics.completeness),
+        ("Efficiency", critics.efficiency),
+        ("Safety", critics.safety),
+    ];
+    dims.into_iter()
+        .min_by_key(|(_, score)| *score)
+        .map(|(name, score)| (name.to_string(), score))
+        .unwrap_or_else(|| ("Completeness".to_string(), 70))
+}
 
 pub fn last_activity_at(run: &RunRecord, events: &[CognitiveEvent]) -> DateTime<Utc> {
     events
@@ -246,6 +281,8 @@ pub fn generate_all_agents_daily_report(
     let mut total_turns = 0u32;
     let mut top_issues = Vec::new();
     let mut top_suggestions = Vec::new();
+    let mut daily_issues = Vec::new();
+    let mut task_progress = Vec::new();
     let mut run_summaries = Vec::new();
     let mut run_inputs = Vec::new();
     let mut per_agent_runs: std::collections::HashMap<String, u32> =
@@ -260,11 +297,20 @@ pub fn generate_all_agents_daily_report(
             RunStatus::Running => runs_running += 1,
             RunStatus::Stale => {}
         }
+        let duration_minutes = run_duration_minutes(run);
+        let status = run.status.as_str().to_string();
         run_summaries.push(DailyRunSummary {
             run_id: run.run_id.clone(),
             goal: run.goal.clone(),
-            status: run.status.as_str().to_string(),
+            status: status.clone(),
             turn_count: run.turn_count,
+        });
+        task_progress.push(DailyTaskProgress {
+            run_id: run.run_id.clone(),
+            goal: run.goal.clone(),
+            status,
+            turn_count: run.turn_count,
+            duration_minutes,
         });
 
         let display_name = agent_names
@@ -286,13 +332,25 @@ pub fn generate_all_agents_daily_report(
                         None
                     }
                 });
-            for issue in report.issues.iter().take(3) {
-                if !top_issues.contains(&issue.message) {
-                    top_issues.push(issue.message.clone());
+            if let Some(issue) = report.issues.first() {
+                let (dimension, score) = lowest_critic_dimension(&report.critics);
+                let line = format!(
+                    "Run #{}: {}",
+                    run_short_id(&run.run_id),
+                    issue.message
+                );
+                if !top_issues.contains(&line) {
+                    top_issues.push(line.clone());
                 }
+                daily_issues.push(DailyIssueItem {
+                    run_id: run.run_id.clone(),
+                    message: issue.message.clone(),
+                    dimension: Some(dimension),
+                    score: Some(score),
+                });
                 issue_msgs.push(issue.message.clone());
             }
-            for sug in report.suggestions.iter().take(3) {
+            for sug in report.suggestions.iter().take(2) {
                 if !top_suggestions.contains(&sug.message) {
                     top_suggestions.push(sug.message.clone());
                 }
@@ -300,19 +358,24 @@ pub fn generate_all_agents_daily_report(
             }
         }
         run_inputs.push(DailyRunReflectionInput {
+            run_id: run.run_id.clone(),
             agent_id: run.agent_id.clone(),
             display_name,
             goal: run.goal.clone(),
             status: run.status.as_str().to_string(),
             turn_count: run.turn_count,
+            duration_minutes,
             reflection_summary,
             issues: issue_msgs,
             suggestions: suggestion_msgs,
         });
     }
 
-    top_issues.truncate(8);
-    top_suggestions.truncate(8);
+    top_issues.truncate(DAILY_LIST_MAX);
+    top_suggestions.truncate(DAILY_LIST_MAX);
+    daily_issues.truncate(DAILY_LIST_MAX);
+
+    let active_agents = per_agent_runs.len() as u32;
 
     let agent_sections: Vec<DailyAgentSection> = per_agent_runs
         .into_iter()
@@ -342,10 +405,13 @@ pub fn generate_all_agents_daily_report(
         agent_id: DAILY_REPORT_ALL_AGENTS.to_string(),
         display_name: language.daily_all_agents_label().to_string(),
         summary,
+        active_agents,
         runs_completed,
         runs_failed,
         runs_running,
         total_turns,
+        task_progress,
+        daily_issues,
         top_issues,
         top_suggestions,
         run_summaries,
@@ -384,52 +450,157 @@ pub fn generate_daily_report(
 }
 
 pub fn daily_report_markdown(report: &DailyReport) -> String {
+    let zh = report.display_name.chars().any(|c| c > '\u{007F}');
+    let badge = if report.llm_enhanced { "LLM" } else { "规则基线" };
+    let badge_en = if report.llm_enhanced {
+        "LLM"
+    } else {
+        "Rule baseline"
+    };
+    let generated = report
+        .generated_at
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+
     let mut out = String::new();
-    out.push_str(&format!("# AgentMirror Daily — {}\n\n", report.date));
-    out.push_str(&format!("**{}** — {}\n\n", report.display_name, report.summary));
-    out.push_str(&format!(
-        "- Completed: {}\n- Running: {}\n- Failed: {}\n- Turns: {}\n\n",
-        report.runs_completed, report.runs_running, report.runs_failed, report.total_turns
-    ));
-    if let Some(tasks) = &report.tasks_overview {
-        out.push_str(&format!("## Tasks\n{tasks}\n\n"));
+    if zh {
+        out.push_str(&format!(
+            "# {} · 日报             生成于 {} （{}）\n\n",
+            report.display_name, generated, badge
+        ));
+        out.push_str("## 总览\n");
+        out.push_str(&format!("- 活跃 Agent: {}\n", report.active_agents));
+        out.push_str(&format!(
+            "- 完成任务: {} / 进行中: {} / 失败: {}\n",
+            report.runs_completed, report.runs_running, report.runs_failed
+        ));
+        out.push_str(&format!("- 总 LLM 轮次: {}\n\n", report.total_turns));
+    } else {
+        out.push_str(&format!(
+            "# {} · Daily             Generated {} ({}) \n\n",
+            report.display_name, generated, badge_en
+        ));
+        out.push_str("## Overview\n");
+        out.push_str(&format!("- Active agents: {}\n", report.active_agents));
+        out.push_str(&format!(
+            "- Completed: {} / In progress: {} / Failed: {}\n",
+            report.runs_completed, report.runs_running, report.runs_failed
+        ));
+        out.push_str(&format!("- Total LLM turns: {}\n\n", report.total_turns));
     }
-    if let Some(progress) = &report.progress_narrative {
-        out.push_str(&format!("## Progress\n{progress}\n\n"));
-    }
-    if !report.agent_sections.is_empty() {
-        out.push_str("## Agents\n");
-        for a in &report.agent_sections {
-            out.push_str(&format!(
-                "### {} ({} runs)\n{}\n\n",
-                a.display_name, a.run_count, a.summary
-            ));
+
+    let tasks = if !report.task_progress.is_empty() {
+        report.task_progress.clone()
+    } else {
+        report
+            .run_summaries
+            .iter()
+            .map(|r| DailyTaskProgress {
+                run_id: r.run_id.clone(),
+                goal: r.goal.clone(),
+                status: r.status.clone(),
+                turn_count: r.turn_count,
+                duration_minutes: None,
+            })
+            .collect()
+    };
+
+    if !tasks.is_empty() {
+        if zh {
+            out.push_str("### 任务及进展\n");
+        } else {
+            out.push_str("### Tasks & progress\n");
         }
-    }
-    if !report.run_summaries.is_empty() {
-        out.push_str("## Runs\n");
-        for r in &report.run_summaries {
-            out.push_str(&format!(
-                "- {} · {} · {} turns\n",
-                r.goal, r.status, r.turn_count
-            ));
+        for (idx, task) in tasks.iter().enumerate() {
+            let icon = task_status_icon(&task.status);
+            let detail = format_task_progress_line(task, zh);
+            out.push_str(&format!("{}. {} {}\n", idx + 1, icon, detail));
         }
         out.push('\n');
     }
-    if !report.top_issues.is_empty() {
-        out.push_str("## Issues\n");
-        for i in &report.top_issues {
-            out.push_str(&format!("- {i}\n"));
+
+    let issues = if !report.daily_issues.is_empty() {
+        &report.daily_issues[..]
+    } else {
+        &[]
+    };
+    if !issues.is_empty() || !report.top_issues.is_empty() {
+        if zh {
+            out.push_str("### 问题/风险\n");
+        } else {
+            out.push_str("### Issues & risks\n");
+        }
+        if !issues.is_empty() {
+            for issue in issues {
+                out.push_str(&format!(
+                    "- Run #{}: {}{}\n",
+                    run_short_id(&issue.run_id),
+                    issue.message,
+                    format_issue_score_suffix(issue, zh)
+                ));
+            }
+        } else {
+            for i in &report.top_issues {
+                out.push_str(&format!("- {i}\n"));
+            }
         }
         out.push('\n');
     }
+
     if !report.top_suggestions.is_empty() {
-        out.push_str("## Suggestions\n");
+        if zh {
+            out.push_str("## 改进建议\n");
+        } else {
+            out.push_str("## Recommendations\n");
+        }
         for s in &report.top_suggestions {
             out.push_str(&format!("- {s}\n"));
         }
     }
     out
+}
+
+pub fn task_status_icon(status: &str) -> &'static str {
+    let s = status.to_ascii_lowercase();
+    if s.contains("complete") || s.contains("done") || s.contains("success") {
+        "✓"
+    } else if s.contains("fail") || s.contains("error") {
+        "✗"
+    } else {
+        "→"
+    }
+}
+
+pub fn format_task_progress_line(task: &DailyTaskProgress, zh: bool) -> String {
+    let s = task.status.to_ascii_lowercase();
+    if s.contains("run") && !s.contains("complete") {
+        if zh {
+            return format!("{} — 进行中", task.goal);
+        }
+        return format!("{} — in progress", task.goal);
+    }
+    if let Some(mins) = task.duration_minutes {
+        if zh {
+            format!("{} — {} 步，{} 分钟", task.goal, task.turn_count, mins)
+        } else {
+            format!(
+                "{} — {} steps, {} min",
+                task.goal, task.turn_count, mins
+            )
+        }
+    } else if zh {
+        format!("{} — {} 步", task.goal, task.turn_count)
+    } else {
+        format!("{} — {} steps", task.goal, task.turn_count)
+    }
+}
+
+pub fn format_issue_score_suffix(issue: &DailyIssueItem, zh: bool) -> String {
+    match (&issue.dimension, issue.score) {
+        (Some(dim), Some(score)) if zh => format!("（{} {}分）", dim, score),
+        (Some(dim), Some(score)) => format!(" ({dim} {score})"),
+        _ => String::new(),
+    }
 }
 
 pub fn persist_graph(store: &InsightStore, run_id: &str) -> anyhow::Result<String> {
