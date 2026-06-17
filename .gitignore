@@ -14,6 +14,10 @@ TODO.txt
 TODO.md
 方案Prompt.txt
 SecureModelRoute方案设计.docx
+ACRP_Complete_Design.docx
+Agent_Cognitive_Reconstruction_Design.docx
+Agent-Reflection-Prompt.txt
+test-data/
 .cursor/session-handoff.md
 
 # Generated before Tauri NSIS build (see scripts/windows/prepare-nsis-bundle.ps1)

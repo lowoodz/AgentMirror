@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish LLM-SafeRoute release to GitHub: push master, tag, upload dist artifacts.
+# Publish AgentMirror release to GitHub: push master, tag, upload dist artifacts.
 # Scans installers for personal paths/secrets before upload. Never ships config/smr.yaml.
 set -euo pipefail
 
@@ -59,17 +59,16 @@ git tag -f "$TAG"
 git push origin "$TAG" --force
 
 NOTES="$(cat <<EOF
-## LLM-SafeRoute ${VERSION}
+## AgentMirror ${VERSION}
 
 ### Highlights
-- **DLP**: span-level redaction when content rules / credentials are detected; whole-block for file-only leaks; reversible token restore for tool args
-- **Routing**: auto-detect OpenAI vs Anthropic client protocol; cross-protocol upstream fallback; SSE streaming fixes
-- **OpenClaw**: 12-case security matrix (Mac + Windows) wired into \`release-full\`
-- **File DLP**: PDF sidecar indexing, bundled \`pdftotext\`, path trigger improvements
-- **Admin UI**: SSE traffic viewer, session-grouped logs, ops/path observe vs enforce controls
+- **AgentMirror** desktop app (macOS DMG + Windows NSIS) with tray GUI and \`smr\` CLI
+- **Agent reflection**: reconstruct goals, decisions, and actions from LLM proxy traffic; causal graphs, reflection reports, daily digests
+- **DLP**: span-level redaction, reversible tool-arg tokens, file index (PDF sidecar), SessionGuard
+- **Routing**: OpenAI ↔ Anthropic auto-detect; high/medium/low fallback groups; OpenClaw 12/12 security matrix (Mac + Windows)
 
 ### Install
-See [README](https://github.com/lowoodz/LLM-SafeRoute#readme). First run copies \`smr.example.yaml\` — configure upstream \`api_key_env\` locally; no keys are embedded in installers.
+See [README](https://github.com/lowoodz/AgentMirror#readme). First run copies \`smr.example.yaml\` — configure upstream \`api_key_env\` locally; no keys are embedded in installers.
 
 ### Verified
 Full \`release-full.sh\` passed (Mac + Windows VM): unit tests, live API blackbox, OpenClaw matrix 12/12.
@@ -78,10 +77,10 @@ EOF
 
 if gh release view "$TAG" >/dev/null 2>&1; then
   echo "==> Update existing release ${TAG}"
-  gh release edit "$TAG" --title "LLM-SafeRoute ${VERSION}" --notes "$NOTES"
+  gh release edit "$TAG" --title "AgentMirror ${VERSION}" --notes "$NOTES"
 else
   echo "==> Create release ${TAG}"
-  gh release create "$TAG" --title "LLM-SafeRoute ${VERSION}" --notes "$NOTES"
+  gh release create "$TAG" --title "AgentMirror ${VERSION}" --notes "$NOTES"
 fi
 
 echo "==> Upload artifacts"

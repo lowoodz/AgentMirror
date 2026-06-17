@@ -1,34 +1,36 @@
-# LLM-SafeRoute
+# AgentMirror
 
-**A safe route to LLM intelligence—and a stable, faster path to get there.**
+**Desktop app for LLM-safe routing and agent observability & reflection**
 
-- LLM-SafeRoute is a lightweight local model proxy/router compatible with OpenAI and Anthropic client protocols.
-- Point your IDE, agent, or SDK `base_url` at `http://127.0.0.1:8080/v1` to call multiple models safely and reliably—GPT, Claude Opus, Gemini, DeepSeek, GLM, Kimi, and more.
-- No manual switching: on API failure, exhausted quota, or rate limits, fallback runs automatically with no interruption.
+- Lightweight local model proxy/router compatible with OpenAI and Anthropic client protocols; on API failure, exhausted quota, or rate limits, fallback runs automatically with no interruption.
 - Built-in safeguards: data-leak prevention, redaction, operation blocking, and file-path protection.
-- Fulfills the basic needs of individual users for secure and reliable access to LLMs and agents.
-- macOS and Windows desktop tray apps with one-click install.
+- Reconstructs agent goals, decisions, and actions from LLM proxy traffic; provides causal trajectory maps, action reflection reports, and agent daily digests—addressing observability for multi-agent and long-running agents, and helping improve agent-loop reliability and task success rates.
+- macOS and Windows desktop apps with one-click install.
 
 **中文文档:** [README.zh-CN.md](README.zh-CN.md)
 
 <a id="admin-ui-screenshots"></a>
 
-<p align="center"><sub>Admin UI screenshots — click a title to flip · 1–4</sub></p>
+<p align="center"><sub>Admin UI screenshots — click a title to flip · 1–5</sub></p>
 
 <details open>
-<summary><strong>1 / 4 · Overview</strong></summary>
+<summary><strong>1 / 5 · Overview</strong></summary>
 <p align="center"><img src="docs/overview-en.png" width="780" alt="Admin UI — overview"/></p>
 </details>
 <details>
-<summary><strong>2 / 4 · Model routing</strong></summary>
+<summary><strong>2 / 5 · Agent reflection</strong></summary>
+<p align="center"><img src="docs/Agent-Reflection-en.png" width="780" alt="Admin UI — agent reflection"/></p>
+</details>
+<details>
+<summary><strong>3 / 5 · Model routing</strong></summary>
 <p align="center"><img src="docs/routing-en.png" width="780" alt="Admin UI — model routing"/></p>
 </details>
 <details>
-<summary><strong>3 / 4 · DLP</strong></summary>
+<summary><strong>4 / 5 · DLP</strong></summary>
 <p align="center"><img src="docs/dlp-en.png" width="780" alt="Admin UI — DLP rules"/></p>
 </details>
 <details>
-<summary><strong>4 / 4 · Traffic logs</strong></summary>
+<summary><strong>5 / 5 · Traffic logs</strong></summary>
 <p align="center"><img src="docs/log-json-en.png" width="780" alt="Admin UI — traffic log viewer"/></p>
 </details>
 
@@ -37,14 +39,15 @@
 ## Product positioning
 
 
-|           |                                                                                                                                                                           |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Route** | `high` / `medium` / `low` ordered fallback groups; auto-switch on upstream failure, malformed JSON, or missing first stream token; built-in OpenAI ↔ Anthropic conversion |
-| **Fast**  | Rust core, local forwarding, native streaming; single config file, hot reload; optional tray app that stays out of your way                                               |
-| **Safe**  | Content/file DLP, tool operation rules, path protection; master switch to enable or disable all security features                                                         |
+|            |                                                                                                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Route**  | `high` / `medium` / `low` ordered fallback groups; auto-switch on upstream failure, malformed JSON, or missing first stream token; built-in OpenAI ↔ Anthropic conversion |
+| **Fast**   | Rust core, local forwarding, native streaming; single config file, hot reload; AgentMirror tray app stays out of your way                                                   |
+| **Safe**   | Content/file DLP, tool operation rules, path protection; master switch to enable or disable all security features                                                         |
+| **Mirror** | Reconstruct agent goals, decisions, and actions from LLM proxy traffic; causal trajectory maps, reflection reports, and agent daily digests                             |
 
 
-> Change one line in your client config. Run one local process. A faster, more reliable path to the models you use.
+> Change one line in your client. Run AgentMirror. A faster, more reliable path to models—with built-in safety and agent observability.
 
 ---
 
@@ -54,7 +57,7 @@
 chmod +x scripts/install.sh
 ./scripts/install.sh --all     # CLI + tray app + login autostart
 
-securemodelroute               # start and open admin UI
+securemodelroute               # start AgentMirror and open admin UI
 ```
 
 **Windows:** run `AgentMirror_*_x64-setup.exe` (recommended), or `.\install.ps1 -All`, then `securemodelroute`
@@ -75,9 +78,9 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:8080/v1", api_key="dummy
 client.messages.create(model="saferoute-high", max_tokens=1024, messages=[...])
 ```
 
-LLM-SafeRoute detects the client protocol from headers and JSON body, then converts to each upstream model’s OpenAI or Anthropic API inside the selected fallback group.
+AgentMirror detects the client protocol from headers and JSON body, then converts to each upstream model’s OpenAI or Anthropic API inside the selected fallback group.
 
-Works like OpenClaw / Cursor **provider mode**: LLM-SafeRoute is one provider; high / medium / low fallback groups appear as three models. `GET /models` or `GET /v1/models` lists them.
+Works like OpenClaw / Cursor **provider mode**: AgentMirror is one provider; high / medium / low fallback groups appear as three models. `GET /models` or `GET /v1/models` lists them.
 
 
 | Item | Value |
@@ -95,7 +98,7 @@ Legacy tier path prefixes (`/high/messages`, `/medium/chat/completions`, …) an
 
 ## Downloads (desktop apps)
 
-Pre-built packages are on [GitHub Releases](https://github.com/lowoodz/LLM-SafeRoute/releases/latest).
+Pre-built packages are on [GitHub Releases](https://github.com/lowoodz/AgentMirror/releases/latest).
 
 | Platform | Package | Install |
 |----------|---------|---------|
@@ -105,7 +108,7 @@ Pre-built packages are on [GitHub Releases](https://github.com/lowoodz/LLM-SafeR
 | **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | Portable GUI + optional `*-setup.exe`; or extract and run `install.ps1 -All` |
 | **Windows** x86_64 | `smr-*-windows-x86_64.zip` | CLI only: extract, run `install.ps1`, then `securemodelroute` |
 
-Uninstall on Windows: **Settings → Apps → SafeRoute** (NSIS), or run `.\uninstall.ps1` to remove NSIS app and CLI companion files.
+Uninstall on Windows: **Settings → Apps → AgentMirror** (NSIS), or run `.\uninstall.ps1` to remove the NSIS app and CLI companion files.
 
 Build the NSIS installer on Windows: `.\scripts\package.ps1` (requires Node.js + Rust). From macOS with UTM: `./scripts/vm/package-windows-gui.sh`.
 
@@ -116,13 +119,13 @@ Config after install: `~/.local/etc/securemodelroute/smr.yaml` (macOS/Linux/Wind
 
 ---
 
-## OpenClaw
+## OpenClaw configuration
 
-[OpenClaw](https://docs.openclaw.ai/) is an OpenAI-compatible agent gateway. Point it at LLM-SafeRoute so OpenClaw calls your local fallback router instead of vendor APIs directly.
+[OpenClaw](https://docs.openclaw.ai/) is an OpenAI-compatible agent gateway. Point it at AgentMirror for local fallback routing with unified DLP, operation blocking, and path protection.
 
-**Prerequisites:** LLM-SafeRoute running (`securemodelroute` or the tray app). Configure upstream models and API keys in LLM-SafeRoute only (admin UI → **Routing** or `smr.yaml`). OpenClaw never needs real vendor keys.
+**Prerequisites:** AgentMirror running (`securemodelroute` or the tray app). Configure upstream models and API keys in AgentMirror only (admin UI → **Routing** or `smr.yaml`). OpenClaw never needs real vendor keys.
 
-**Provider mode (recommended):** LLM-SafeRoute is one OpenAI-compatible provider. Public model ids are the three fallback tiers — `saferoute-high`, `saferoute-medium`, `saferoute-lite` — not upstream names like `gpt-4o-mini`. Each id selects a fallback group; LLM-SafeRoute walks that group’s chain and handles OpenAI ↔ Anthropic conversion internally.
+**Provider mode (recommended):** AgentMirror exposes one OpenAI-compatible provider with three public tier models — `saferoute-high`, `saferoute-medium`, `saferoute-lite` — not upstream names like `gpt-4o-mini`. Each id selects a fallback group; AgentMirror walks that group’s chain and handles OpenAI ↔ Anthropic conversion internally.
 
 Edit `~/.openclaw/openclaw.json` (JSON5):
 
@@ -138,7 +141,7 @@ Edit `~/.openclaw/openclaw.json` (JSON5):
         models: [
           {
             id: "saferoute-high",
-            name: "SafeRoute High",
+            name: "AgentMirror High",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -147,7 +150,7 @@ Edit `~/.openclaw/openclaw.json` (JSON5):
           },
           {
             id: "saferoute-medium",
-            name: "SafeRoute Medium",
+            name: "AgentMirror Medium",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -156,7 +159,7 @@ Edit `~/.openclaw/openclaw.json` (JSON5):
           },
           {
             id: "saferoute-lite",
-            name: "SafeRoute Lite",
+            name: "AgentMirror Lite",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -182,7 +185,7 @@ Edit `~/.openclaw/openclaw.json` (JSON5):
 
 Steps:
 
-1. In LLM-SafeRoute admin UI → **Routing**, configure each tier’s upstream chain (OpenAI, Anthropic, DeepSeek, etc.).
+1. In AgentMirror admin UI → **Routing**, configure each tier’s upstream chain (OpenAI, Anthropic, DeepSeek, etc.).
 2. In OpenClaw, register the three **public** ids above (`saferoute-high` / `medium` / `lite`) under `models.providers.saferoute.models`.
 3. Add every `saferoute/<public-id>` you use to `agents.defaults.models` (OpenClaw allowlist). Switch tiers with `openclaw models set saferoute/saferoute-medium` or set `agents.defaults.model.primary`.
 4. Restart the gateway: `openclaw gateway restart` (or restart the OpenClaw app).
@@ -194,11 +197,23 @@ Tip: admin UI → **Overview** → **OpenClaw configuration** lists the same bas
 - Tier path prefix: `baseUrl: "http://127.0.0.1:8080/high/v1"` (also `/medium/v1`, `/lite/v1`)
 - Header override: `headers: { "X-SMR-Fallback-Group": "high" }` on `http://127.0.0.1:8080/v1`
 
-LLM-SafeRoute applies DLP, operation rules, and path protection to OpenClaw traffic the same as any other client.
+AgentMirror applies DLP, operation rules, and path protection to OpenClaw traffic the same as any other client.
 
 ---
 
 ## Features
+
+### Agent reflection
+
+Reconstruct what agents did, why, and how to improve — from LLM proxy traffic alone (no extra agent instrumentation).
+
+- **Traffic-based reconstruction** — infer goals, decisions, and tool actions from proxied requests and responses
+- **Causal trajectory** — Goal → Decision → Action → Observation graph per run
+- **Reflection reports** — rule baseline plus optional LLM critique (`insight.llm_critic`)
+- **Daily digests** — per-agent summary of tasks, issues, and recommendations
+- **Multi-agent** — separate runs by `X-SMR-Agent-Id`, system-prompt fingerprint, or idle/run boundaries
+
+Enable traffic snapshots on the **Logs** tab so AgentMirror can analyze request/response bodies (`insight.require_traffic_bodies`). See [AgentMirror design](docs/AgentMirror-Design.md) for API and configuration details.
 
 ### Model routing
 
@@ -230,7 +245,7 @@ Redact sensitive data before it reaches the model, so secrets (private data) are
 ### Operations
 
 - Web admin at `/ui` (English / 中文)
-- Optional Tauri tray app (macOS / Windows)
+- AgentMirror tray app (macOS / Windows)
 - SQLite audit log and live security events
 - Traffic body snapshots for debugging (optional, up to 20 MiB per file). Default saves **after DLP**; UI can switch to raw pre-DLP capture (may write secrets to disk).
 
@@ -295,7 +310,7 @@ Files: `{config_dir}/traffic/*.body`
 
 ## Admin UI
 
-Open `http://127.0.0.1:8080/ui` — overview, routing, DLP, path rules, operation rules, logs, full YAML editor. Screenshots: see [Admin UI preview](#admin-ui-screenshots) above.
+Open `http://127.0.0.1:8080/ui` — overview, routing, DLP, path rules, operation rules, agent reflection, logs, full YAML editor. Screenshots: see [Admin UI preview](#admin-ui-screenshots) above.
 
 
 | API                              | Description                                     |

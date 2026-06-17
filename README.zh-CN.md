@@ -1,34 +1,34 @@
-# LLM-SafeRoute
-
-**通往大模型智能的安全之路——更快、更稳、更放心。**
-
-- LLM-SafeRoute 是一款轻量本地模型代理/路由，兼容 OpenAI / Anthropic 客户端协议，
-- 将 IDE、Agent 或 SDK 的 `base_url` 指向 `http://127.0.0.1:8080/v1`，即可安全、可靠地调用/访问多个大模型，例如 GPT、Claude Opus、Gemini、DeepSeek、GLM、Kimi等，
-- 无需手动切换，API 调用失败、Token额度不足、频率限制时，自动Fallback/回退，全程无中断。
-- 同时提供数据防泄漏、数据脱敏、操作拦截、文件路径防护等安全保障，
-- 满足个人用户使用LLM和Agent时，对安全、可靠的基本需求，
-- 支持 macOS、Windows 桌面托盘应用，一键安装。
+# AgentMirror
+**大模型安全路由与智能体观测反思桌面应用**
+- 包含轻量的本地模型代理/路由，兼容 OpenAI / Anthropic 客户端协议，API 调用失败、Token额度不足、频率限制时，自动Fallback/回退，全程无中断；
+- 同时提供数据防泄漏、数据脱敏、操作拦截、文件路径防护等基础安全功能；
+- 从 LLM 代理流量反向重建智能体的目标、决策与行动，提供因果轨迹图、行动反思报告、智能体日报，解决多智能体、长程运行时代Agent的可观测性问题，并协助提升Agent-Loop的可靠性和任务成功率；
+- 支持MacOS、Windows桌面应用，一键安装。
 
 **English:** [README.md](README.md)
 
 <a id="admin-ui-screenshots"></a>
 
-<p align="center"><sub>管理界面截图 — 点击标题翻页查看 · 1–4</sub></p>
+<p align="center"><sub>管理界面截图 — 点击标题翻页查看 · 1–5</sub></p>
 
 <details open>
-<summary><strong>1 / 4 · 概览</strong></summary>
+<summary><strong>1 / 5 · 概览</strong></summary>
 <p align="center"><img src="docs/overview-cn.png" width="780" alt="管理界面 — 概览"/></p>
 </details>
 <details>
-<summary><strong>2 / 4 · 模型路由</strong></summary>
+<summary><strong>2 / 5 · 智能体反思</strong></summary>
+<p align="center"><img src="docs/Agent-Reflection-cn.png" width="780" alt="管理界面 — 智能体反思"/></p>
+</details>
+<details>
+<summary><strong>3 / 5 · 模型路由</strong></summary>
 <p align="center"><img src="docs/routing-cn.png" width="780" alt="管理界面 — 模型路由"/></p>
 </details>
 <details>
-<summary><strong>3 / 4 · DLP</strong></summary>
+<summary><strong>4 / 5 · DLP</strong></summary>
 <p align="center"><img src="docs/dlp-cn.png" width="780" alt="管理界面 — DLP 规则"/></p>
 </details>
 <details>
-<summary><strong>4 / 4 · 日志查看</strong></summary>
+<summary><strong>5 / 5 · 日志查看</strong></summary>
 <p align="center"><img src="docs/log-json-cn.png" width="780" alt="管理界面 — 流量日志"/></p>
 </details>
 
@@ -37,14 +37,15 @@
 ## 产品定位
 
 
-| 维度            | 说明                                                                                              |
-| ------------- | ----------------------------------------------------------------------------------------------- |
-| **Route（路由）** | `high` / `medium` / `low` 三组有序 fallback；上游失败、畸形 JSON、流式未出首 token 时自动切换；内置 OpenAI ↔ Anthropic 转换 |
-| **Fast（性能）**  | Rust 实现、本地转发、原生流式；单文件配置、热加载；可选托盘应用，常驻不占桌面                                                       |
-| **Safe（安全）**  | 内容/文件 DLP、tool 操作拦截、重要路径防护；总开关一键启停                                                              |
+| 维度              | 说明                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------- |
+| **Route（路由）**   | `high` / `medium` / `low` 三组有序 fallback；上游失败、畸形 JSON、流式未出首 token 时自动切换；内置 OpenAI ↔ Anthropic 转换 |
+| **Fast（性能）**    | Rust 实现、本地转发、原生流式；单文件配置、热加载；AgentMirror 托盘应用，常驻不占桌面                                             |
+| **Safe（安全）**    | 内容/文件 DLP、tool 操作拦截、重要路径防护；总开关一键启停                                                              |
+| **Mirror（反思）** | 从 LLM 代理流量反向重建智能体目标、决策与行动；因果轨迹图、行动反思报告、智能体日报                                           |
 
 
-> 客户端改一行地址，本地起一个进程，走更稳、更快的模型通路。
+> 客户端改一行地址，本地运行 AgentMirror — 更稳、更快的模型通路，内置安全防护与智能体可观测性。
 
 ---
 
@@ -54,7 +55,7 @@
 chmod +x scripts/install.sh
 ./scripts/install.sh --all     # CLI + 托盘 + 登录自启
 
-securemodelroute               # 启动并打开管理界面
+securemodelroute               # 启动 AgentMirror 并打开管理界面
 ```
 
 **Windows：** 运行 `AgentMirror_*_x64-setup.exe`（推荐），或 `.\install.ps1 -All`，然后 `securemodelroute`
@@ -74,9 +75,9 @@ client = anthropic.Anthropic(base_url="http://127.0.0.1:8080/v1", api_key="dummy
 client.messages.create(model="saferoute-high", max_tokens=1024, messages=[...])
 ```
 
-LLM-SafeRoute 会根据请求头与 JSON 自动识别客户端协议，并在所选 fallback 组内转换为各上游模型的 OpenAI 或 Anthropic API。
+AgentMirror 会根据请求头与 JSON 自动识别客户端协议，并在所选 fallback 组内转换为各上游模型的 OpenAI 或 Anthropic API。
 
-与 OpenClaw、Cursor 等 **Provider 模式**一致：LLM-SafeRoute 是一个 Provider；高/中/低三档 fallback 组对应三个 model。`GET /models` 或 `GET /v1/models` 可列出它们。
+与 OpenClaw、Cursor 等 **Provider 模式**一致：AgentMirror 是一个 Provider；高/中/低三档 fallback 组对应三个 model。`GET /models` 或 `GET /v1/models` 可列出它们。
 
 
 | 项目 | 值 |
@@ -94,7 +95,7 @@ LLM-SafeRoute 会根据请求头与 JSON 自动识别客户端协议，并在所
 
 ## 下载（桌面应用）
 
-预编译包见 [GitHub Releases](https://github.com/lowoodz/LLM-SafeRoute/releases/latest)。
+预编译包见 [GitHub Releases](https://github.com/lowoodz/AgentMirror/releases/latest)。
 
 | 平台 | 安装包 | 安装方式 |
 |------|--------|----------|
@@ -104,7 +105,7 @@ LLM-SafeRoute 会根据请求头与 JSON 自动识别客户端协议，并在所
 | **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | 便携 GUI + 可选 `*-setup.exe`；或解压后运行 `install.ps1 -All` |
 | **Windows** x86_64 | `smr-*-windows-x86_64.zip` | 仅 CLI：解压后运行 `install.ps1`，再执行 `securemodelroute` |
 
-Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\uninstall.ps1` 移除 NSIS 应用与 CLI 伴生文件。
+Windows 卸载：**设置 → 应用 → AgentMirror**（NSIS），或运行 `.\uninstall.ps1` 移除 NSIS 应用与 CLI 伴生文件。
 
 在 Windows 上构建 NSIS 安装包：`.\scripts\package.ps1`（需 Node.js + Rust）。macOS + UTM：`./scripts/vm/package-windows-gui.sh`。
 
@@ -116,11 +117,11 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
 
 ## OpenClaw 配置
 
-[OpenClaw](https://docs.openclaw.ai/) 是 OpenAI 兼容的 Agent 网关。将其指向本地 LLM-SafeRoute，即可由 LLM-SafeRoute 做 fallback 路由，并统一应用 DLP / 操作拦截 / 路径防护。
+[OpenClaw](https://docs.openclaw.ai/) 是 OpenAI 兼容的 Agent 网关。将其指向 AgentMirror，即可做本地 fallback 路由，并统一应用 DLP / 操作拦截 / 路径防护。
 
-**前提：** LLM-SafeRoute 已启动（`securemodelroute` 或托盘应用）。上游模型与 API Key 仅在 LLM-SafeRoute 中配置（管理界面 → **路由**，或 `smr.yaml`）；OpenClaw 不需要真实厂商密钥。
+**前提：** AgentMirror 已启动（`securemodelroute` 或托盘应用）。上游模型与 API Key 仅在 AgentMirror 中配置（管理界面 → **路由**，或 `smr.yaml`）；OpenClaw 不需要真实厂商密钥。
 
-**Provider 模式（推荐）：** LLM-SafeRoute 作为一个 OpenAI 兼容 Provider 暴露三个档位模型 — `saferoute-high`、`saferoute-medium`、`saferoute-lite` — **不是**上游名称（如 `gpt-4o-mini`）。每个 id 对应一组 fallback 链；组内自动切换，并由 LLM-SafeRoute 完成 OpenAI ↔ Anthropic 转换。
+**Provider 模式（推荐）：** AgentMirror 作为一个 OpenAI 兼容 Provider 暴露三个档位模型 — `saferoute-high`、`saferoute-medium`、`saferoute-lite` — **不是**上游名称（如 `gpt-4o-mini`）。每个 id 对应一组 fallback 链；组内自动切换，并由 AgentMirror 完成 OpenAI ↔ Anthropic 转换。
 
 编辑 `~/.openclaw/openclaw.json`（JSON5）：
 
@@ -136,7 +137,7 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
         models: [
           {
             id: "saferoute-high",
-            name: "SafeRoute High",
+            name: "AgentMirror High",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -145,7 +146,7 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
           },
           {
             id: "saferoute-medium",
-            name: "SafeRoute Medium",
+            name: "AgentMirror Medium",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -154,7 +155,7 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
           },
           {
             id: "saferoute-lite",
-            name: "SafeRoute Lite",
+            name: "AgentMirror Lite",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -180,7 +181,7 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
 
 步骤：
 
-1. 在 LLM-SafeRoute 管理界面 → **路由** 中配置各档位的上游链（OpenAI、Anthropic、DeepSeek 等）。
+1. 在 AgentMirror 管理界面 → **路由** 中配置各档位的上游链（OpenAI、Anthropic、DeepSeek 等）。
 2. 在 OpenClaw 的 `models.providers.saferoute.models` 中注册上述三个**公开** model id。
 3. 在 `agents.defaults.models` 中登记每个要用的 `saferoute/<公开-id>`（OpenClaw 必填 allowlist）。切换档位可用 `openclaw models set saferoute/saferoute-medium`，或修改 `agents.defaults.model.primary`。
 4. 重启网关：`openclaw gateway restart`（或重启 OpenClaw 应用）。
@@ -192,11 +193,23 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
 - 档位路径前缀：`baseUrl: "http://127.0.0.1:8080/high/v1"`（亦可用 `/medium/v1`、`/lite/v1`）
 - 请求头覆盖：在 `http://127.0.0.1:8080/v1` 上设置 `headers: { "X-SMR-Fallback-Group": "high" }`
 
-OpenClaw 经 LLM-SafeRoute 发出的请求与 IDE、SDK 一样，都会走相同的安全策略。
+OpenClaw 经 AgentMirror 发出的请求与 IDE、SDK 一样，都会走相同的安全策略。
 
 ---
 
 ## 功能
+
+### 智能体反思
+
+从 LLM 代理流量反向重建智能体做了什么、为什么、如何改进 — 无需额外埋点。
+
+- **流量重建** — 从代理请求/响应推断目标、决策与 tool 行动
+- **因果轨迹** — 每次 Run 的 Goal → Decision → Action → Observation 图
+- **行动反思报告** — 规则基线 + 可选 LLM 辩证反思（`insight.llm_critic`）
+- **智能体日报** — 按 Agent 汇总任务、问题与改进建议
+- **多智能体** — 按 `X-SMR-Agent-Id`、system prompt 指纹或空闲/Run 边界分离
+
+请先在 **日志** 页启用流量快照，AgentMirror 才能分析请求/响应正文（`insight.require_traffic_bodies`）。API 与配置详见 [AgentMirror 设计文档](docs/AgentMirror-Design.md)。
 
 ### 模型路由
 
@@ -228,7 +241,7 @@ OpenClaw 经 LLM-SafeRoute 发出的请求与 IDE、SDK 一样，都会走相同
 ### 运维
 
 - Web 管理 `/ui`（中/英）
-- 可选 Tauri 托盘（macOS / Windows）
+- AgentMirror 托盘应用（macOS / Windows）
 - SQLite 审计与实时事件
 - 可选流量快照（调试，单文件最大 20 MiB）。默认保存 **DLP 之后**的请求体；UI 可切换为 DLP 前原始请求（可能写入明文密钥）。
 
@@ -293,7 +306,7 @@ logging:
 
 ## 管理界面
 
-`http://127.0.0.1:8080/ui` — 概览、路由、DLP、路径、操作规则、日志、YAML 编辑。截图见上文 [管理界面预览](#admin-ui-screenshots)。
+`http://127.0.0.1:8080/ui` — 概览、路由、DLP、路径、操作规则、智能体反思、日志、YAML 编辑。截图见上文 [管理界面预览](#admin-ui-screenshots)。
 
 | API                             | 说明             |
 | ------------------------------- | -------------- |
