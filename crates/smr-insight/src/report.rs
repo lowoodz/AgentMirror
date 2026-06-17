@@ -127,7 +127,7 @@ pub fn build_reflection_report(
 }
 
 /// LLM reports when the run ends, or when the last event is idle ≥ RUN_REPORT_IDLE_MINUTES.
-fn should_generate_llm_report(
+pub fn should_generate_llm_report(
     run: &RunRecord,
     event_count: usize,
     prior: Option<&ReflectionReport>,
@@ -148,7 +148,7 @@ fn should_generate_llm_report(
     }
 }
 
-fn refresh_running_llm_report(
+pub fn refresh_running_llm_report(
     report: &mut ReflectionReport,
     run: &RunRecord,
     execution_summary: &str,
@@ -188,7 +188,7 @@ pub fn merge_safety_into_report(report: &mut ReflectionReport, safety_findings: 
         .collect();
 }
 
-fn build_rule_reflection_report(
+pub fn build_rule_reflection_report(
     run: &RunRecord,
     events: &[crate::models::CognitiveEvent],
     execution_summary: &str,
@@ -229,18 +229,36 @@ fn build_rule_reflection_report(
     })
 }
 
-/// Mark still-running runs completed and regenerate LLM reports (post traffic replay).
-pub fn finalize_runs_for_llm_reports(
+/// Generate and persist an LLM reflection report for a run (invoked from the critic worker).
+pub fn generate_llm_reflection_for_run(
     store: &InsightStore,
+    run_id: &str,
     safety: Option<&dyn SafetyScanner>,
     llm: Option<&dyn LlmClient>,
     llm_critic: bool,
     language: ReportLanguage,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<bool> {
     if !llm_critic {
-        return Ok(0);
+        return Ok(false);
     }
-    let mut updated = 0usize;
+    let run = store
+        .get_run(run_id)?
+        .ok_or_else(|| anyhow::anyhow!("run not found: {run_id}"))?;
+    let report = build_reflection_report(store, &run, safety, llm, llm_critic, language)?;
+    let enhanced = report.llm_enhanced;
+    store.save_report(&report)?;
+    Ok(enhanced)
+}
+
+/// Mark still-running runs completed and enqueue LLM report generation (post traffic replay).
+pub fn finalize_runs_for_llm_reports(
+    store: &InsightStore,
+    llm_critic: bool,
+) -> anyhow::Result<Vec<String>> {
+    if !llm_critic {
+        return Ok(Vec::new());
+    }
+    let mut run_ids = Vec::new();
     for mut run in store.list_runs(None, 10_000)? {
         if run.status != RunStatus::Running {
             continue;
@@ -250,11 +268,9 @@ pub fn finalize_runs_for_llm_reports(
             run.ended_at = Some(Utc::now());
         }
         store.update_run(&run)?;
-        let report = build_reflection_report(store, &run, safety, llm, llm_critic, language)?;
-        store.save_report(&report)?;
-        updated += 1;
+        run_ids.push(run.run_id);
     }
-    Ok(updated)
+    Ok(run_ids)
 }
 
 pub fn generate_all_agents_daily_report(
@@ -618,18 +634,15 @@ pub fn finalize_run_if_idle(run: &mut RunRecord, last_activity: DateTime<Utc>) {
     }
 }
 
-/// Background sweep: finalize idle running runs and generate LLM reports.
+/// Background sweep: finalize idle running runs and return run ids needing LLM reports.
 pub fn sweep_idle_running_runs(
     store: &InsightStore,
-    safety: Option<&dyn SafetyScanner>,
-    llm: Option<&dyn LlmClient>,
     llm_critic: bool,
-    language: ReportLanguage,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<Vec<String>> {
     if !llm_critic {
-        return Ok(0);
+        return Ok(Vec::new());
     }
-    let mut updated = 0usize;
+    let mut run_ids = Vec::new();
     for mut run in store.list_runs(None, 10_000)? {
         if run.status != RunStatus::Running {
             continue;
@@ -644,18 +657,9 @@ pub fn sweep_idle_running_runs(
         }
         finalize_run_if_idle(&mut run, last);
         store.update_run(&run)?;
-        let report = build_reflection_report(store, &run, safety, llm, llm_critic, language)?;
-        store.save_report(&report)?;
-        if report.llm_enhanced {
-            updated += 1;
-            tracing::info!(
-                run_id = %run.run_id,
-                idle_minutes = RUN_REPORT_IDLE_MINUTES,
-                "AgentMirror idle run — LLM reflection report generated"
-            );
-        }
+        run_ids.push(run.run_id);
     }
-    Ok(updated)
+    Ok(run_ids)
 }
 
 pub fn outcome_from_status(status: RunStatus, outcome: RunOutcome) -> RunStatus {

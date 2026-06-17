@@ -12,15 +12,17 @@ pub fn risk_for_run(store: &InsightStore, audits: &HashMap<String, RequestAudit>
 }
 
 pub fn risk_for_runs(
-    store: &InsightStore,
     audits: &HashMap<String, RequestAudit>,
+    run_audit_ids: &HashMap<String, Vec<String>>,
     run_ids: &[String],
 ) -> HashMap<String, RunRiskSummary> {
-    let mut out = HashMap::new();
-    for run_id in run_ids {
-        out.insert(run_id.clone(), risk_for_run(store, audits, run_id));
-    }
-    out
+    run_ids
+        .iter()
+        .map(|run_id| {
+            let ids = run_audit_ids.get(run_id).map(|v| v.as_slice()).unwrap_or(&[]);
+            (run_id.clone(), aggregate_risk(ids, audits))
+        })
+        .collect()
 }
 
 fn aggregate_risk(audit_ids: &[String], audits: &HashMap<String, RequestAudit>) -> RunRiskSummary {

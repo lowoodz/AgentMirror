@@ -119,6 +119,9 @@ pub struct ReasoningGraph {
     pub run_id: String,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    /// Heuristic DAG from event order — not strict causal inference.
+    #[serde(default = "default_true")]
+    pub heuristic: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,7 +340,7 @@ pub struct RunRiskSummary {
     pub high_risk: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceTurn {
     pub audit_id: String,
     pub session_id: String,
@@ -366,6 +369,9 @@ pub struct InsightConfig {
     pub report_language: String,
     #[serde(default = "default_true")]
     pub llm_daily: bool,
+    /// Include blocked/failed proxy requests in AgentMirror (request body only when response empty).
+    #[serde(default)]
+    pub include_failed_requests: bool,
 }
 
 fn default_report_language() -> String {
@@ -399,6 +405,7 @@ impl Default for InsightConfig {
             critic_model_group: default_critic_group(),
             report_language: default_report_language(),
             llm_daily: true,
+            include_failed_requests: false,
         }
     }
 }

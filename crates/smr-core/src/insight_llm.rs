@@ -22,6 +22,7 @@ struct LiveProbeCache {
 }
 
 static LIVE_PROBE_CACHE: Mutex<Option<LiveProbeCache>> = Mutex::new(None);
+static BACKGROUND_PROBE: OnceLock<()> = OnceLock::new();
 
 struct InsightLlmJob {
     router: Arc<Router>,
@@ -133,6 +134,89 @@ pub fn critic_group_readiness(router: &Router, group: &str) -> serde_json::Value
             "error": err.to_string(),
         }),
     }
+}
+
+/// Status API: routing readiness + cached live probe only (never blocks on upstream LLM).
+pub fn status_critic_group(router: &Router, group: &str) -> serde_json::Value {
+    let readiness = critic_group_readiness(router, group);
+    let ready = readiness.get("ok").and_then(|v| v.as_bool()) == Some(true);
+
+    let live = read_live_probe_cache_only(group);
+    let live_ok = live.as_ref().and_then(|l| l.get("ok")).and_then(|v| v.as_bool());
+
+    let mut out = serde_json::json!({
+        "ok": ready && live_ok.unwrap_or(true),
+        "group": group,
+        "ready": readiness,
+    });
+    if let Some(live) = live {
+        out["live_probe"] = live;
+    }
+    if !ready {
+        if let Some(err) = readiness.get("error") {
+            out["error"] = err.clone();
+        }
+    } else if live_ok == Some(false) {
+        if let Some(live) = out.get("live_probe").and_then(|l| l.get("error")) {
+            out["error"] = live.clone();
+        }
+    }
+    out
+}
+
+/// Start at most one background live-probe refresher per process.
+pub fn ensure_background_critic_probe(router: Arc<Router>, group: String) {
+    BACKGROUND_PROBE.get_or_init(|| {
+        spawn_background_critic_probe(router, group);
+    });
+}
+
+/// Background refresh for optional live critic probe (does not block HTTP handlers).
+pub fn spawn_background_critic_probe(router: Arc<Router>, group: String) {
+    std::thread::Builder::new()
+        .name("insight-critic-probe".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("insight critic probe runtime");
+            rt.block_on(async move {
+                loop {
+                    let _ = refresh_live_probe_cache(Arc::clone(&router), &group);
+                    tokio::time::sleep(LIVE_PROBE_TTL).await;
+                }
+            });
+        })
+        .ok();
+}
+
+fn read_live_probe_cache_only(group: &str) -> Option<serde_json::Value> {
+    let cache = LIVE_PROBE_CACHE.lock().ok()?;
+    let entry = cache.as_ref()?;
+    if entry.group != group {
+        return None;
+    }
+    let mut result = entry.result.clone();
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert("cached".into(), serde_json::json!(true));
+        obj.insert(
+            "age_secs".into(),
+            serde_json::json!(entry.at.elapsed().as_secs()),
+        );
+    }
+    Some(result)
+}
+
+fn refresh_live_probe_cache(router: Arc<Router>, group: &str) -> serde_json::Value {
+    let result = run_live_probe(router, group);
+    if let Ok(mut cache) = LIVE_PROBE_CACHE.lock() {
+        *cache = Some(LiveProbeCache {
+            group: group.to_string(),
+            result: result.clone(),
+            at: Instant::now(),
+        });
+    }
+    result
 }
 
 /// Status API probe: instant readiness + optional cached live LLM ping (≤1 per 5 min).

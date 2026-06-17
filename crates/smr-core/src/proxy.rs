@@ -484,7 +484,9 @@ impl ProxyService {
         let _ = self.app.storage.insert_audit(&audit);
         events.push(EventKind::Info, audit.summary(), None);
 
-        if snap.config.insight.enabled && success {
+        if snap.config.insight.enabled
+            && (success || snap.config.insight.include_failed_requests)
+        {
             let agent_header = headers
                 .get("x-smr-agent-id")
                 .and_then(|v| v.to_str().ok())
@@ -521,7 +523,7 @@ impl ProxyService {
                                 response_body: Vec::new(),
                             },
                             Arc::clone(&self.app.insight),
-                            max_body,
+                            crate::insight_sse::insight_sse_byte_limit(max_body),
                         ))
                     }
                 }

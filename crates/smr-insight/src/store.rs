@@ -23,6 +23,7 @@ impl InsightStore {
         std::fs::create_dir_all(&graphs_dir)?;
         let db_path = data_dir.join("smr.db");
         let conn = Connection::open(&db_path).context("open insight sqlite db")?;
+        configure_sqlite(&conn)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS insight_agents (
                 agent_id TEXT PRIMARY KEY,
@@ -76,6 +77,10 @@ impl InsightStore {
             CREATE TABLE IF NOT EXISTS insight_processed_audits (
                 audit_id TEXT PRIMARY KEY,
                 processed_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS insight_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );",
         )?;
         let _ = conn.execute(
@@ -96,6 +101,26 @@ impl InsightStore {
         self.graphs_dir.parent().map(|p| p.join("daily")).unwrap_or_else(|| {
             PathBuf::from("data/insight/daily")
         })
+    }
+
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM insight_meta WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO insight_meta (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     pub fn is_audit_processed(&self, audit_id: &str) -> Result<bool> {
@@ -429,7 +454,7 @@ impl InsightStore {
         let mut stmt = conn.prepare(
             "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
              FROM insight_runs
-             WHERE started_at >= ?1 AND started_at <= ?2
+             WHERE started_at <= ?2 AND (ended_at IS NULL OR ended_at >= ?1)
              ORDER BY started_at ASC",
         )?;
         let rows = stmt.query_map(
@@ -446,7 +471,7 @@ impl InsightStore {
         let mut stmt = conn.prepare(
             "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
              FROM insight_runs
-             WHERE agent_id = ?1 AND started_at >= ?2 AND started_at <= ?3
+             WHERE agent_id = ?1 AND started_at <= ?3 AND (ended_at IS NULL OR ended_at >= ?2)
              ORDER BY started_at ASC",
         )?;
         let rows = stmt.query_map(
@@ -782,6 +807,42 @@ impl InsightStore {
         let rows = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
+
+    pub fn audit_ids_map_for_runs(
+        &self,
+        run_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        use std::collections::HashMap;
+        let mut out: HashMap<String, Vec<String>> = HashMap::new();
+        if run_ids.is_empty() {
+            return Ok(out);
+        }
+        for run_id in run_ids {
+            out.insert(run_id.clone(), Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders: String = run_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT run_id, audit_id FROM insight_events WHERE run_id IN ({placeholders}) AND audit_id != ''"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = run_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows.flatten() {
+            let (run_id, audit_id) = row;
+            if let Some(ids) = out.get_mut(&run_id) {
+                if !ids.contains(&audit_id) {
+                    ids.push(audit_id);
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -843,6 +904,12 @@ fn map_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         messages_seen: row.get::<_, i64>(8)? as u32,
         graph_path: row.get(9)?,
     })
+}
+
+fn configure_sqlite(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
 }
 
 fn map_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<CognitiveEvent> {

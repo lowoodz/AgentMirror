@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{NaiveDate, TimeZone, Utc};
 use smr_insight::models::{AgentRecord, CognitiveEvent, EventKind, RunRecord, RunStatus};
 use smr_insight::pattern::mine_patterns;
 use smr_insight::profile::build_profile;
@@ -146,4 +146,42 @@ fn audit_ids_for_runs() {
     assert!(ids[0].starts_with("audit-run-x"));
     let batch = store.audit_ids_for_runs(&["run-x".to_string()]).unwrap();
     assert_eq!(batch.len(), 1);
+    let map = store
+        .audit_ids_map_for_runs(&["run-x".to_string()])
+        .unwrap();
+    assert_eq!(map.get("run-x").map(|v| v.len()), Some(1));
+}
+
+#[test]
+fn runs_on_date_includes_cross_midnight_activity() {
+    let (_dir, store) = open_store();
+    let agent_id = "agent-midnight";
+    seed_agent(&store, agent_id);
+    let day1 = NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+    let day2 = NaiveDate::from_ymd_opt(2026, 6, 11).unwrap();
+    let started = Utc.with_ymd_and_hms(2026, 6, 10, 23, 50, 0).unwrap();
+    let ended = Utc.with_ymd_and_hms(2026, 6, 11, 0, 30, 0).unwrap();
+    store
+        .insert_run(&RunRecord {
+            run_id: "run-midnight".to_string(),
+            agent_id: agent_id.to_string(),
+            session_id: "sess-m".to_string(),
+            started_at: started,
+            ended_at: Some(ended),
+            status: RunStatus::Completed,
+            goal: "overnight task".to_string(),
+            turn_count: 2,
+            messages_seen: 0,
+            graph_path: None,
+        })
+        .unwrap();
+
+    let day1_runs = store.runs_on_date(day1).unwrap();
+    assert!(day1_runs.iter().any(|r| r.run_id == "run-midnight"));
+
+    let day2_runs = store.runs_on_date(day2).unwrap();
+    assert!(
+        day2_runs.iter().any(|r| r.run_id == "run-midnight"),
+        "cross-midnight run should appear on the day it ended"
+    );
 }

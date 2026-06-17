@@ -126,8 +126,12 @@ impl SharedApp {
             .set_safety_scanner(Some(Arc::new(crate::insight_ops::OpsSafetyScanner(ops))));
         if cfg.llm_critic || cfg.llm_daily {
             self.insight.set_llm_client(Some(Arc::new(
-                crate::insight_llm::RouterLlmClient::new(router, &cfg.critic_model_group),
+                crate::insight_llm::RouterLlmClient::new(router.clone(), &cfg.critic_model_group),
             )));
+            crate::insight_llm::ensure_background_critic_probe(
+                router,
+                cfg.critic_model_group.clone(),
+            );
         } else {
             self.insight.set_llm_client(None);
         }

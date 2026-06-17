@@ -93,19 +93,21 @@ async fn api_insight_status(State(s): State<HttpState>) -> Json<serde_json::Valu
     let cfg = s.app.config();
     let critic_llm = if cfg.insight.llm_critic || cfg.insight.llm_daily {
         let snap = s.app.snapshot();
-        Some(crate::insight_llm::probe_critic_group(
-            snap.router,
+        Some(crate::insight_llm::status_critic_group(
+            &snap.router,
             &cfg.insight.critic_model_group,
         ))
     } else {
         None
     };
+    let metrics = s.app.insight.metrics_snapshot();
     Json(serde_json::json!({
         "enabled": s.app.insight.enabled(),
         "config": cfg.insight,
         "traffic_bodies": cfg.logging.save_traffic_bodies,
         "needs_traffic": cfg.insight.require_traffic_bodies && !cfg.logging.save_traffic_bodies,
         "critic_llm": critic_llm,
+        "metrics": metrics,
     }))
 }
 
@@ -160,9 +162,13 @@ async fn api_insight_runs(
         .list_runs(q.agent_id.as_deref(), limit)
         .unwrap_or_default();
     let run_ids: Vec<String> = runs.iter().map(|r| r.run_id.clone()).collect();
-    let audit_ids = store.audit_ids_for_runs(&run_ids).unwrap_or_default();
+    let audit_map = store.audit_ids_map_for_runs(&run_ids).unwrap_or_default();
+    let audit_ids: Vec<String> = audit_map
+        .values()
+        .flat_map(|ids| ids.iter().cloned())
+        .collect();
     let audits = load_audits_for_ids(&s.app.storage, &audit_ids);
-    let risks = risk_for_runs(&store, &audits, &run_ids);
+    let risks = risk_for_runs(&audits, &audit_map, &run_ids);
     let enriched: Vec<Value> = runs
         .into_iter()
         .map(|run| {

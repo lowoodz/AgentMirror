@@ -18,6 +18,7 @@ impl AuditStore {
         std::fs::create_dir_all(data_dir)?;
         let db_path = data_dir.join("smr.db");
         let conn = Connection::open(&db_path).context("open sqlite db")?;
+        configure_sqlite(&conn)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,4 +191,10 @@ fn map_audit_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestAudit> {
         success: row.get::<_, i64>(10)? != 0,
         message: row.get(11)?,
     })
+}
+
+fn configure_sqlite(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
 }

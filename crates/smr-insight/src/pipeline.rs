@@ -2,11 +2,14 @@ use std::sync::Arc;
 
 use crate::critic::{evaluate, CriticInput};
 use crate::extract::{drafts_to_events, extract_from_turn, ExtractContext};
-use crate::graph::build_graph;
+use crate::graph::{build_graph, execution_summary};
 use crate::llm::LlmClient;
 use crate::models::{EventKind, InsightConfig, RunRecord, RunStatus, TraceTurn};
 use crate::parser::{apply_messages_delta, parse_request, parse_response};
-use crate::report::{build_reflection_report, finalize_run_if_idle, last_activity_at, outcome_from_status};
+use crate::report::{
+    build_rule_reflection_report, finalize_run_if_idle, last_activity_at, outcome_from_status,
+    refresh_running_llm_report, should_generate_llm_report,
+};
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::separator::{
     infer_goal_from_request, is_bootstrap_goal, is_weak_goal, new_run_id, resolve_agent,
@@ -17,7 +20,6 @@ use crate::store::InsightStore;
 pub struct Pipeline {
     store: Arc<InsightStore>,
     safety: Option<Arc<dyn SafetyScanner>>,
-    llm: Option<Arc<dyn LlmClient>>,
     config: InsightConfig,
 }
 
@@ -25,27 +27,35 @@ impl Pipeline {
     pub fn new(
         store: Arc<InsightStore>,
         safety: Option<Arc<dyn SafetyScanner>>,
-        llm: Option<Arc<dyn LlmClient>>,
         config: InsightConfig,
     ) -> Self {
         Self {
             store,
             safety,
-            llm,
             config,
         }
+    }
+
+    /// Legacy constructor — LLM reflection is handled by a dedicated worker queue.
+    pub fn with_llm_slot(
+        store: Arc<InsightStore>,
+        safety: Option<Arc<dyn SafetyScanner>>,
+        _llm: Option<Arc<dyn LlmClient>>,
+        config: InsightConfig,
+    ) -> Self {
+        Self::new(store, safety, config)
     }
 
     pub fn store(&self) -> &InsightStore {
         &self.store
     }
 
-    pub fn process_turn(&self, turn: TraceTurn) -> anyhow::Result<()> {
+    pub fn process_turn(&self, turn: TraceTurn) -> anyhow::Result<Option<String>> {
         if turn.request_body.is_empty() && turn.response_body.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         if self.store.is_audit_processed(&turn.audit_id)? {
-            return Ok(());
+            return Ok(None);
         }
 
         let full_req = parse_request(&turn.request_body);
@@ -146,6 +156,15 @@ impl Pipeline {
         }
 
         let all_events = self.store.list_events(&run.run_id)?;
+        let last_activity = last_activity_at(&run, &all_events);
+        let prior = self.store.get_report(&run.run_id).ok().flatten();
+        let schedule_llm = self.config.llm_critic
+            && should_generate_llm_report(
+                &run,
+                all_events.len(),
+                prior.as_ref(),
+                last_activity,
+            );
 
         let graph = build_graph(&run.run_id, &all_events);
         let graph_json = serde_json::to_string_pretty(&graph)?;
@@ -163,23 +182,49 @@ impl Pipeline {
 
         self.store.update_run(&run)?;
 
-        let last_activity = last_activity_at(&run, &all_events);
         finalize_run_if_idle(&mut run, last_activity);
         if run.status == RunStatus::Completed {
             self.store.update_run(&run)?;
         }
 
-        let report = build_reflection_report(
-            &self.store,
+        let summary = execution_summary(&all_events);
+        let execution_summary = if summary.is_empty() {
+            "No actions recorded yet".to_string()
+        } else {
+            summary
+        };
+
+        if self.config.llm_critic {
+            if let Some(mut prior_report) = prior {
+                if prior_report.llm_enhanced && run.status == RunStatus::Running && !schedule_llm
+                {
+                    refresh_running_llm_report(
+                        &mut prior_report,
+                        &run,
+                        &execution_summary,
+                        &all_events,
+                        &safety_findings,
+                    );
+                    self.store.save_report(&prior_report)?;
+                    self.store.mark_audit_processed(&turn.audit_id)?;
+                    return Ok(None);
+                }
+            }
+        }
+
+        let report = build_rule_reflection_report(
             &run,
-            self.safety.as_deref(),
-            self.llm.as_deref(),
-            self.config.llm_critic,
-            self.config.report_language(),
+            &all_events,
+            &execution_summary,
+            &safety_findings,
         )?;
         self.store.save_report(&report)?;
 
         self.store.mark_audit_processed(&turn.audit_id)?;
-        Ok(())
+        Ok(if schedule_llm {
+            Some(run.run_id)
+        } else {
+            None
+        })
     }
 }

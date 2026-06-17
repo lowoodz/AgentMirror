@@ -10,6 +10,7 @@ use crate::models::{
 use crate::token_budget::{batch_events, format_batch_trajectory, MAX_BATCH_TOKENS};
 
 const INITIAL_GOAL_EVENT_COUNT: usize = 10;
+const LLM_CRITIC_MAX_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, Deserialize)]
 struct LlmCriticResponse {
@@ -209,46 +210,72 @@ pub fn generate_reflection_report_llm(
             &trajectory,
         );
 
-        match client.complete(&critic_system_prompt(language), &user) {
-            Ok(raw) => {
-                let mut report =
-                    report_shell(run, execution_summary, &original_goal, &current_goal, safety_notes);
-                if let Some(p) = prior {
-                    if p.llm_enhanced && batch_idx == 0 {
-                        report = p.clone();
-                        report.execution_summary = execution_summary.to_string();
+        let mut batch_done = false;
+        for attempt in 0..LLM_CRITIC_MAX_ATTEMPTS {
+            match client.complete(&critic_system_prompt(language), &user) {
+                Ok(raw) => {
+                    let mut report = report_shell(
+                        run,
+                        execution_summary,
+                        &original_goal,
+                        &current_goal,
+                        safety_notes,
+                    );
+                    if let Some(p) = prior {
+                        if p.llm_enhanced && batch_idx == 0 {
+                            report = p.clone();
+                            report.execution_summary = execution_summary.to_string();
+                        }
                     }
+                    if apply_llm_critic(&mut report, &raw, true, &original_goal) {
+                        report.llm_event_count = event_count;
+                        report.generated_at = Utc::now();
+                        current_goal = report.goal.clone();
+                        previous_report_json = Some(extract_json_object(&raw));
+                        final_report = Some(report);
+                        tracing::debug!(
+                            run_id = %run.run_id,
+                            batch = batch_num,
+                            total = total_batches,
+                            events = event_count,
+                            "AgentMirror LLM critic batch complete"
+                        );
+                    } else {
+                        tracing::warn!(
+                            run_id = %run.run_id,
+                            batch = batch_num,
+                            "AgentMirror LLM critic batch returned invalid JSON"
+                        );
+                    }
+                    batch_done = true;
+                    break;
                 }
-                if apply_llm_critic(&mut report, &raw, true, &original_goal) {
-                    report.llm_event_count = event_count;
-                    report.generated_at = Utc::now();
-                    current_goal = report.goal.clone();
-                    previous_report_json = Some(extract_json_object(&raw));
-                    final_report = Some(report);
-                    tracing::debug!(
-                        run_id = %run.run_id,
-                        batch = batch_num,
-                        total = total_batches,
-                        events = event_count,
-                        "AgentMirror LLM critic batch complete"
-                    );
-                } else {
+                Err(err) => {
+                    if attempt + 1 < LLM_CRITIC_MAX_ATTEMPTS {
+                        let delay_ms = 500u64 * 2u64.pow(attempt);
+                        tracing::warn!(
+                            ?err,
+                            run_id = %run.run_id,
+                            batch = batch_num,
+                            attempt = attempt + 1,
+                            delay_ms,
+                            "AgentMirror LLM critic batch failed — retrying"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                        continue;
+                    }
                     tracing::warn!(
+                        ?err,
                         run_id = %run.run_id,
                         batch = batch_num,
-                        "AgentMirror LLM critic batch returned invalid JSON"
+                        "AgentMirror LLM critic batch failed"
                     );
+                    break;
                 }
             }
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    run_id = %run.run_id,
-                    batch = batch_num,
-                    "AgentMirror LLM critic batch failed"
-                );
-                break;
-            }
+        }
+        if !batch_done {
+            break;
         }
     }
 
