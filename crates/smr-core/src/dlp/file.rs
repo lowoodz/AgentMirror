@@ -296,6 +296,13 @@ fn extract_unquoted_absolute_paths(tool_text: &str) -> Vec<String> {
             let mut end = start;
             while end < bytes.len() {
                 let b = bytes[end];
+                // JSON/shell escaped closing quote: fitz.open(\"/path/to/file.pdf\")
+                if b == b'\\'
+                    && end + 1 < bytes.len()
+                    && (bytes[end + 1] == b'"' || bytes[end + 1] == b'\'')
+                {
+                    break;
+                }
                 let drive_colon =
                     end == start + 1 && b == b':' && bytes[start].is_ascii_alphabetic();
                 if is_path_char(b) || drive_colon {
@@ -516,6 +523,7 @@ mod tests {
         let pdf = zone.join(
             "Computer Organization and Design The Hardware Software Interface. Third Edition, Revised.pdf",
         );
+        fs::write(&pdf, b"%PDF-1.4 stub").unwrap();
         let pdf_str = pdf.to_string_lossy().replace('\\', "/");
         let rule = FileRule {
             id: "patterson".into(),
