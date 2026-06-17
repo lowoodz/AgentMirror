@@ -82,11 +82,31 @@ class Report:
     def add(self, name: str, ok: bool, detail: str) -> None:
         self.results.append(CaseResult(name, ok, detail))
         mark = "PASS" if ok else "FAIL"
-        print(f"  {mark}: {name} — {detail}")
+        print(f"  {mark}: {name} — {_console_safe(detail)}")
 
     @property
     def ok(self) -> bool:
         return all(r.ok for r in self.results)
+
+
+def _console_safe(text: str) -> str:
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(enc)
+        return text
+    except UnicodeEncodeError:
+        return text.encode(enc, errors="replace").decode(enc, errors="replace")
+
+
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not reconfigure:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 def load_json5(path: Path) -> dict:
@@ -575,6 +595,21 @@ def weather_healthy_reply(text: str, stderr: str = "", *, agent_status: str = ""
     return healthy_reply(text, stderr, agent_status=agent_status)
 
 
+def count_healthy_reply(expected: int):
+    """Pass when a plausible file-count integer appears (agent may prefix planning text)."""
+
+    def check(text: str, stderr: str = "", *, agent_status: str = "") -> tuple[bool, str]:
+        if extract_count_number(text, expected=expected) is not None:
+            combined = f"{text}\n{stderr}"
+            for pat in FAIL_PATTERNS:
+                if re.search(pat, combined, re.I):
+                    return False, f"matched /{pat}/i"
+            return True, "count integer present"
+        return healthy_reply(text, stderr, agent_status=agent_status)
+
+    return check
+
+
 def healthy_reply(text: str, stderr: str = "", *, agent_status: str = "") -> tuple[bool, str]:
     combined = f"{text}\n{stderr}"
     for pat in FAIL_PATTERNS:
@@ -804,6 +839,8 @@ def run_claude_pair(
 def main() -> int:
     import argparse
 
+    configure_stdio()
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--listen",
@@ -947,6 +984,7 @@ def main() -> int:
                     model_id=model_openai,
                     patcher=patcher,
                     check_reply=check_count,
+                    healthy_check=count_healthy_reply(expected_files),
                     timeout=count_timeout,
                 )
 
@@ -963,7 +1001,8 @@ def main() -> int:
                 check_reply=check_weather,
                 healthy_check=weather_healthy_reply,
                 stream=False,
-                max_turns=2,
+                max_turns=8,
+                skip_permissions=True,
             )
             run_claude_pair(
                 report,
@@ -977,7 +1016,8 @@ def main() -> int:
                 check_reply=check_weather,
                 healthy_check=weather_healthy_reply,
                 stream=True,
-                max_turns=2,
+                max_turns=8,
+                skip_permissions=True,
             )
             run_claude_pair(
                 report,
@@ -988,11 +1028,11 @@ def main() -> int:
                 smr_base=smr_base,
                 api_key=ant["api_key"],
                 model=ant["model"],
-            check_reply=check_count,
-            stream=False,
-            max_turns=8,
-            skip_permissions=True,
-        )
+                check_reply=check_count,
+                stream=False,
+                max_turns=8,
+                skip_permissions=True,
+            )
     finally:
         stop_smr(proc)
         shutil.rmtree(work_dir, ignore_errors=True)

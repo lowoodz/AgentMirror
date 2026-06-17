@@ -15,6 +15,8 @@ if [[ -z "${SMR_GUEST_STAGING:-}" && -n "${SMR_WINDOWS_USER:-}" ]]; then
   SMR_GUEST_STAGING="C:/Users/${SMR_WINDOWS_USER}/smr-staging"
 fi
 export SMR_WINDOWS_HOST SMR_WINDOWS_USER SMR_GUEST_STAGING
+# Local smr test ports must not go through HTTP_PROXY (avoids 90s chat_route hangs).
+export NO_PROXY="${NO_PROXY:-127.0.0.1,localhost,::1}"
 
 has_test_keys() {
   if [[ -n "${SMR_GLM_API_KEY:-}" && -n "${SMR_DEEPSEEK_API_KEY:-}" ]]; then

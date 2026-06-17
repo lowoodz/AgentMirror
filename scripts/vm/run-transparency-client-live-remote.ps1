@@ -128,6 +128,7 @@ Write-Host "==> HTTP wire transparency (mock upstream)"
 & $python (Join-Path $GuestWork "transparency_pass_through_test.py") --release
 if ($LASTEXITCODE -ne 0) { throw "transparency_pass_through_test.py failed" }
 
+$env:PYTHONIOENCODING = "utf-8"
 $env:SMR_TRANSPARENCY_COUNT_DIR = $CountDir
 $env:SMR_TRANSPARENCY_WORKDIR = $GuestWork
 Write-Host "==> Client live E2E count_dir=$CountDir workdir=$GuestWork"

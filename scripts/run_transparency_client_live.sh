@@ -14,14 +14,27 @@ fi
 # TODO default paths: macOS repo root; override via SMR_TRANSPARENCY_COUNT_DIR in test.env
 export SMR_TRANSPARENCY_COUNT_DIR="${SMR_TRANSPARENCY_COUNT_DIR:-${ROOT}}"
 export PYTHONUNBUFFERED=1
+export PYTHONIOENCODING=utf-8
 
 LOG="${ROOT}/dist/transparency-client-live-macos.log"
 mkdir -p "${ROOT}/dist"
 exec > >(tee "$LOG") 2>&1
 
-echo "==> HTTP wire transparency (mock upstream, SSE + JSON)"
-python3 "${ROOT}/scripts/transparency_pass_through_test.py" --release
+CLIENT_ONLY=false
+PY_ARGS=()
+for a in "$@"; do
+  if [[ "$a" == "--client-only" ]]; then
+    CLIENT_ONLY=true
+  else
+    PY_ARGS+=("$a")
+  fi
+done
 
-echo ""
+if [[ "$CLIENT_ONLY" != true ]]; then
+  echo "==> HTTP wire transparency (mock upstream, SSE + JSON)"
+  python3 "${ROOT}/scripts/transparency_pass_through_test.py" --release
+  echo ""
+fi
+
 echo "==> Client live E2E (openclaw + claude, direct vs SafeRoute; file count = files only)"
-python3 "${ROOT}/scripts/transparency_client_live_test.py" "$@"
+python3 "${ROOT}/scripts/transparency_client_live_test.py" "${PY_ARGS[@]}"

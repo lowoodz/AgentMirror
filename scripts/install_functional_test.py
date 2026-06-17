@@ -123,6 +123,11 @@ operation_rules:
     object:
       pattern: "rm -rf"
       is_regex: false
+
+insight:
+  enabled: true
+  llm_critic: false
+  llm_daily: false
 """
 
 
@@ -183,6 +188,7 @@ def main() -> int:
                 "messages": [{"role": "user", "content": "Reply exactly: install-ok"}],
                 "max_tokens": 16,
             },
+            timeout=120.0,
         )
         reply = json.loads(text)["choices"][0]["message"]["content"] if code == 200 else ""
         results.append(check("chat_route", code == 200 and len(reply) > 0, f"{ms:.0f}ms reply={reply[:30]!r}"))
