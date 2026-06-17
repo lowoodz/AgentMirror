@@ -97,16 +97,35 @@ function Resolve-AppExe {
         [string]$LocalAppData,
         [string]$UserHome
     )
-    @(
+    $candidates = @(
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\AgentMirror.exe"),
+        (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\smr-gui.exe"),
         (Join-Path $LocalAppData "Programs\AgentMirror\AgentMirror.exe"),
         (Join-Path $LocalAppData "AgentMirror\AgentMirror.exe"),
+        (Join-Path $LocalAppData "com.securemodelroute.desktop\AgentMirror.exe"),
+        (Join-Path $LocalAppData "com.securemodelroute.desktop\smr-gui.exe"),
         (Join-Path $LocalAppData "SafeRoute\smr-gui.exe"),
         (Join-Path $LocalAppData "SafeRoute\SafeRoute.exe"),
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\SafeRoute.exe"),
-        (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\smr-gui.exe"),
         (Join-Path $LocalAppData "Programs\SafeRoute\SafeRoute.exe")
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { return (Resolve-Path $p).Path }
+    }
+    $searchRoots = @(
+        (Join-Path $LocalAppData "Programs"),
+        $LocalAppData
+    )
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path $root)) { continue }
+        foreach ($name in @("AgentMirror.exe", "SafeRoute.exe", "smr-gui.exe")) {
+            $hit = Get-ChildItem -Path $root -Recurse -Filter $name -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '\\resources\\' } |
+                Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+        }
+    }
+    return $null
 }
 
 function Resolve-SmrBin {
@@ -138,7 +157,7 @@ function Test-UserUninstallEntry {
     }
     $root = "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
     foreach ($item in Get-ItemProperty $root -ErrorAction SilentlyContinue) {
-        if ([string]$item.DisplayName -match 'SafeRoute') {
+        if ([string]$item.DisplayName -match 'AgentMirror|SafeRoute') {
             return $true
         }
     }
@@ -147,7 +166,7 @@ function Test-UserUninstallEntry {
 
 Remove-Item $LogPath -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-Log "==> SafeRoute NSIS install test"
+Log "==> AgentMirror NSIS install test"
 Log "Runner: $env:USERNAME"
 
 $userInfo = Get-InteractiveUserInfo -PreferredUser $InteractiveUser
@@ -157,7 +176,7 @@ if (-not $userInfo) {
 }
 Log "Interactive user: $($userInfo.Name) ($($userInfo.Home))"
 
-Get-Process smr, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process smr, AgentMirror, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
 $Setup = Get-ChildItem $StageDir -Filter "*-setup.exe" -ErrorAction SilentlyContinue |
@@ -218,10 +237,17 @@ if ($setupRc -ne 0) {
     exit 1
 }
 Log "NSIS setup exit: $setupRc"
-Start-Sleep -Seconds 5
+Start-Sleep -Seconds 12
 
 $AppExe = Resolve-AppExe -LocalAppData $userInfo.LocalAppData -UserHome $userInfo.Home
 if (-not $AppExe) {
+    $programs = Join-Path $userInfo.LocalAppData "Programs"
+    if (Test-Path $programs) {
+        Log "DEBUG: listing $programs (exe only, depth 3)"
+        Get-ChildItem -Path $programs -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 20 |
+            ForEach-Object { Log "  $($_.FullName)" }
+    }
     Log "ERROR: installed app exe not found under $($userInfo.LocalAppData)\Programs"
     exit 1
 }
@@ -276,7 +302,7 @@ if (-not $healthOk) {
 }
 Log "Health OK"
 
-Get-Process smr, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process smr, AgentMirror, SafeRoute, smr-gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 
 if (Test-Path $UninstallPs1) {

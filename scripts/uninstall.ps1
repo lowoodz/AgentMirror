@@ -15,7 +15,7 @@ $BinDir = Join-Path $Prefix "bin"
 $ConfDir = Join-Path $Prefix "etc\securemodelroute"
 
 function Invoke-NsisUninstall {
-    $patterns = @("SafeRoute", "SecureModelRoute")
+    $patterns = @("AgentMirror", "SafeRoute", "SecureModelRoute")
     $roots = @(
         "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
@@ -58,6 +58,7 @@ function Invoke-NsisUninstall {
 
     foreach ($candidate in @(
         (Join-Path $env:LOCALAPPDATA "Programs\com.securemodelroute.desktop\uninstall.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\AgentMirror\uninstall.exe"),
         (Join-Path $env:LOCALAPPDATA "Programs\SafeRoute\uninstall.exe"),
         (Join-Path $env:LOCALAPPDATA "Programs\SecureModelRoute\uninstall.exe"),
         (Join-Path $env:LOCALAPPDATA "SafeRoute\uninstall.exe")
@@ -94,6 +95,7 @@ function Remove-CopyInstall {
     }
 
     foreach ($dir in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\AgentMirror"),
         (Join-Path $env:LOCALAPPDATA "Programs\SecureModelRoute"),
         (Join-Path $env:LOCALAPPDATA "Programs\SafeRoute")
     )) {
@@ -104,10 +106,13 @@ function Remove-CopyInstall {
     }
 
     foreach ($link in @(
+        (Join-Path ([Environment]::GetFolderPath("Programs")) "AgentMirror.lnk"),
         (Join-Path ([Environment]::GetFolderPath("Programs")) "SecureModelRoute.lnk"),
         (Join-Path ([Environment]::GetFolderPath("Programs")) "SafeRoute.lnk"),
+        (Join-Path ([Environment]::GetFolderPath("Desktop")) "AgentMirror.lnk"),
         (Join-Path ([Environment]::GetFolderPath("Desktop")) "SecureModelRoute.lnk"),
         (Join-Path ([Environment]::GetFolderPath("Desktop")) "SafeRoute.lnk"),
+        (Join-Path ([Environment]::GetFolderPath("Startup")) "AgentMirror.lnk"),
         (Join-Path ([Environment]::GetFolderPath("Startup")) "SecureModelRoute.lnk"),
         (Join-Path ([Environment]::GetFolderPath("Startup")) "SafeRoute.lnk")
     )) {
@@ -117,10 +122,11 @@ function Remove-CopyInstall {
         }
     }
 
-    $taskName = "SecureModelRoute"
-    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-        Write-UninstallLog "    removed scheduled task $taskName"
+    foreach ($taskName in @("AgentMirror", "SafeRoute", "SecureModelRoute")) {
+        if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+            Write-UninstallLog "    removed scheduled task $taskName"
+        }
     }
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
