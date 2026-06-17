@@ -714,28 +714,42 @@ fn load_rule_snapshot(
     let literals: Vec<String> = serde_json::from_str(
         &fs::read_to_string(work_dir.join(LITERALS_FILE)).context("read literals.json")?,
     )?;
-    let indexed_paths: Arc<HashSet<String>> = Arc::new(
-        file_paths
-            .iter()
-            .map(|p| normalize_index_path(p))
-            .collect(),
-    );
+    // Live directory walks can fail under macOS TCC while the on-disk generation is still valid.
+    // Always merge manifest paths so path triggers resolve after reload/restart.
+    let mut indexed_path_set: HashSet<String> = file_paths
+        .iter()
+        .map(|p| normalize_index_path(p))
+        .collect();
+    for path in prev_gen.files.keys() {
+        indexed_path_set.insert(path.clone());
+    }
+    let indexed_paths: Arc<HashSet<String>> = Arc::new(indexed_path_set);
+    let token_paths: Vec<PathBuf> = if file_paths.is_empty() {
+        prev_gen
+            .files
+            .keys()
+            .map(PathBuf::from)
+            .collect()
+    } else {
+        file_paths.to_vec()
+    };
     tracing::debug!(
         rule_id = %rule.id,
         generation = prev_gen.generation,
-        files = file_paths.len(),
+        live_files = file_paths.len(),
+        indexed = indexed_paths.len(),
         "file index unchanged; reusing snapshot"
     );
     let extracted_root = rule_base.join(EXTRACTED_DIR);
     let path_tokens = load_path_tokens(&work_dir)?
-        .filter(|loaded| path_tokens_covers_files(loaded, file_paths))
+        .filter(|loaded| path_tokens_covers_files(loaded, &token_paths))
         .unwrap_or_else(|| {
             tracing::debug!(
                 rule_id = %rule.id,
                 generation = prev_gen.generation,
                 "path_tokens.json missing or incomplete; rebuilding"
             );
-            build_path_tokens(file_paths, &extracted_root)
+            build_path_tokens(&token_paths, &extracted_root)
         });
     if !work_dir.join(PATH_TOKENS_FILE).is_file() {
         save_path_tokens(&work_dir, &path_tokens)?;
@@ -1257,14 +1271,26 @@ fn push_chunk_signatures(
         .min(norm.text.chars().count());
 
     let stride = rule.index.signature_stride.max(1);
-    let max_sigs = rule.index.signatures_per_chunk;
     let char_len = norm.text.chars().count();
     let lens = signature_lengths(min_len, char_len);
     let chars: Vec<char> = norm.text.chars().collect();
 
-    let mut emitted = 0usize;
+    let positions_needed = if char_len <= min_len {
+        1
+    } else {
+        char_len.saturating_sub(min_len).div_ceil(stride) + 1
+    };
+    let max_positions = if rule.match_mode == MatchMode::Fragment {
+        positions_needed
+            .max(rule.index.signatures_per_chunk)
+            .min(512)
+    } else {
+        rule.index.signatures_per_chunk
+    };
+
     let mut pos = 0usize;
-    while pos + min_len <= char_len && emitted < max_sigs {
+    let mut positions = 0usize;
+    while pos + min_len <= char_len && positions < max_positions {
         for &len in &lens {
             if pos + len > char_len {
                 continue;
@@ -1277,12 +1303,9 @@ fn push_chunk_signatures(
                 byte_offset: chunk_start,
                 byte_len: chunk_len,
             });
-            emitted += 1;
-            if emitted >= max_sigs {
-                break;
-            }
         }
         pos += stride;
+        positions += 1;
     }
 }
 

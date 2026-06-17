@@ -34,6 +34,11 @@ impl FileDlp {
         self.index.is_rebuilding()
     }
 
+    #[cfg(test)]
+    pub fn indexed_paths_for_rule(&self, rule_id: &str) -> Vec<String> {
+        self.index.indexed_paths_for_rule(rule_id)
+    }
+
     pub fn check_path_triggers_in_tool_text(
         &self,
         session_id: &str,
@@ -501,6 +506,39 @@ mod tests {
             .to_string_lossy()
             .replace('\\', "/");
         assert!(paths_equivalent(&files[0], &expected), "got {}", files[0]);
+    }
+
+    #[test]
+    fn extracts_pdf_path_from_fitz_heredoc_with_ampersand_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let zone = tmp.path().join("Patterson & Hennessy");
+        fs::create_dir_all(&zone).unwrap();
+        let pdf = zone.join(
+            "Computer Organization and Design The Hardware Software Interface. Third Edition, Revised.pdf",
+        );
+        let pdf_str = pdf.to_string_lossy().replace('\\', "/");
+        let rule = FileRule {
+            id: "patterson".into(),
+            path: zone,
+            enabled: true,
+            recursive: true,
+            trigger_window: 5,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["pdf".into()],
+            index: FileIndexOptions::default(),
+        };
+        let tool = format!(
+            r#"{{"command":"python3 << 'EOF'\nimport fitz\ndoc = fitz.open(\"{pdf_str}\")\nEOF"}}"#
+        );
+        let files = extract_triggered_files(&tool, &rule);
+        assert_eq!(files.len(), 1, "files={files:?}");
+        assert!(
+            files[0].contains("Third Edition, Revised.pdf"),
+            "got {}",
+            files[0]
+        );
     }
 
     #[test]

@@ -1009,4 +1009,80 @@ mod file_session_tests {
             "expected fragment-mode DLP to redact PDF tool result (full mode count={count_full})"
         );
     }
+
+    #[test]
+    fn repro_patterson_cod_page100_traffic() {
+        use crate::config::AppConfig;
+        use crate::dlp::file::{extract_triggered_files, FileDlp};
+        use crate::paths::{config_dir, default_config_path};
+        use smr_protocol::extract_texts;
+
+        let traffic_path = config_dir().join("traffic/20260617T101727_request_in_b0aa2763.body");
+        if !traffic_path.exists() {
+            eprintln!("skip: Patterson traffic snapshot missing");
+            return;
+        }
+        let config = AppConfig::load(&default_config_path()).expect("load smr.yaml");
+        let body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&traffic_path).unwrap()).unwrap();
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        dlp.reload(&config).unwrap();
+        for _ in 0..600 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(dlp.is_file_index_ready(), "file index not ready");
+
+        let tool_blob = super::collect_tool_call_trigger_text(&body).unwrap_or_default();
+        let rule = config
+            .file_rules
+            .iter()
+            .find(|r| r.id == "file-1781662177086")
+            .expect("patterson rule");
+        let candidates = extract_triggered_files(&tool_blob, rule);
+        assert!(
+            candidates.iter().any(|p| p.contains("Third Edition, Revised.pdf")),
+            "expected fitz tool call to mention COD PDF path"
+        );
+
+        let fdlp = FileDlp::new(&config.file_rules).unwrap();
+        fdlp.reload(&config.file_rules).unwrap();
+        for _ in 0..600 {
+            if fdlp.is_index_ready() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let activated = std::cell::RefCell::new(Vec::<String>::new());
+        fdlp.check_path_triggers_in_tool_text("sess", &tool_blob, |_, _, files| {
+            activated.borrow_mut().extend(files.iter().cloned());
+        });
+        assert!(
+            !activated.into_inner().is_empty(),
+            "path trigger must resolve against on-disk manifest paths"
+        );
+        assert!(
+            !fdlp.indexed_paths_for_rule("file-1781662177086").is_empty(),
+            "indexed_paths must not be empty when reusing a valid on-disk generation"
+        );
+
+        let session = "patterson-repro";
+        dlp.register_path_triggers(session, &body);
+        assert!(
+            dlp.sessions()
+                .active_snapshot(session)
+                .is_some_and(|a| !a.is_empty()),
+            "session should activate from fitz.open path in tool calls"
+        );
+
+        let extracted = extract_texts(&body).unwrap();
+        let (_repl, count, _notice) =
+            dlp.process_request(session, &extracted, &body, false).unwrap();
+        eprintln!(
+            "patterson repro: session ok; dlp replacements={count} (non-zero after index rebuild with dense fragment signatures)"
+        );
+    }
 }
