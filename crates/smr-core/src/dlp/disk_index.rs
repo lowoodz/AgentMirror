@@ -43,6 +43,7 @@ const INDEX_FORMAT: u32 = 2;
 const EXTRACTED_DIR: &str = "extracted";
 
 const LITERALS_FILE: &str = "literals.json";
+const PATH_TOKENS_FILE: &str = "path_tokens.json";
 /// Haystack length at which ripgrep literal prefilter is enabled.
 const RG_PREFILTER_MIN_BYTES: usize = 8192;
 
@@ -616,6 +617,19 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
         serde_json::to_string(&literals)?,
     )?;
 
+    let prev_tokens = prev.as_ref().and_then(|prev_gen| {
+        load_path_tokens(&rule_base.join(GEN_DIR).join(prev_gen.generation.to_string()))
+            .ok()
+            .flatten()
+    });
+    let path_tokens = resolve_path_tokens(
+        &file_paths,
+        &extracted_root,
+        prev_tokens.as_ref(),
+        &unchanged,
+    );
+    save_path_tokens(&work_dir, &path_tokens)?;
+
     write_current_pointer(&rule_base, generation)?;
     cleanup_old_generations(&rule_base, generation)?;
 
@@ -635,7 +649,7 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
         db_path,
         literals: Arc::new(literals),
         indexed_paths,
-        path_tokens: Arc::new(build_path_tokens(&file_paths, rule, &extracted_root)),
+        path_tokens: Arc::new(path_tokens),
     })
 }
 
@@ -712,17 +726,28 @@ fn load_rule_snapshot(
         files = file_paths.len(),
         "file index unchanged; reusing snapshot"
     );
+    let extracted_root = rule_base.join(EXTRACTED_DIR);
+    let path_tokens = load_path_tokens(&work_dir)?
+        .filter(|loaded| path_tokens_covers_files(loaded, file_paths))
+        .unwrap_or_else(|| {
+            tracing::debug!(
+                rule_id = %rule.id,
+                generation = prev_gen.generation,
+                "path_tokens.json missing or incomplete; rebuilding"
+            );
+            build_path_tokens(file_paths, &extracted_root)
+        });
+    if !work_dir.join(PATH_TOKENS_FILE).is_file() {
+        save_path_tokens(&work_dir, &path_tokens)?;
+    }
+
     Ok(RuleSnapshot {
         generation: prev_gen.generation,
         bloom,
         db_path: prev_gen.db_path.clone(),
         literals: Arc::new(literals),
         indexed_paths,
-        path_tokens: Arc::new(build_path_tokens(
-            file_paths,
-            rule,
-            &rule_base.join(EXTRACTED_DIR),
-        )),
+        path_tokens: Arc::new(path_tokens),
     })
 }
 
@@ -1308,19 +1333,63 @@ fn normalize_index_path(path: &Path) -> String {
     strip_verbatim_path_prefix(&raw)
 }
 
-fn build_path_tokens(
+fn load_path_tokens(work_dir: &Path) -> Result<Option<HashMap<String, TokenProfile>>> {
+    let path = work_dir.join(PATH_TOKENS_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path).context("read path_tokens.json")?;
+    let map: HashMap<String, TokenProfile> =
+        serde_json::from_str(&raw).context("parse path_tokens.json")?;
+    Ok(Some(map))
+}
+
+fn save_path_tokens(work_dir: &Path, tokens: &HashMap<String, TokenProfile>) -> Result<()> {
+    fs::write(
+        work_dir.join(PATH_TOKENS_FILE),
+        serde_json::to_string(tokens)?,
+    )
+    .context("write path_tokens.json")
+}
+
+fn path_tokens_covers_files(tokens: &HashMap<String, TokenProfile>, file_paths: &[PathBuf]) -> bool {
+    file_paths
+        .iter()
+        .map(|p| normalize_index_path(p))
+        .all(|path_str| tokens.contains_key(&path_str))
+}
+
+/// Build charset token profiles: reuse unchanged entries from the previous generation when present.
+fn resolve_path_tokens(
     file_paths: &[PathBuf],
-    rule: &FileRule,
     extracted_root: &Path,
+    prev_tokens: Option<&HashMap<String, TokenProfile>>,
+    unchanged_paths: &[PathBuf],
 ) -> HashMap<String, TokenProfile> {
+    let unchanged_set: HashSet<String> = unchanged_paths
+        .iter()
+        .map(|p| normalize_index_path(p))
+        .collect();
     let mut out = HashMap::new();
     for path in file_paths {
         let path_str = normalize_index_path(path);
+        if let Some(prev) = prev_tokens {
+            if unchanged_set.contains(&path_str) {
+                if let Some(tokens) = prev.get(&path_str) {
+                    out.insert(path_str, tokens.clone());
+                    continue;
+                }
+            }
+        }
         let mut tokens = TokenProfile::default();
         collect_file_tokens(path, &path_str, extracted_root, &mut tokens);
         out.insert(path_str, tokens);
     }
     out
+}
+
+fn build_path_tokens(file_paths: &[PathBuf], extracted_root: &Path) -> HashMap<String, TokenProfile> {
+    resolve_path_tokens(file_paths, extracted_root, None, &[])
 }
 
 fn collect_file_tokens(
@@ -2404,6 +2473,57 @@ mod tests {
             filtered.len(),
             1,
             "explicit triggered path should remain after charset prefilter"
+        );
+    }
+
+    #[test]
+    fn path_tokens_persisted_in_generation_directory() {
+        let tmp = TempDir::new().unwrap();
+        let book = tmp.path().join("book.txt");
+        fs::write(&book, "Machine Level Representation of Programs\n").unwrap();
+
+        let rule = FileRule {
+            id: "book".into(),
+            path: tmp.path().to_path_buf(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 3,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["txt".into()],
+            index: FileIndexOptions {
+                bloom_megabytes: 1,
+                build_workers: 1,
+                ..Default::default()
+            },
+        };
+
+        let index_root = tmp.path().join("idx");
+        let snapshot = build_rule_index(&index_root, &rule).unwrap();
+
+        let rule_base = index_root.join("book");
+        let gen_entry = fs::read_dir(rule_base.join(GEN_DIR))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .next()
+            .expect("generation dir");
+        let tokens_path = gen_entry.path().join(PATH_TOKENS_FILE);
+        assert!(
+            tokens_path.is_file(),
+            "path_tokens.json should be written under gen/<generation>/"
+        );
+
+        let loaded: HashMap<String, TokenProfile> =
+            serde_json::from_str(&fs::read_to_string(&tokens_path).unwrap()).unwrap();
+        assert!(!loaded.is_empty());
+
+        let snapshot2 = build_rule_index(&index_root, &rule).unwrap();
+        let path = snapshot.indexed_paths.iter().next().unwrap();
+        assert_eq!(
+            snapshot.path_tokens.get(path).unwrap().latin,
+            snapshot2.path_tokens.get(path).unwrap().latin,
+            "unchanged rebuild should reload persisted path_tokens"
         );
     }
 

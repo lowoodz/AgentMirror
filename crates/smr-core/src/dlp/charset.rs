@@ -6,9 +6,11 @@
 
 use std::collections::HashSet;
 
+use serde::{Deserialize, Serialize};
+
 pub type TokenSet = HashSet<String>;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TokenProfile {
     pub cjk: TokenSet,
     pub latin: TokenSet,
