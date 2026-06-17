@@ -101,6 +101,7 @@ function Resolve-AppExe {
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\AgentMirror.exe"),
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\smr-gui.exe"),
         (Join-Path $LocalAppData "Programs\AgentMirror\AgentMirror.exe"),
+        (Join-Path $LocalAppData "AgentMirror\smr-gui.exe"),
         (Join-Path $LocalAppData "AgentMirror\AgentMirror.exe"),
         (Join-Path $LocalAppData "com.securemodelroute.desktop\AgentMirror.exe"),
         (Join-Path $LocalAppData "com.securemodelroute.desktop\smr-gui.exe"),
@@ -133,11 +134,30 @@ function Resolve-SmrBin {
         [string]$LocalAppData,
         [string]$UserHome
     )
-    @(
+    $candidates = @(
         (Join-Path $UserHome ".local\bin\smr.exe"),
+        (Join-Path $LocalAppData "AgentMirror\resources\cli\smr.exe"),
+        (Join-Path $LocalAppData "AgentMirror\cli\smr.exe"),
         (Join-Path $LocalAppData "SafeRoute\cli\smr.exe"),
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\resources\cli\smr.exe")
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { return (Resolve-Path $p).Path }
+    }
+    $searchRoots = @(
+        (Join-Path $LocalAppData "AgentMirror"),
+        (Join-Path $LocalAppData "Programs"),
+        (Join-Path $UserHome ".local\bin"),
+        $LocalAppData
+    )
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path $root)) { continue }
+        $hit = Get-ChildItem -Path $root -Recurse -Filter "smr.exe" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\target\\' } |
+            Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+    return $null
 }
 
 function Test-UserUninstallEntry {
@@ -261,7 +281,7 @@ Log "Add/Remove Programs entry OK"
 
 $SmrBin = Resolve-SmrBin -LocalAppData $userInfo.LocalAppData -UserHome $userInfo.Home
 if (-not $SmrBin) {
-    Log "ERROR: NSIS did not install CLI companion under $($userInfo.Home)\.local\bin or $($userInfo.LocalAppData)\SafeRoute\cli"
+    Log "ERROR: NSIS did not install CLI companion under $($userInfo.Home)\.local\bin or $($userInfo.LocalAppData)\AgentMirror"
     exit 1
 }
 Log "CLI companion: $SmrBin"
