@@ -17,14 +17,20 @@ fi
 
 VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
 OUT="${ROOT}/dist"
+DOC_TOOLS="${ROOT}/resources/doc-tools"
 mkdir -p "${OUT}"
 
 mac_native_arch_label() {
   smr_native_arch
 }
 
+link_doc_tools_current() {
+  local arch_label="$1"
+  ln -sfn "darwin-${arch_label}" "${DOC_TOOLS}/current"
+  echo "==> doc-tools/current -> darwin-${arch_label} (Tauri bundle)"
+}
+
 echo "==> Stage bundled document tools (poppler pdftotext) per macOS arch"
-DOC_TOOLS="${ROOT}/resources/doc-tools"
 stage_macos_tools() {
   local label="$1"
   local dest="${DOC_TOOLS}/darwin-${label}"
@@ -39,8 +45,7 @@ for label in arm64 x86_64; do
   stage_macos_tools "${label}"
 done
 native_arch="$(mac_native_arch_label)"
-ln -sfn "darwin-${native_arch}" "${DOC_TOOLS}/current"
-echo "==> doc-tools/current -> darwin-${native_arch} (Tauri bundle)"
+link_doc_tools_current "${native_arch}"
 
 CLI_ONLY=false
 while [[ $# -gt 0 ]]; do
@@ -89,48 +94,109 @@ pack_one() {
   ls -lh "${OUT}/${pkg}.tar.gz"
 }
 
-# Optional Tauri (native host arch only)
+tauri_bundle_root() {
+  local rust_target="${1:-}"
+  if [[ -n "$rust_target" && -d "${ROOT}/target/${rust_target}/release/bundle/macos" ]]; then
+    echo "${ROOT}/target/${rust_target}/release/bundle"
+    return 0
+  fi
+  if [[ -d "${ROOT}/target/release/bundle/macos" ]]; then
+    echo "${ROOT}/target/release/bundle"
+    return 0
+  fi
+  return 1
+}
+
+publish_tauri_artifacts() {
+  local rust_target="${1:-}"
+  local arch_label="$2"
+  local bundle_root app_bundle app_name app_bin pkg_app stable_dmg dmg
+
+  bundle_root="$(tauri_bundle_root "$rust_target")" || {
+    echo "ERROR: Tauri build did not produce SafeRoute.app for ${arch_label}" >&2
+    exit 1
+  }
+
+  app_name="SafeRoute.app"
+  app_bundle="${bundle_root}/macos/${app_name}"
+  if [[ ! -d "$app_bundle" ]]; then
+    echo "ERROR: missing ${app_bundle}" >&2
+    exit 1
+  fi
+
+  app_bin="${app_bundle}/Contents/MacOS/smr-gui"
+  if ! file "$app_bin" 2>/dev/null | grep -qE 'Mach-O'; then
+    echo "ERROR: ${app_bin} is not a Mach-O binary" >&2
+    exit 1
+  fi
+  if [[ "$arch_label" == "arm64" ]] && ! file "$app_bin" 2>/dev/null | grep -q 'arm64'; then
+    echo "ERROR: expected arm64 app binary, got: $(file "$app_bin")" >&2
+    exit 1
+  fi
+  if [[ "$arch_label" == "x86_64" ]] && ! file "$app_bin" 2>/dev/null | grep -qE 'x86_64|386'; then
+    echo "ERROR: expected x86_64 app binary, got: $(file "$app_bin")" >&2
+    exit 1
+  fi
+
+  pkg_app="smr-${VERSION}-darwin-${arch_label}-app"
+  rm -f "${OUT}/${pkg_app}.tar.gz"
+  tar -czf "${OUT}/${pkg_app}.tar.gz" -C "${bundle_root}/macos" "${app_name}"
+  echo "==> Desktop app: ${OUT}/${pkg_app}.tar.gz (${app_name}, $(file "$app_bin" | sed 's/.*: //'))"
+
+  stable_dmg="${OUT}/SafeRoute_${VERSION}_${arch_label}.dmg"
+  rm -f "$stable_dmg"
+  shopt -s nullglob
+  local dmgs=("${bundle_root}/dmg/"*.dmg)
+  shopt -u nullglob
+  if [[ ${#dmgs[@]} -eq 0 ]]; then
+    echo "ERROR: no DMG under ${bundle_root}/dmg/ for ${arch_label}" >&2
+    exit 1
+  fi
+  dmg="${dmgs[0]}"
+  cp "$dmg" "$stable_dmg"
+  echo "==> Desktop DMG: ${stable_dmg}"
+}
+
+build_tauri_desktop() {
+  local rust_target="${1:-}"
+  local arch_label="$2"
+  local -a tauri_args=(--bundles app,dmg)
+
+  link_doc_tools_current "$arch_label"
+
+  if [[ -n "$rust_target" ]]; then
+    echo "==> Building desktop app (Tauri cross: ${rust_target})"
+    rustup target add "$rust_target" >/dev/null 2>&1 || true
+    tauri_args+=(--target "$rust_target")
+  else
+    echo "==> Building desktop app (Tauri, native ${arch_label})"
+  fi
+
+  if ! (cd "$ROOT/gui" && npm run build -- "${tauri_args[@]}"); then
+    echo "ERROR: Tauri build failed for ${arch_label}" >&2
+    exit 1
+  fi
+
+  publish_tauri_artifacts "$rust_target" "$arch_label"
+}
+
+# Optional Tauri desktop (native + cross on Apple Silicon)
 if [[ "$CLI_ONLY" != true ]] && [[ -f "$ROOT/gui/package.json" ]] && command -v npm >/dev/null 2>&1; then
   echo "==> Sync admin UI assets"
   bash "${ROOT}/scripts/sync-admin-ui.sh"
-  echo "==> Building desktop app (Tauri, host arch)"
-  if ! (cd "$ROOT/gui" && npm ci --silent && npm run build --silent); then
-    echo "ERROR: Tauri build failed" >&2
+  if ! (cd "$ROOT/gui" && npm ci --silent); then
+    echo "ERROR: npm ci failed in gui/" >&2
     exit 1
   fi
-  APP_BUNDLE=""
-  APP_NAME=""
-  for name in SafeRoute.app; do
-    if [[ -d "$ROOT/target/release/bundle/macos/${name}" ]]; then
-      APP_BUNDLE="$ROOT/target/release/bundle/macos/${name}"
-      APP_NAME="$name"
-      break
-    fi
-  done
-  if [[ -z "$APP_BUNDLE" ]]; then
-    echo "ERROR: Tauri build did not produce SafeRoute.app under target/release/bundle/macos/" >&2
-    exit 1
+
+  if [[ "$(smr_native_arch)" == "arm64" ]]; then
+    build_tauri_desktop "" "arm64"
+    build_tauri_desktop "x86_64-apple-darwin" "x86_64"
+  else
+    build_tauri_desktop "" "x86_64"
   fi
-  if [[ -n "$APP_BUNDLE" ]]; then
-    app_bin="$APP_BUNDLE/Contents/MacOS/smr-gui"
-    if file "$app_bin" 2>/dev/null | grep -q 'arm64'; then
-      host_arch="arm64"
-    else
-      host_arch="x86_64"
-    fi
-    PKG_APP="smr-${VERSION}-darwin-${host_arch}-app"
-    rm -f "${OUT}/${PKG_APP}.tar.gz"
-    tar -czf "${OUT}/${PKG_APP}.tar.gz" -C "$(dirname "$APP_BUNDLE")" "$APP_NAME"
-    echo "==> Desktop app: ${OUT}/${PKG_APP}.tar.gz (${APP_NAME})"
-    for dmg in "${ROOT}/target/release/bundle/dmg/"*.dmg; do
-      if [[ -f "$dmg" ]]; then
-        stable="${OUT}/SafeRoute_${VERSION}_${host_arch}.dmg"
-        cp "$dmg" "$stable"
-        echo "==> Desktop DMG: ${stable}"
-        break
-      fi
-    done
-  fi
+
+  link_doc_tools_current "${native_arch}"
 elif [[ "$CLI_ONLY" == true ]]; then
   echo "==> Skipping desktop app (--cli-only)"
 fi
@@ -147,6 +213,9 @@ fi
 
 echo ""
 echo "==> macOS packages ready: darwin-arm64 + darwin-x86_64"
+if [[ "$CLI_ONLY" != true ]] && [[ "$(smr_native_arch)" == "arm64" ]]; then
+  echo "    DMGs: SafeRoute_${VERSION}_arm64.dmg, SafeRoute_${VERSION}_x86_64.dmg"
+fi
 
 # shellcheck source=dist-layout.sh
 source "${ROOT}/scripts/dist-layout.sh"

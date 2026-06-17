@@ -32,6 +32,7 @@ CLI_DARWIN_X86_64=${dist}/smr-${version}-darwin-x86_64.tar.gz
 APP_DARWIN_ARM64=${dist}/smr-${version}-darwin-arm64-app.tar.gz
 APP_DARWIN_X86_64=${dist}/smr-${version}-darwin-x86_64-app.tar.gz
 DMG_ARM64=${dist}/SafeRoute_${version}_arm64.dmg
+DMG_X86_64=${dist}/SafeRoute_${version}_x86_64.dmg
 CLI_WINDOWS_ZIP=${dist}/smr-${version}-windows-x86_64.zip
 APP_WINDOWS_ZIP=${dist}/smr-${version}-windows-x86_64-app.zip
 NSIS_SETUP=${dist}/SafeRoute_${version}_x64-setup.exe
@@ -62,7 +63,9 @@ Ship (upload / hand to users):
   macOS CLI:     smr-${VERSION}-darwin-arm64.tar.gz
                  smr-${VERSION}-darwin-x86_64.tar.gz
   macOS app:     smr-${VERSION}-darwin-arm64-app.tar.gz
+                 smr-${VERSION}-darwin-x86_64-app.tar.gz
   macOS DMG:     SafeRoute_${VERSION}_arm64.dmg
+                 SafeRoute_${VERSION}_x86_64.dmg   (cross-built on Apple Silicon)
   Windows CLI:   smr-${VERSION}-windows-x86_64.zip
   Windows app:   smr-${VERSION}-windows-x86_64-app.zip
   Windows NSIS:  SafeRoute_${VERSION}_x64-setup.exe   (Tauri NSIS only)

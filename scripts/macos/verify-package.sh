@@ -50,6 +50,12 @@ if smr_host_is_apple_silicon; then
       echo "[OK] x86_64 CLI binary ($(ls -lh "${ROOT}/dist/smr-x86_64" | awk '{print $5}')): smr-x86_64"
     fi
   fi
+  if [[ "$REQUIRE_APP" == true ]]; then
+    check_file "${ROOT}/dist/smr-${VERSION}-darwin-x86_64-app.tar.gz" "App tar (x86_64 cross)"
+  fi
+  if [[ "$REQUIRE_DMG" == true ]]; then
+    check_file "${ROOT}/dist/SafeRoute_${VERSION}_x86_64.dmg" "DMG (x86_64 cross)"
+  fi
 fi
 [[ "$REQUIRE_APP" == true ]] && check_file "$APP_TAR" "App tar"
 if [[ "$REQUIRE_DMG" == true ]]; then
