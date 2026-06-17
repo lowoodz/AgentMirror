@@ -45,8 +45,6 @@ const EXTRACTED_DIR: &str = "extracted";
 const LITERALS_FILE: &str = "literals.json";
 /// Haystack length at which ripgrep literal prefilter is enabled.
 const RG_PREFILTER_MIN_BYTES: usize = 8192;
-/// Bytes read per indexed file when building token fingerprints.
-const PATH_TOKEN_SAMPLE_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
 struct FileFingerprint {
@@ -637,7 +635,7 @@ fn build_rule_index(index_root: &Path, rule: &FileRule) -> Result<RuleSnapshot> 
         db_path,
         literals: Arc::new(literals),
         indexed_paths,
-        path_tokens: Arc::new(build_path_tokens(&file_paths, rule)),
+        path_tokens: Arc::new(build_path_tokens(&file_paths, rule, &extracted_root)),
     })
 }
 
@@ -720,7 +718,11 @@ fn load_rule_snapshot(
         db_path: prev_gen.db_path.clone(),
         literals: Arc::new(literals),
         indexed_paths,
-        path_tokens: Arc::new(build_path_tokens(file_paths, rule)),
+        path_tokens: Arc::new(build_path_tokens(
+            file_paths,
+            rule,
+            &rule_base.join(EXTRACTED_DIR),
+        )),
     })
 }
 
@@ -1306,33 +1308,51 @@ fn normalize_index_path(path: &Path) -> String {
     strip_verbatim_path_prefix(&raw)
 }
 
-fn build_path_tokens(file_paths: &[PathBuf], rule: &FileRule) -> HashMap<String, TokenProfile> {
+fn build_path_tokens(
+    file_paths: &[PathBuf],
+    rule: &FileRule,
+    extracted_root: &Path,
+) -> HashMap<String, TokenProfile> {
     let mut out = HashMap::new();
     for path in file_paths {
         let path_str = normalize_index_path(path);
         let mut tokens = TokenProfile::default();
-        collect_file_tokens(path, rule, &mut tokens);
+        collect_file_tokens(path, &path_str, extracted_root, &mut tokens);
         out.insert(path_str, tokens);
     }
     out
 }
 
-fn collect_file_tokens(path: &Path, _rule: &FileRule, out: &mut TokenProfile) {
+fn collect_file_tokens(
+    path: &Path,
+    path_str: &str,
+    extracted_root: &Path,
+    out: &mut TokenProfile,
+) {
+    // Prefer sidecar from indexing (full pdftotext/Office extract, no second extract pass).
+    let sidecar = sidecar_path(extracted_root, path_str);
+    if sidecar.is_file() {
+        if let Ok(text) = fs::read_to_string(&sidecar) {
+            if !text.is_empty() {
+                accumulate_token_profile(&text, text.len(), out);
+                return;
+            }
+        }
+    }
+
     let Ok(meta) = fs::metadata(path) else {
         return;
     };
-    let size = meta.len();
-    if size == 0 {
+    if meta.len() == 0 {
         return;
     }
     if let Some(text) = extract_text_safe(path).filter(|t| !t.is_empty()) {
-        accumulate_token_profile(&text, PATH_TOKEN_SAMPLE_BYTES, out);
+        accumulate_token_profile(&text, text.len(), out);
         return;
     }
-    let read_len = (size as usize).min(PATH_TOKEN_SAMPLE_BYTES);
-    if let Ok(data) = read_file_bytes(path, read_len as u64) {
+    if let Ok(data) = read_file_bytes(path, meta.len()) {
         let text = String::from_utf8_lossy(&data);
-        accumulate_token_profile(&text, PATH_TOKEN_SAMPLE_BYTES, out);
+        accumulate_token_profile(&text, text.len(), out);
     }
 }
 
@@ -2323,6 +2343,68 @@ mod tests {
         let hay = format!("notes {secret_text} tail");
         let out2 = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out2.contains(&secret_text));
+    }
+
+    #[test]
+    fn path_tokens_include_tail_content_beyond_former_256kb_sample() {
+        use crate::dlp::charset::{should_token_prefilter_skip, token_profile};
+
+        let tmp = TempDir::new().unwrap();
+        let book = tmp.path().join("book.txt");
+        let filler = "q".repeat(300 * 1024);
+        let tail = "Machine Level Representation of Programs chapter three point two";
+        fs::write(&book, format!("{filler}\n{tail}")).unwrap();
+
+        let rule = FileRule {
+            id: "book".into(),
+            path: tmp.path().to_path_buf(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 3,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["txt".into()],
+            index: FileIndexOptions {
+                bloom_megabytes: 1,
+                build_workers: 1,
+                scan_charset_skip: true,
+                scan_charset_skip_threshold: 0.5,
+                ..Default::default()
+            },
+        };
+
+        let index_root = tmp.path().join("idx");
+        let snapshot = build_rule_index(&index_root, &rule).unwrap();
+        let path = snapshot.indexed_paths.iter().next().unwrap().clone();
+        let file_tokens = snapshot
+            .path_tokens
+            .get(&path)
+            .expect("path_tokens for indexed file");
+        assert!(
+            file_tokens.latin.contains("machine") && file_tokens.latin.contains("programs"),
+            "full-file token profile should include tail vocabulary"
+        );
+
+        let hay = "Syntax Error\n3.2 Machine-Level Representation of Programs\n3.3 Data Formats";
+        let hay_tokens = token_profile(hay);
+        assert!(
+            !should_token_prefilter_skip(&hay_tokens, file_tokens, 0.5),
+            "page-slice haystack should not be charset-skipped against full-file tokens"
+        );
+
+        let allowed: HashSet<String> = HashSet::from([path.clone()]);
+        let filtered = filter_paths_by_tokens(
+            &allowed,
+            snapshot.path_tokens.as_ref(),
+            &hay_tokens,
+            rule.index.scan_charset_skip_threshold,
+        );
+        assert_eq!(
+            filtered.len(),
+            1,
+            "explicit triggered path should remain after charset prefilter"
+        );
     }
 
     #[test]
