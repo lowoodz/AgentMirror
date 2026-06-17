@@ -4,8 +4,8 @@
     "active": true,
     "targets": ["nsis"],
     "useLocalToolsDir": true,
-    "copyright": "Copyright © SafeRoute contributors",
-    "shortDescription": "Secure AI model routing proxy with DLP",
+    "copyright": "Copyright © AgentMirror contributors",
+    "shortDescription": "Agent reflection and secure LLM routing proxy",
     "resources": {
       "../bundle-extra/smr.exe": "cli/smr.exe",
       "../bundle-extra/smr.example.yaml": "cli/smr.example.yaml",
@@ -23,7 +23,7 @@
         "languages": ["English", "SimpChinese"],
         "displayLanguageSelector": true,
         "installerIcon": "icons/icon.ico",
-        "startMenuFolder": "SafeRoute",
+        "startMenuFolder": "AgentMirror",
         "installerHooks": "nsis/installer-hooks.nsh"
       }
     }

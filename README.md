@@ -57,7 +57,7 @@ chmod +x scripts/install.sh
 securemodelroute               # start and open admin UI
 ```
 
-**Windows:** run `SafeRoute_*_x64-setup.exe` (recommended), or `.\install.ps1 -All`, then `securemodelroute`
+**Windows:** run `AgentMirror_*_x64-setup.exe` (recommended), or `.\install.ps1 -All`, then `securemodelroute`
 
 **Client config (provider mode — recommended, one universal base URL):**
 
@@ -99,9 +99,9 @@ Pre-built packages are on [GitHub Releases](https://github.com/lowoodz/LLM-SafeR
 
 | Platform | Package | Install |
 |----------|---------|---------|
-| **macOS** (Apple Silicon) | `SafeRoute_*_aarch64.dmg` | Open the DMG, drag **SafeRoute.app** to Applications, launch from the menu bar tray |
-| **macOS** (Apple Silicon) | `smr-*-darwin-arm64-app.tar.gz` | Extract `SafeRoute.app` to `/Applications` |
-| **Windows** x86_64 | `SafeRoute_*_x64-setup.exe` | **Recommended:** run the NSIS installer — registers in **Settings → Apps**, installs tray GUI + `smr.exe` CLI, includes uninstaller |
+| **macOS** (Apple Silicon) | `AgentMirror_*_arm64.dmg` | Open the DMG, drag **AgentMirror.app** to Applications, launch from the menu bar tray |
+| **macOS** (Apple Silicon) | `smr-*-darwin-arm64-app.tar.gz` | Extract `AgentMirror.app` to `/Applications` |
+| **Windows** x86_64 | `AgentMirror_*_x64-setup.exe` | **Recommended:** run the NSIS installer — registers in **Settings → Apps**, installs tray GUI + `smr.exe` CLI, includes uninstaller |
 | **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | Portable GUI + optional `*-setup.exe`; or extract and run `install.ps1 -All` |
 | **Windows** x86_64 | `smr-*-windows-x86_64.zip` | CLI only: extract, run `install.ps1`, then `securemodelroute` |
 
@@ -110,7 +110,7 @@ Uninstall on Windows: **Settings → Apps → SafeRoute** (NSIS), or run `.\unin
 Build the NSIS installer on Windows: `.\scripts\package.ps1` (requires Node.js + Rust). From macOS with UTM: `./scripts/vm/package-windows-gui.sh`.
 
 From source on macOS: `./scripts/install.sh --all` (CLI + tray + login autostart).  
-From source on Windows: `.\install.ps1 -All` (zip layout) or use `SafeRoute_*_x64-setup.exe` (NSIS).
+From source on Windows: `.\install.ps1 -All` (zip layout) or use `AgentMirror_*_x64-setup.exe` (NSIS).
 
 Config after install: `~/.local/etc/securemodelroute/smr.yaml` (macOS/Linux/Windows NSIS or `install.ps1`). Add upstream API keys in the admin UI or YAML—never commit secrets.
 

@@ -11,12 +11,12 @@ Set-Location $Root
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 $env:CARGO_TARGET_DIR = Join-Path $Root "target"
 
-Write-Host "==> Building SafeRoute (release, full workspace)"
+Write-Host "==> Building AgentMirror / LLM-SafeRoute (release, full workspace)"
 cargo build --release -p smr-cli
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $Version = (Select-String -Path (Join-Path $Root "Cargo.toml") -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)".*', '$1'
-$StableSetupName = "SafeRoute_${Version}_x64-setup.exe"
+$StableSetupName = "AgentMirror_${Version}_x64-setup.exe"
 $NsisOk = $false
 
 if (-not $CliOnly -and (Test-Path (Join-Path $Root "gui\package.json"))) {
@@ -88,7 +88,7 @@ if (-not $CliOnly) {
 $AppHit = Find-SmrAppExe -ReleaseDir (Join-Path $Root "target\release")
 if ($AppHit) { $AppExe = $AppHit }
 if ($AppExe) {
-    $PortableName = "SafeRoute.exe"
+    $PortableName = "AgentMirror.exe"
     Copy-Item $AppExe.FullName (Join-Path $Out $PortableName) -Force
     $winDesktop = Join-Path $Out "windows-desktop"
     New-Item -ItemType Directory -Force -Path $winDesktop | Out-Null

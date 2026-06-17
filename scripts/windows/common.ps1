@@ -1,6 +1,9 @@
 # Shared helpers for Windows package / install / test scripts.
 $ErrorActionPreference = "Stop"
 
+$script:SmrDesktopAppName = "AgentMirror"
+$script:SmrDesktopAppExe = "AgentMirror.exe"
+
 function Get-SmrRoot {
     param([string]$StartDir = $PSScriptRoot)
     $dir = $StartDir
@@ -39,7 +42,7 @@ function Set-SmrBuildEnv {
 
 function Stop-SmrProcesses {
     param([int]$GraceSec = 2)
-    foreach ($name in @("smr", "SafeRoute", "smr-gui")) {
+    foreach ($name in @("smr", $script:SmrDesktopAppName, "SafeRoute", "smr-gui")) {
         Get-Process $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     if ($GraceSec -gt 0) { Start-Sleep -Seconds $GraceSec }
@@ -47,7 +50,7 @@ function Stop-SmrProcesses {
 
 function Find-SmrAppExe {
     param([string]$ReleaseDir)
-    foreach ($name in @("SafeRoute.exe", "smr-gui.exe")) {
+    foreach ($name in @($script:SmrDesktopAppExe, "SafeRoute.exe", "smr-gui.exe")) {
         $hit = Get-ChildItem $ReleaseDir -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($hit) { return $hit }
     }
@@ -63,10 +66,10 @@ function Get-SmrDistArtifacts {
         Version = $version
         DistDir = $dist
         WinDesktopDir = $winDesktop
-        WinDesktopExe = Join-Path $winDesktop "SafeRoute.exe"
+        WinDesktopExe = Join-Path $winDesktop $script:SmrDesktopAppExe
         CliZip = Join-Path $dist "smr-$version-windows-x86_64.zip"
         AppZip = Join-Path $dist "smr-$version-windows-x86_64-app.zip"
-        SetupExe = Join-Path $dist "SafeRoute_${version}_x64-setup.exe"
+        SetupExe = Join-Path $dist "AgentMirror_${version}_x64-setup.exe"
         Manifest = Join-Path $dist "LATEST-INSTALLERS.txt"
     }
 }

@@ -67,6 +67,9 @@ function Start-SafeRouteWithConfig {
         Write-Host "WARN: smr CLI started but health check failed"
     }
     $guiCandidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\com.securemodelroute.desktop\AgentMirror.exe"),
+        (Join-Path $env:LOCALAPPDATA "Programs\AgentMirror\AgentMirror.exe"),
+        (Join-Path $env:SMR_GUEST_STAGING "smr-desktop-out\AgentMirror.exe"),
         (Join-Path $env:LOCALAPPDATA "SafeRoute\SafeRoute.exe"),
         (Join-Path $env:LOCALAPPDATA "SafeRoute\smr-gui.exe"),
         (Join-Path $env:LOCALAPPDATA "Programs\SafeRoute\SafeRoute.exe"),
@@ -75,7 +78,7 @@ function Start-SafeRouteWithConfig {
     )
     foreach ($exe in $guiCandidates) {
         if (-not ($exe -and (Test-Path $exe))) { continue }
-        Write-Host "==> Starting SafeRoute GUI: $exe"
+        Write-Host "==> Starting AgentMirror GUI: $exe"
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $exe
         $psi.UseShellExecute = $false

@@ -133,12 +133,12 @@ fn navigate_to_ui(window: &tauri::WebviewWindow, listen: &str) {
 fn show_boot_error(window: &tauri::WebviewWindow, listen: &str) {
     let msg = if port_in_use(listen) {
         #[cfg(windows)]
-        let steps = "请退出托盘中的 SafeRoute，或在任务管理器中结束 smr.exe / SafeRoute.exe，然后重新打开。";
+        let steps = "请退出托盘中的 AgentMirror，或在任务管理器中结束 smr.exe / AgentMirror.exe（旧版可能为 SafeRoute.exe），然后重新打开。";
         #[cfg(not(windows))]
         let steps = "请执行：\\n\
              launchctl unload ~/Library/LaunchAgents/com.securemodelroute.smr.plist\\n\
              pkill -f '/smr --config'\\n\
-             然后重新打开 LLM-SafeRoute。";
+             然后重新打开 AgentMirror。";
         format!("端口 {listen} 已被占用，但服务无响应。\\n{steps}")
     } else {
         format!("无法启动 {listen} 上的服务。请在终端运行 smr 查看错误日志。")
@@ -165,15 +165,15 @@ fn show_stale_server_error(
     };
     #[cfg(windows)]
     let steps = format!(
-        "请在任务管理器中结束 smr.exe / SafeRoute.exe，\\n\
-         然后重新打开 LLM-SafeRoute（当前 {local}）。"
+        "请在任务管理器中结束 smr.exe / AgentMirror.exe（旧版可能为 SafeRoute.exe），\\n\
+         然后重新打开 AgentMirror（当前 {local}）。"
     );
     #[cfg(not(windows))]
     let steps = format!(
         "请执行：\\n\
          launchctl unload ~/Library/LaunchAgents/com.securemodelroute.smr.plist\\n\
          pkill -f '/smr --config'\\n\
-         然后重新打开 LLM-SafeRoute（当前 {local}）。"
+         然后重新打开 AgentMirror（当前 {local}）。"
     );
     let ui_note = match remote_ui {
         Some(ui) if !ui.is_empty() => format!("（UI {ui}）"),
@@ -489,7 +489,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .menu(&menu)
-        .tooltip("LLM-SafeRoute — 点击打开主窗口")
+        .tooltip("AgentMirror — 点击打开主窗口")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),

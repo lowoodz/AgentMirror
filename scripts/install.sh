@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=macos/common.sh
+source "${ROOT}/scripts/macos/common.sh"
 
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${ROOT}/target"
@@ -36,7 +38,7 @@ if [[ "$INSTALL_GUI" == true || "$INSTALL_ALL" == true ]]; then
     (cd "$ROOT/gui/src-tauri" && bash create_icon.sh)
     (cd "$ROOT/gui" && npm install --silent && CARGO_TARGET_DIR="${ROOT}/target" npm run build)
   APP_BUNDLE=""
-  for name in SafeRoute.app; do
+  for name in "${SMR_DESKTOP_APP_BUNDLE}" SafeRoute.app; do
     if [[ -d "$ROOT/target/release/bundle/macos/${name}" ]]; then
       APP_BUNDLE="$ROOT/target/release/bundle/macos/${name}"
       break
@@ -45,12 +47,12 @@ if [[ "$INSTALL_GUI" == true || "$INSTALL_ALL" == true ]]; then
   if [[ -n "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
     APP_NAME="$(basename "$APP_BUNDLE")"
     DEST="${HOME}/Applications/${APP_NAME}"
-    rm -rf "$DEST" "${HOME}/Applications/SafeRoute.app" "${HOME}/Applications/SecureModelRoute.app"
+    rm -rf "$DEST" "${HOME}/Applications/${SMR_DESKTOP_APP_BUNDLE}" "${HOME}/Applications/SafeRoute.app" "${HOME}/Applications/SecureModelRoute.app"
     cp -R "$APP_BUNDLE" "$DEST"
     DESKTOP_APP="$DEST"
     echo "    Installed desktop app: ${DEST}"
   else
-    echo "Warning: SafeRoute.app not found after build" >&2
+    echo "Warning: ${SMR_DESKTOP_APP_BUNDLE} not found after build" >&2
   fi
   else
     echo "Warning: npm or gui/ missing; extract *-darwin-*-app.tar.gz manually" >&2
@@ -60,7 +62,7 @@ elif command -v npm >/dev/null && [[ "${SMR_BUILD_GUI:-0}" == "1" ]]; then
   (cd "$ROOT/gui/src-tauri" && bash create_icon.sh)
   (cd "$ROOT/gui" && npm install --silent && CARGO_TARGET_DIR="${ROOT}/target" npm run build)
   APP_BUNDLE=""
-  for name in SafeRoute.app; do
+  for name in "${SMR_DESKTOP_APP_BUNDLE}" SafeRoute.app; do
     if [[ -d "$ROOT/target/release/bundle/macos/${name}" ]]; then
       APP_BUNDLE="$ROOT/target/release/bundle/macos/${name}"
       break
@@ -69,7 +71,7 @@ elif command -v npm >/dev/null && [[ "${SMR_BUILD_GUI:-0}" == "1" ]]; then
   if [[ -n "$APP_BUNDLE" ]] && [[ "$(uname -s)" == "Darwin" ]]; then
     APP_NAME="$(basename "$APP_BUNDLE")"
     DEST="${HOME}/Applications/${APP_NAME}"
-    rm -rf "$DEST" "${HOME}/Applications/SafeRoute.app" "${HOME}/Applications/SecureModelRoute.app"
+    rm -rf "$DEST" "${HOME}/Applications/${SMR_DESKTOP_APP_BUNDLE}" "${HOME}/Applications/SafeRoute.app" "${HOME}/Applications/SecureModelRoute.app"
     cp -R "$APP_BUNDLE" "$DEST"
     echo "    Installed desktop app: ${DEST}"
   fi

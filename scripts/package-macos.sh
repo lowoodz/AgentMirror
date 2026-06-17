@@ -113,11 +113,11 @@ publish_tauri_artifacts() {
   local bundle_root app_bundle app_name app_bin pkg_app stable_dmg dmg
 
   bundle_root="$(tauri_bundle_root "$rust_target")" || {
-    echo "ERROR: Tauri build did not produce SafeRoute.app for ${arch_label}" >&2
+    echo "ERROR: Tauri build did not produce ${SMR_DESKTOP_APP_BUNDLE} for ${arch_label}" >&2
     exit 1
   }
 
-  app_name="SafeRoute.app"
+  app_name="${SMR_DESKTOP_APP_BUNDLE}"
   app_bundle="${bundle_root}/macos/${app_name}"
   if [[ ! -d "$app_bundle" ]]; then
     echo "ERROR: missing ${app_bundle}" >&2
@@ -143,7 +143,7 @@ publish_tauri_artifacts() {
   tar -czf "${OUT}/${pkg_app}.tar.gz" -C "${bundle_root}/macos" "${app_name}"
   echo "==> Desktop app: ${OUT}/${pkg_app}.tar.gz (${app_name}, $(file "$app_bin" | sed 's/.*: //'))"
 
-  stable_dmg="${OUT}/SafeRoute_${VERSION}_${arch_label}.dmg"
+  stable_dmg="${OUT}/AgentMirror_${VERSION}_${arch_label}.dmg"
   rm -f "$stable_dmg"
   shopt -s nullglob
   local dmgs=("${bundle_root}/dmg/"*.dmg)
@@ -214,7 +214,7 @@ fi
 echo ""
 echo "==> macOS packages ready: darwin-arm64 + darwin-x86_64"
 if [[ "$CLI_ONLY" != true ]] && [[ "$(smr_native_arch)" == "arm64" ]]; then
-  echo "    DMGs: SafeRoute_${VERSION}_arm64.dmg, SafeRoute_${VERSION}_x86_64.dmg"
+  echo "    DMGs: AgentMirror_${VERSION}_arm64.dmg, AgentMirror_${VERSION}_x86_64.dmg"
 fi
 
 # shellcheck source=dist-layout.sh

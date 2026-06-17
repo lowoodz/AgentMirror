@@ -403,7 +403,10 @@ $Release = Join-Path $BuildRoot "target\$TargetTriple\release"
 if (-not (Test-Path $Release)) {
     $Release = Join-Path $BuildRoot "target\release"
 }
-$BuiltExe = Get-ChildItem $Release -Filter "SafeRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+$BuiltExe = Get-ChildItem $Release -Filter "AgentMirror.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $BuiltExe) {
+    $BuiltExe = Get-ChildItem $Release -Filter "SafeRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 if (-not $BuiltExe) {
     $BuiltExe = Get-ChildItem $Release -Filter "smr-gui.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 }
@@ -413,7 +416,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $AppExe = $BuiltExe
 if (-not $AppExe) {
-    foreach ($name in @("SafeRoute.exe", "smr-gui.exe")) {
+    foreach ($name in @("AgentMirror.exe", "SafeRoute.exe", "smr-gui.exe")) {
         $AppExe = Get-ChildItem $Release -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($AppExe) { break }
     }
@@ -435,7 +438,7 @@ if ($null -ne $expected -and $machine -ne $expected) {
 }
 Log "PE machine: 0x$($machine.ToString('X4'))"
 
-Copy-Item $AppExe.FullName (Join-Path $OutDir "SafeRoute.exe") -Force
+Copy-Item $AppExe.FullName (Join-Path $OutDir "AgentMirror.exe") -Force
 Log "App exe: $($AppExe.FullName)"
 
 $Setup = Get-ChildItem (Join-Path $Release "bundle\nsis") -Filter "*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -445,7 +448,7 @@ if (-not $Setup) {
 }
 Copy-Item $Setup.FullName (Join-Path $OutDir $Setup.Name) -Force
 $Version = (Select-String -Path (Join-Path $BuildRoot "Cargo.toml") -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)".*', '$1'
-$StableSetup = Join-Path $OutDir "SafeRoute_${Version}_x64-setup.exe"
+$StableSetup = Join-Path $OutDir "AgentMirror_${Version}_x64-setup.exe"
 Copy-Item $Setup.FullName $StableSetup -Force
 Log "NSIS setup: $($Setup.Name) (+ $StableSetup)"
 

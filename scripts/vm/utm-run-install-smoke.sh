@@ -7,9 +7,9 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "${ROOT}/scripts/vm/vm-ssh.sh"
 
 ZIP="$(ls -t "${ROOT}"/dist/smr-*-windows-x86_64.zip 2>/dev/null | head -1)"
-GUI="${ROOT}/dist/windows-desktop/SafeRoute.exe"
+GUI="${ROOT}/dist/windows-desktop/AgentMirror.exe"
 [[ -n "$ZIP" ]] || { echo "Missing dist/smr-*-windows-x86_64.zip" >&2; exit 1; }
-[[ -s "$GUI" ]] || { echo "Missing dist/windows-desktop/SafeRoute.exe" >&2; exit 1; }
+[[ -s "$GUI" ]] || { echo "Missing dist/windows-desktop/AgentMirror.exe" >&2; exit 1; }
 
 vm_ssh_require
 PS1_GUEST="${GUEST_STAGING}/windows-install-smoke.ps1"
@@ -18,7 +18,7 @@ STAGE_GUEST="${GUEST_STAGING}/smr-app-test-stage"
 
 vm_ssh_mkdir "$STAGE_GUEST"
 vm_scp_to "$ZIP" "${GUEST_STAGING}/smr.zip"
-vm_scp_to "$GUI" "${STAGE_GUEST}/SafeRoute.exe"
+vm_scp_to "$GUI" "${STAGE_GUEST}/AgentMirror.exe"
 vm_scp_to "${ROOT}/scripts/vm/windows-install-smoke.ps1" "$PS1_GUEST"
 
 LOG_LOCAL="${ROOT}/dist/windows-install-smoke.log"

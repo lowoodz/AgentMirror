@@ -54,6 +54,7 @@ jobs:
         with:
           name: windows-nsis-${{ github.sha }}
           path: |
+            dist/AgentMirror_*_x64-setup.exe
             dist/SafeRoute_*_x64-setup.exe
             dist/smr-*-windows-x86_64.zip
             dist/smr-*-windows-x86_64-app.zip

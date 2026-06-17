@@ -1,5 +1,5 @@
 # Install staged dist payload for the interactive Windows user (UTM guest).
-# Stage dir must contain: smr.exe, SafeRoute.exe, smr.example.yaml
+# Stage dir must contain: smr.exe, AgentMirror.exe (or legacy SafeRoute.exe), smr.example.yaml
 param(
     [string]$StageDir = "",
     [string]$LogPath = ""
@@ -18,7 +18,7 @@ function Log($msg) {
 }
 
 try {
-    Log "==> SafeRoute dist install"
+    Log "==> AgentMirror dist install"
     Log "Stage: $StageDir"
 
     if (-not (Test-Path (Join-Path $StageDir "smr.exe"))) {
@@ -27,9 +27,12 @@ try {
     if (-not (Test-Path (Join-Path $StageDir "smr.example.yaml"))) {
         throw "Missing staged file: smr.example.yaml"
     }
-    $StagedGui = Join-Path $StageDir "SafeRoute.exe"
+    $StagedGui = Join-Path $StageDir "AgentMirror.exe"
     if (-not (Test-Path $StagedGui)) {
-        throw "Missing staged GUI: SafeRoute.exe"
+        $StagedGui = Join-Path $StageDir "SafeRoute.exe"
+    }
+    if (-not (Test-Path $StagedGui)) {
+        throw "Missing staged GUI: AgentMirror.exe"
     }
 
     $UserDir = Get-ChildItem "C:\Users" -Directory |
@@ -46,9 +49,9 @@ try {
 
     $BinDir = Join-Path $UserHome ".local\bin"
     $ConfDir = Join-Path $UserHome ".local\etc\securemodelroute"
-    $GuiDir = Join-Path $UserHome "AppData\Local\Programs\SafeRoute"
+    $GuiDir = Join-Path $UserHome "AppData\Local\Programs\AgentMirror"
     $Config = Join-Path $ConfDir "smr.yaml"
-    $GuiExe = Join-Path $GuiDir "SafeRoute.exe"
+    $GuiExe = Join-Path $GuiDir "AgentMirror.exe"
 
     New-Item -ItemType Directory -Force -Path $BinDir, $ConfDir, $GuiDir | Out-Null
     Copy-Item (Join-Path $StageDir "smr.exe") (Join-Path $BinDir "smr.exe") -Force

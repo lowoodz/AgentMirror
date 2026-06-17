@@ -57,7 +57,7 @@ chmod +x scripts/install.sh
 securemodelroute               # 启动并打开管理界面
 ```
 
-**Windows：** 运行 `SafeRoute_*_x64-setup.exe`（推荐），或 `.\install.ps1 -All`，然后 `securemodelroute`
+**Windows：** 运行 `AgentMirror_*_x64-setup.exe`（推荐），或 `.\install.ps1 -All`，然后 `securemodelroute`
 
 **客户端（Provider 模式 — 推荐，统一 base URL）：**
 
@@ -98,9 +98,9 @@ LLM-SafeRoute 会根据请求头与 JSON 自动识别客户端协议，并在所
 
 | 平台 | 安装包 | 安装方式 |
 |------|--------|----------|
-| **macOS**（Apple Silicon） | `SafeRoute_*_aarch64.dmg` | 打开 DMG，将 **SafeRoute.app** 拖入「应用程序」，从菜单栏托盘启动 |
-| **macOS**（Apple Silicon） | `smr-*-darwin-arm64-app.tar.gz` | 解压后将 `SafeRoute.app` 放入 `/Applications` |
-| **Windows** x86_64 | `SafeRoute_*_x64-setup.exe` | **推荐：** 运行 NSIS 安装程序 — 写入「设置 → 应用」，安装托盘 GUI + `smr.exe` CLI，含卸载程序 |
+| **macOS**（Apple Silicon） | `AgentMirror_*_arm64.dmg` | 打开 DMG，将 **AgentMirror.app** 拖入「应用程序」，从菜单栏托盘启动 |
+| **macOS**（Apple Silicon） | `smr-*-darwin-arm64-app.tar.gz` | 解压后将 `AgentMirror.app` 放入 `/Applications` |
+| **Windows** x86_64 | `AgentMirror_*_x64-setup.exe` | **推荐：** 运行 NSIS 安装程序 — 写入「设置 → 应用」，安装托盘 GUI + `smr.exe` CLI，含卸载程序 |
 | **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | 便携 GUI + 可选 `*-setup.exe`；或解压后运行 `install.ps1 -All` |
 | **Windows** x86_64 | `smr-*-windows-x86_64.zip` | 仅 CLI：解压后运行 `install.ps1`，再执行 `securemodelroute` |
 
@@ -108,7 +108,7 @@ Windows 卸载：**设置 → 应用 → SafeRoute**（NSIS），或运行 `.\un
 
 在 Windows 上构建 NSIS 安装包：`.\scripts\package.ps1`（需 Node.js + Rust）。macOS + UTM：`./scripts/vm/package-windows-gui.sh`。
 
-源码安装：macOS 执行 `./scripts/install.sh --all`；Windows 使用 `SafeRoute_*_x64-setup.exe`（NSIS）或 zip 内 `.\install.ps1 -All`。
+源码安装：macOS 执行 `./scripts/install.sh --all`；Windows 使用 `AgentMirror_*_x64-setup.exe`（NSIS）或 zip 内 `.\install.ps1 -All`。
 
 安装后配置文件：`~/.local/etc/securemodelroute/smr.yaml`（macOS/Linux/Windows NSIS 或 `install.ps1`）。在管理界面或 YAML 中填写上游 API Key，切勿提交到 Git。
 

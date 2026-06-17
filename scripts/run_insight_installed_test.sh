@@ -41,11 +41,12 @@ rm -rf "$stage"
 
 app_stage="$(mktemp -d)"
 tar -xzf "$APP_TAR" -C "$app_stage"
-app_bundle="${app_stage}/SafeRoute.app"
-[[ -d "$app_bundle" ]] || { echo "missing SafeRoute.app in $APP_TAR" >&2; exit 1; }
+app_bundle="${app_stage}/AgentMirror.app"
+[[ -d "$app_bundle" ]] || app_bundle="${app_stage}/SafeRoute.app"
+[[ -d "$app_bundle" ]] || { echo "missing AgentMirror.app in $APP_TAR" >&2; exit 1; }
 install -d "${PREFIX}/Applications"
-cp -R "$app_bundle" "${PREFIX}/Applications/SafeRoute.app"
-gui_bin="${PREFIX}/Applications/SafeRoute.app/Contents/MacOS/smr-gui"
+cp -R "$app_bundle" "${PREFIX}/Applications/$(basename "$app_bundle")"
+gui_bin="${PREFIX}/Applications/$(basename "$app_bundle")/Contents/MacOS/smr-gui"
 rm -rf "$app_stage"
 
 # Mock upstream + insight-enabled config (no live API keys required)

@@ -91,10 +91,10 @@ function Log($msg) {
 
 function Stop-ListeningServer {
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
-        foreach ($name in @("smr", "smr-gui", "SafeRoute")) {
+        foreach ($name in @("smr", "smr-gui", "AgentMirror", "SafeRoute")) {
             Get-Process $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         }
-        cmd.exe /c "taskkill /F /IM smr.exe /T 2>nul & taskkill /F /IM SafeRoute.exe /T 2>nul" | Out-Null
+        cmd.exe /c "taskkill /F /IM smr.exe /T 2>nul & taskkill /F /IM AgentMirror.exe /T 2>nul & taskkill /F /IM SafeRoute.exe /T 2>nul" | Out-Null
         Start-Sleep -Seconds 2
         $alive = $false
         try {
@@ -124,7 +124,10 @@ Set-Content -Path (Join-Path $SecretsDir "project.txt") -Value "probe-secret-dat
 $hasCli = $false
 $hasGui = $false
 $guiName = $null
-$guiName = "SafeRoute.exe"
+$guiName = "AgentMirror.exe"
+if (-not (Test-Path (Join-Path $StageDir $guiName))) {
+    $guiName = "SafeRoute.exe"
+}
 if (Test-Path (Join-Path $StageDir "smr.exe")) { $hasCli = $true }
 if (Test-Path (Join-Path $StageDir $guiName)) { $hasGui = $true }
 if (-not $hasCli) {
@@ -132,12 +135,12 @@ if (-not $hasCli) {
     exit 1
 }
 if (-not $hasGui) {
-    Log "ERROR: missing staged SafeRoute.exe under $StageDir"
+    Log "ERROR: missing staged AgentMirror.exe (or legacy SafeRoute.exe) under $StageDir"
     exit 1
 }
 
 $BinDir = Join-Path $Prefix "bin"
-$GuiDir = Join-Path $Prefix "Programs\SafeRoute"
+$GuiDir = Join-Path $Prefix "Programs\AgentMirror"
 New-Item -ItemType Directory -Force -Path $BinDir, $GuiDir | Out-Null
 
 function Copy-VerifiedFile {
@@ -166,11 +169,11 @@ function Copy-VerifiedFile {
 }
 
 Copy-VerifiedFile (Join-Path $StageDir "smr.exe") (Join-Path $BinDir "smr.exe")
-Copy-VerifiedFile (Join-Path $StageDir $guiName) (Join-Path $GuiDir "SafeRoute.exe")
+Copy-VerifiedFile (Join-Path $StageDir $guiName) (Join-Path $GuiDir "AgentMirror.exe")
 Log "Installed CLI -> $BinDir"
 Log "Installed GUI  -> $GuiDir"
 
-$AppExe = Join-Path $GuiDir "SafeRoute.exe"
+$AppExe = Join-Path $GuiDir "AgentMirror.exe"
 if (-not (Test-Path $AppExe)) {
     Log "ERROR: desktop app missing at $AppExe"
     exit 1
@@ -228,7 +231,7 @@ $stagedGuiPath = Join-Path $StageDir $guiName
 $stagedGuiLen = (Get-Item $stagedGuiPath).Length
 $installedGuiLen = (Get-Item $AppExe).Length
 if ($stagedGuiLen -ne $installedGuiLen) {
-    Log "ERROR: installed SafeRoute.exe size ($installedGuiLen) != staged ($stagedGuiLen)"
+    Log "ERROR: installed AgentMirror.exe size ($installedGuiLen) != staged ($stagedGuiLen)"
     exit 1
 }
 try {
@@ -243,7 +246,7 @@ try {
 
 try {
     $ui = Invoke-WebRequest -Uri "$Base/ui" -TimeoutSec 15 -UseBasicParsing
-    if ($ui.Content -notmatch "SafeRoute") {
+    if ($ui.Content -notmatch "AgentMirror") {
         Log "ERROR: admin UI missing marker"
         exit 1
     }

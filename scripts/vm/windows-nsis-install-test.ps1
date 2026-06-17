@@ -98,6 +98,9 @@ function Resolve-AppExe {
         [string]$UserHome
     )
     @(
+        (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\AgentMirror.exe"),
+        (Join-Path $LocalAppData "Programs\AgentMirror\AgentMirror.exe"),
+        (Join-Path $LocalAppData "AgentMirror\AgentMirror.exe"),
         (Join-Path $LocalAppData "SafeRoute\smr-gui.exe"),
         (Join-Path $LocalAppData "SafeRoute\SafeRoute.exe"),
         (Join-Path $LocalAppData "Programs\com.securemodelroute.desktop\SafeRoute.exe"),

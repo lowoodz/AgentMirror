@@ -43,7 +43,7 @@ run_step() {
 mac_installed_app_test() {
   local version arch app_tar cli_tar
   version="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-  if file "${ROOT}/target/release/bundle/macos/SafeRoute.app/Contents/MacOS/smr-gui" 2>/dev/null | grep -q arm64; then
+  if file "${ROOT}/target/release/bundle/macos/AgentMirror.app/Contents/MacOS/smr-gui" 2>/dev/null | grep -q arm64; then
     arch="arm64"
   elif [[ -f "${ROOT}/dist/smr-${version}-darwin-arm64-app.tar.gz" ]]; then
     arch="arm64"
@@ -74,7 +74,7 @@ mac_installed_app_test() {
 
   tar -xzf "$app_tar" -C "$test_root"
   app_bundle=""
-  for name in SafeRoute.app; do
+  for name in AgentMirror.app SafeRoute.app; do
     if [[ -d "${test_root}/${name}" ]]; then
       app_bundle="${test_root}/${name}"
       break
@@ -163,7 +163,7 @@ fi
 source "${ROOT}/scripts/vm/vm-ssh.sh"
 vm_ssh_init
 if [[ "${SMR_SKIP_VM_TESTS:-0}" != "1" ]] && ssh "${VM_SSH_OPTS[@]}" "$VM_SSH" "echo ok" >/dev/null 2>&1; then
-  if [[ -s "${ROOT}/dist/windows-desktop/SafeRoute.exe" ]]; then
+  if [[ -s "${ROOT}/dist/windows-desktop/AgentMirror.exe" ]]; then
     (
       set +e
       bash "${ROOT}/scripts/vm/utm-run-app-blackbox.sh" 2>&1 | tee "${LOG_DIR}/${STAMP}-windows-utm-installed-app.log"
@@ -171,7 +171,7 @@ if [[ "${SMR_SKIP_VM_TESTS:-0}" != "1" ]] && ssh "${VM_SSH_OPTS[@]}" "$VM_SSH" "
     ) &
     win_pid=$!
   else
-    echo ">>> SKIP Windows app test: missing dist/windows-desktop/SafeRoute.exe" | tee -a "$SUMMARY"
+    echo ">>> SKIP Windows app test: missing dist/windows-desktop/AgentMirror.exe" | tee -a "$SUMMARY"
   fi
 else
   echo ">>> SKIP Windows UTM app test (SSH ${VM_SSH:-$SMR_WINDOWS_USER@$SMR_WINDOWS_HOST} unavailable)" | tee -a "$SUMMARY"

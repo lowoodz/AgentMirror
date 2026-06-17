@@ -32,7 +32,7 @@ stop_guest_smr
 echo ""
 echo "========== Phase 1b: NSIS install/uninstall smoke =========="
 NSIS_OK=1
-if compgen -G "${ROOT}/dist/SafeRoute_*_x64-setup.exe" > /dev/null || compgen -G "${ROOT}/dist/windows-desktop/*-setup.exe" > /dev/null; then
+if compgen -G "${ROOT}/dist/AgentMirror_*_x64-setup.exe" > /dev/null || compgen -G "${ROOT}/dist/SafeRoute_*_x64-setup.exe" > /dev/null || compgen -G "${ROOT}/dist/windows-desktop/*-setup.exe" > /dev/null; then
   NSIS_OK=0
   if bash "${ROOT}/scripts/vm/utm-run-nsis-install-test.sh"; then
     NSIS_OK=1

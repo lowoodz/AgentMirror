@@ -87,7 +87,7 @@ function Invoke-InstallSmoke {
         if ($CliOnlyInstall) {
             $smokeArgs += "-CliOnly"
         } else {
-            $appExe = Join-Path $art.DistDir "SafeRoute.exe"
+            $appExe = Join-Path $art.DistDir "AgentMirror.exe"
             if (-not (Test-Path $appExe)) {
                 $found = Find-SmrAppExe -ReleaseDir (Join-Path $Root "target\release")
                 if ($found) { Copy-Item $found.FullName $appExe -Force }

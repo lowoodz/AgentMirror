@@ -55,8 +55,9 @@ fi
 
 if [[ "$SKIP_INSTALL" == false ]]; then
   echo "==> Windows NSIS install (dist setup.exe)"
-  SETUP="$(ls -t "${ROOT}"/dist/SafeRoute_*_x64-setup.exe 2>/dev/null | head -1)"
-  [[ -n "$SETUP" ]] || { echo "Missing dist/SafeRoute_*_x64-setup.exe" >&2; exit 1; }
+  SETUP="$(ls -t "${ROOT}"/dist/AgentMirror_*_x64-setup.exe 2>/dev/null | head -1)"
+  [[ -n "$SETUP" ]] || SETUP="$(ls -t "${ROOT}"/dist/SafeRoute_*_x64-setup.exe 2>/dev/null | head -1)"
+  [[ -n "$SETUP" ]] || { echo "Missing dist/AgentMirror_*_x64-setup.exe" >&2; exit 1; }
   vm_scp_to "$SETUP" "${GUEST_STAGING}/SafeRoute-setup.exe"
   vm_ssh "cmd.exe /c \"${GUEST_STAGING}/SafeRoute-setup.exe /S\" 2>nul || ${GUEST_STAGING}/SafeRoute-setup.exe /S"
   sleep 8

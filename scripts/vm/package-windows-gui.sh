@@ -143,11 +143,12 @@ wait "${VM_SSH_BG_PID:-0}" 2>/dev/null || true
 vm_scp_from "$LOG_GUEST" "${DIST}/windows-desktop-build.log" 2>/dev/null || true
 
 mkdir -p "${DIST}/windows-desktop"
-STABLE_SETUP="SafeRoute_${VERSION}_x64-setup.exe"
+STABLE_SETUP="AgentMirror_${VERSION}_x64-setup.exe"
 for _pull in 1 2 3 4 5 6; do
-  vm_scp_from "${OUT_GUEST}/SafeRoute.exe" "${DIST}/windows-desktop/SafeRoute.exe" 2>/dev/null || \
-    vm_scp_from "${OUT_GUEST}/smr-gui.exe" "${DIST}/windows-desktop/SafeRoute.exe" 2>/dev/null || true
-  [[ -s "${DIST}/windows-desktop/SafeRoute.exe" ]] && break
+  vm_scp_from "${OUT_GUEST}/AgentMirror.exe" "${DIST}/windows-desktop/AgentMirror.exe" 2>/dev/null || \
+    vm_scp_from "${OUT_GUEST}/SafeRoute.exe" "${DIST}/windows-desktop/AgentMirror.exe" 2>/dev/null || \
+    vm_scp_from "${OUT_GUEST}/smr-gui.exe" "${DIST}/windows-desktop/AgentMirror.exe" 2>/dev/null || true
+  [[ -s "${DIST}/windows-desktop/AgentMirror.exe" ]] && break
   sleep 10
 done
 
@@ -163,8 +164,8 @@ for _pull in 1 2 3 4 5 6; do
   sleep 10
 done
 
-if [[ ! -s "${DIST}/windows-desktop/SafeRoute.exe" ]]; then
-  echo "Desktop build did not produce SafeRoute.exe" >&2
+if [[ ! -s "${DIST}/windows-desktop/AgentMirror.exe" ]]; then
+  echo "Desktop build did not produce AgentMirror.exe" >&2
   tail -30 "${DIST}/windows-desktop-build.log" >&2 || true
   exit 1
 fi
@@ -178,14 +179,14 @@ fi
 rm -f "$APP_ZIP"
 (
   cd "${DIST}/windows-desktop"
-  zip -q "$APP_ZIP" SafeRoute.exe
+  zip -q "$APP_ZIP" AgentMirror.exe
   [[ -n "$SETUP" && -f "$SETUP" ]] && zip -q "$APP_ZIP" "$SETUP"
   cp "${DIST}/${STABLE_SETUP}" "${DIST}/windows-desktop/${STABLE_SETUP}"
   zip -q "$APP_ZIP" "${STABLE_SETUP}"
 )
 
 echo "==> Desktop app package: $APP_ZIP"
-ls -lh "$APP_ZIP" "${DIST}/windows-desktop/SafeRoute.exe" "${DIST}/${STABLE_SETUP}" 2>/dev/null || ls -lh "$APP_ZIP" "${DIST}/windows-desktop/SafeRoute.exe"
+ls -lh "$APP_ZIP" "${DIST}/windows-desktop/AgentMirror.exe" "${DIST}/${STABLE_SETUP}" 2>/dev/null || ls -lh "$APP_ZIP" "${DIST}/windows-desktop/AgentMirror.exe"
 
 if [[ "$APP_SUFFIX" == "x86_64" ]]; then
   echo "    (x86_64 release desktop — matches smr-*-windows-x86_64.zip CLI)"

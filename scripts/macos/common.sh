@@ -2,6 +2,10 @@
 # Shared helpers for macOS release scripts.
 set -euo pipefail
 
+# Tauri productName — installed .app bundle name (must match gui/src-tauri/tauri.conf.json).
+SMR_DESKTOP_APP_NAME="${SMR_DESKTOP_APP_NAME:-AgentMirror}"
+SMR_DESKTOP_APP_BUNDLE="${SMR_DESKTOP_APP_NAME}.app"
+
 smr_root() {
   local dir
   dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,6 +29,7 @@ smr_set_build_env() {
 smr_stop_processes() {
   pkill -f 'target/release/smr' 2>/dev/null || true
   pkill -f 'smr-gui' 2>/dev/null || true
+  pkill -f "${SMR_DESKTOP_APP_BUNDLE}" 2>/dev/null || true
   pkill -f 'SafeRoute.app' 2>/dev/null || true
   pkill -f 'SecureModelRoute.app' 2>/dev/null || true
   lsof -ti :8080 | xargs kill -9 2>/dev/null || true
@@ -64,9 +69,12 @@ smr_dist_paths() {
       fi
     done
   fi
-  dmg="${dist}/SafeRoute_${version}_${arch}.dmg"
+  dmg="${dist}/AgentMirror_${version}_${arch}.dmg"
   if [[ ! -f "$dmg" ]]; then
     for candidate in \
+      "${dist}/AgentMirror_${version}_aarch64.dmg" \
+      "${dist}/AgentMirror_${version}_arm64.dmg" \
+      "${dist}/AgentMirror_${version}_x86_64.dmg" \
       "${dist}/SafeRoute_${version}_aarch64.dmg" \
       "${dist}/SafeRoute_${version}_arm64.dmg" \
       "${dist}/SafeRoute_${version}_x86_64.dmg"; do
@@ -90,6 +98,7 @@ smr_dist_paths() {
   echo "APP_ARCH=${app_arch}"
   echo "CLI_TAR=${dist}/smr-${version}-darwin-${arch}.tar.gz"
   echo "APP_TAR=${dist}/smr-${version}-darwin-${app_arch}-app.tar.gz"
+  echo "APP_BUNDLE=${SMR_DESKTOP_APP_BUNDLE}"
   echo "DMG=${dmg}"
 }
 

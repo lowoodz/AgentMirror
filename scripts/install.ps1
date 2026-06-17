@@ -1,4 +1,4 @@
-# Install SafeRoute on Windows x86_64.
+# Install AgentMirror (LLM-SafeRoute desktop) on Windows x86_64.
 param(
     [switch]$Service,
     [switch]$Gui,
@@ -58,8 +58,8 @@ if (-not (Test-Path $Config)) {
 function Install-SmrDesktop {
     param([string]$SearchRoot)
 
-    $DestDir = Join-Path $env:LOCALAPPDATA "Programs\SafeRoute"
-    $AppPath = Join-Path $DestDir "SafeRoute.exe"
+    $DestDir = Join-Path $env:LOCALAPPDATA "Programs\AgentMirror"
+    $AppPath = Join-Path $DestDir "AgentMirror.exe"
     $Installed = $false
 
     # Prefer NSIS installer (registers Add/Remove Programs + uninstaller).
@@ -72,7 +72,9 @@ function Install-SmrDesktop {
         Start-Process -FilePath $Setup.FullName -ArgumentList "/S" -Wait
         foreach ($candidate in @(
             $AppPath,
-            (Join-Path $env:LOCALAPPDATA "Programs\com.securemodelroute.desktop\SafeRoute.exe")
+            (Join-Path $env:LOCALAPPDATA "Programs\com.securemodelroute.desktop\AgentMirror.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\com.securemodelroute.desktop\SafeRoute.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\SafeRoute\SafeRoute.exe")
         )) {
             if (Test-Path $candidate) {
                 $AppPath = $candidate
@@ -87,7 +89,10 @@ function Install-SmrDesktop {
 
     # Portable GUI exe beside install.ps1 (zip layout fallback).
     if (-not $Installed) {
-        $Bundled = Get-ChildItem $SearchRoot -Filter "SafeRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        $Bundled = Get-ChildItem $SearchRoot -Filter "AgentMirror.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $Bundled) {
+            $Bundled = Get-ChildItem $SearchRoot -Filter "SafeRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
         if ($Bundled) {
             New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
             Copy-Item $Bundled.FullName $AppPath -Force
@@ -106,13 +111,16 @@ function Install-SmrDesktop {
             npm ci --silent 2>$null; if ($LASTEXITCODE -ne 0) { npm install --silent }
             npm run build --silent
             Pop-Location
-            $Built = Get-ChildItem (Join-Path $RepoRoot "target\release") -Filter "SafeRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            $Built = Get-ChildItem (Join-Path $RepoRoot "target\release") -Filter "AgentMirror.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $Built) {
+                $Built = Get-ChildItem (Join-Path $RepoRoot "target\release") -Filter "SafeRoute.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
             if ($Built) {
                 New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
                 Copy-Item $Built.FullName $AppPath -Force
                 $Installed = $true
             } else {
-                Write-Warning "Tauri build finished but SafeRoute.exe not found under target\release"
+                Write-Warning "Tauri build finished but AgentMirror.exe not found under target\release"
             }
         } else {
             Write-Warning "npm or gui/ missing; extract smr-*-windows-x86_64-app.zip or run package.ps1 first"
@@ -120,7 +128,7 @@ function Install-SmrDesktop {
     }
 
     if ($Installed -and (Test-Path $AppPath)) {
-        $GuiLauncher = Join-Path $BinDir "SafeRoute.cmd"
+        $GuiLauncher = Join-Path $BinDir "AgentMirror.cmd"
         @(
             "@echo off",
             "set SMR_CONFIG=$Config",
@@ -130,15 +138,15 @@ function Install-SmrDesktop {
         try {
             $Wsh = New-Object -ComObject WScript.Shell
             foreach ($shortcut in @(
-                @{ Dir = [Environment]::GetFolderPath("Programs"); Label = "Start menu"; Name = "SafeRoute.lnk" },
-                @{ Dir = [Environment]::GetFolderPath("Desktop"); Label = "Desktop"; Name = "SafeRoute.lnk" }
+                @{ Dir = [Environment]::GetFolderPath("Programs"); Label = "Start menu"; Name = "AgentMirror.lnk" },
+                @{ Dir = [Environment]::GetFolderPath("Desktop"); Label = "Desktop"; Name = "AgentMirror.lnk" }
             )) {
                 if ([string]::IsNullOrWhiteSpace($shortcut.Dir) -or -not (Test-Path $shortcut.Dir)) { continue }
                 $LinkPath = Join-Path $shortcut.Dir $shortcut.Name
                 $Link = $Wsh.CreateShortcut($LinkPath)
                 $Link.TargetPath = $GuiLauncher
                 $Link.WorkingDirectory = $BinDir
-                $Link.Description = "SafeRoute desktop"
+                $Link.Description = "AgentMirror desktop"
                 $Link.Save()
                 Write-InstallLog "    $($shortcut.Label): $LinkPath"
             }
@@ -154,14 +162,14 @@ function Install-SmrDesktop {
 }
 
 function Stop-SmrListenerProcesses {
-    Write-InstallLog "==> Stopping stale smr / SafeRoute listeners on 8080"
-    foreach ($name in @("smr", "SafeRoute")) {
+    Write-InstallLog "==> Stopping stale smr / AgentMirror listeners on 8080"
+    foreach ($name in @("smr", "AgentMirror", "SafeRoute")) {
         Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
             Write-InstallLog "    Stopping $($_.ProcessName) pid=$($_.Id)"
             Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
         }
     }
-    foreach ($task in @("SafeRoute", "LLM-SafeRoute")) {
+    foreach ($task in @("AgentMirror", "SafeRoute", "LLM-SafeRoute")) {
         Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
     }
 }
@@ -179,7 +187,7 @@ if ($Gui -or $All) {
 
 # Headless service only when GUI is not installed (GUI keeps running in the system tray).
 if ($Service -and -not $Gui) {
-    $TaskName = "SafeRoute"
+    $TaskName = "AgentMirror"
     $ServiceCmd = Join-Path $BinDir "smr-service.cmd"
     @(
         "@echo off",
@@ -207,13 +215,13 @@ if ($Service -and -not $Gui) {
 
 if ($DesktopAppPath -and $All) {
     $StartupFolder = [Environment]::GetFolderPath("Startup")
-    $StartupLink = Join-Path $StartupFolder "SafeRoute.lnk"
+    $StartupLink = Join-Path $StartupFolder "AgentMirror.lnk"
     $GuiLauncher = Join-Path $BinDir "SafeRoute.cmd"
     $Wsh = New-Object -ComObject WScript.Shell
     $Link = $Wsh.CreateShortcut($StartupLink)
     $Link.TargetPath = $GuiLauncher
     $Link.WorkingDirectory = $BinDir
-    $Link.Description = "SafeRoute (background tray)"
+    $Link.Description = "AgentMirror (background tray)"
     $Link.Save()
     Write-InstallLog "    Logon startup: $StartupLink (--background, tray only)"
     if (-not $Quiet) {

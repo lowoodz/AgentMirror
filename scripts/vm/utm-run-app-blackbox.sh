@@ -9,11 +9,11 @@ source "${ROOT}/scripts/load_test_env.sh"
 source "${ROOT}/scripts/vm/vm-ssh.sh"
 
 CLI="${ROOT}/dist/smr.exe"
-GUI="${ROOT}/dist/windows-desktop/SafeRoute.exe"
+GUI="${ROOT}/dist/windows-desktop/AgentMirror.exe"
 SETUP_PS1="${ROOT}/scripts/vm/windows-app-installed-test.ps1"
 
 [[ -s "$CLI" ]] || { echo "Missing dist/smr.exe" >&2; exit 1; }
-[[ -s "$GUI" ]] || { echo "Missing dist/windows-desktop/SafeRoute.exe (run package-windows-gui.sh)" >&2; exit 1; }
+[[ -s "$GUI" ]] || { echo "Missing dist/windows-desktop/AgentMirror.exe (run package-windows-gui.sh)" >&2; exit 1; }
 KEYS_SRC="$(resolve_keys_file)" || {
   echo "Missing test keys — copy config/test.env.example to config/test.env and set API keys" >&2
   exit 1
@@ -29,7 +29,7 @@ echo "==> Upload install payload to guest ($VM_SSH)"
 vm_ssh_mkdir "$STAGE_GUEST"
 vm_ssh_mkdir "${TEST_ROOT_GUEST}/scripts"
 vm_scp_to "$CLI" "${STAGE_GUEST}/smr.exe"
-vm_scp_to "$GUI" "${STAGE_GUEST}/SafeRoute.exe"
+vm_scp_to "$GUI" "${STAGE_GUEST}/AgentMirror.exe"
 vm_scp_to "${ROOT}/config/smr.example.yaml" "${STAGE_GUEST}/smr.example.yaml"
 vm_scp_to "${ROOT}/scripts/install.ps1" "${STAGE_GUEST}/install.ps1"
 

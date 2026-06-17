@@ -1,10 +1,12 @@
-; SafeRoute NSIS hooks — install CLI companion files and clean up on uninstall.
+; AgentMirror NSIS hooks — install CLI companion files and clean up on uninstall.
 
 !macro SafeRoute_StopProcesses
+  ExecWait 'taskkill /IM AgentMirror.exe /T' $0
   ExecWait 'taskkill /IM SafeRoute.exe /T' $0
   ExecWait 'taskkill /IM SecureModelRoute.exe /T' $0
   ExecWait 'taskkill /IM smr.exe /T' $0
   Sleep 1500
+  ExecWait 'taskkill /F /IM AgentMirror.exe /T' $0
   ExecWait 'taskkill /F /IM SafeRoute.exe /T' $0
   ExecWait 'taskkill /F /IM SecureModelRoute.exe /T' $0
   ExecWait 'taskkill /F /IM smr.exe /T' $0

@@ -32,7 +32,7 @@ for f in smr securemodelroute; do
 done
 
 log "==> Removing desktop apps"
-for app in SafeRoute.app SecureModelRoute.app; do
+for app in AgentMirror.app SafeRoute.app SecureModelRoute.app; do
   for dir in "${HOME}/Applications/${app}" "/Applications/${app}"; do
     if [[ -d "$dir" ]]; then
       rm -rf "$dir"

@@ -12,7 +12,9 @@ while IFS= read -r candidate; do
   SETUP="$candidate"
   break
 done < <(ls -t \
+  "${ROOT}"/dist/AgentMirror_*_x64-setup.exe \
   "${ROOT}"/dist/SafeRoute_*_x64-setup.exe \
+  "${ROOT}"/dist/windows-desktop/AgentMirror_*_x64-setup.exe \
   "${ROOT}"/dist/windows-desktop/SafeRoute_*_x64-setup.exe \
   "${ROOT}"/dist/windows-desktop/*-setup.exe 2>/dev/null || true)
 

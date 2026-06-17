@@ -54,7 +54,7 @@ if smr_host_is_apple_silicon; then
     check_file "${ROOT}/dist/smr-${VERSION}-darwin-x86_64-app.tar.gz" "App tar (x86_64 cross)"
   fi
   if [[ "$REQUIRE_DMG" == true ]]; then
-    check_file "${ROOT}/dist/SafeRoute_${VERSION}_x86_64.dmg" "DMG (x86_64 cross)"
+    check_file "${ROOT}/dist/AgentMirror_${VERSION}_x86_64.dmg" "DMG (x86_64 cross)"
   fi
 fi
 [[ "$REQUIRE_APP" == true ]] && check_file "$APP_TAR" "App tar"

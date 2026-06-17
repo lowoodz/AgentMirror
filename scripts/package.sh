@@ -45,7 +45,7 @@ tar -czf "$OUT/${PKG}.tar.gz" -C "$OUT" smr smr.example.yaml README.md install.s
 
 APP_BUNDLE=""
 APP_NAME=""
-for name in SafeRoute.app; do
+for name in AgentMirror.app SafeRoute.app; do
   if [[ -d "$ROOT/target/release/bundle/macos/${name}" ]]; then
     APP_BUNDLE="$ROOT/target/release/bundle/macos/${name}"
     APP_NAME="$name"

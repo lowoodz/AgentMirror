@@ -14,11 +14,11 @@ ARTIFACTS=(
   "dist/smr-${VERSION}-darwin-x86_64.tar.gz"
   "dist/smr-${VERSION}-darwin-arm64-app.tar.gz"
   "dist/smr-${VERSION}-darwin-x86_64-app.tar.gz"
-  "dist/SafeRoute_${VERSION}_arm64.dmg"
-  "dist/SafeRoute_${VERSION}_x86_64.dmg"
+  "dist/AgentMirror_${VERSION}_arm64.dmg"
+  "dist/AgentMirror_${VERSION}_x86_64.dmg"
   "dist/smr-${VERSION}-windows-x86_64.zip"
   "dist/smr-${VERSION}-windows-x86_64-app.zip"
-  "dist/SafeRoute_${VERSION}_x64-setup.exe"
+  "dist/AgentMirror_${VERSION}_x64-setup.exe"
 )
 
 PATTERNS='/Users/[a-z]|C:\\Users\\[^P]|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}'

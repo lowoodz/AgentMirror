@@ -54,7 +54,7 @@ Set-Content -Path (Join-Path $SecretsDir "project.txt") -Value "probe-secret-dat
 
 foreach ($pair in @(
         @((Join-Path $StageDir "smr.exe"), (Join-Path $BinDir "smr.exe")),
-        @((Join-Path $StageDir "SafeRoute.exe"), (Join-Path $GuiDir "SafeRoute.exe"))
+        @((Join-Path $StageDir "AgentMirror.exe"), (Join-Path $GuiDir "AgentMirror.exe"))
     )) {
     $src, $dst = $pair
     if (-not (Test-Path $src)) { throw "missing $src" }
@@ -69,7 +69,7 @@ foreach ($pair in @(
 & $python (Join-Path $TestRoot "scripts\generate_test_config.py") $ConfigPath $SecretsDir | ForEach-Object { Log $_ }
 $env:SMR_FORCE_SERVER = "1"
 $env:SMR_CONFIG = $ConfigPath
-$gui = Start-Process -FilePath (Join-Path $GuiDir "SafeRoute.exe") -ArgumentList @("--background") -PassThru -WindowStyle Hidden
+$gui = Start-Process -FilePath (Join-Path $GuiDir "AgentMirror.exe") -ArgumentList @("--background") -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 12
 for ($i = 0; $i -lt 90; $i++) {
     try {

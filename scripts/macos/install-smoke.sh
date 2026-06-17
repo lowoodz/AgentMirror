@@ -73,7 +73,7 @@ else
 app_stage="$(mktemp -d)"
 tar -xzf "$APP_TAR" -C "$app_stage"
 app_bundle=""
-for name in SafeRoute.app; do
+for name in AgentMirror.app SafeRoute.app; do
   if [[ -d "${app_stage}/${name}" ]]; then
     app_bundle="${app_stage}/${name}"
     break
@@ -83,7 +83,7 @@ done
 
 apps_dir="${PREFIX}/Applications"
 install -d "$apps_dir"
-rm -rf "${apps_dir}/SafeRoute.app" "${apps_dir}/SecureModelRoute.app"
+rm -rf "${apps_dir}/AgentMirror.app" "${apps_dir}/SafeRoute.app" "${apps_dir}/SecureModelRoute.app"
 cp -R "$app_bundle" "${apps_dir}/$(basename "$app_bundle")"
 gui_bin="${apps_dir}/$(basename "$app_bundle")/Contents/MacOS/smr-gui"
 

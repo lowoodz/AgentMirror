@@ -52,14 +52,14 @@ if ($CliOnly) {
 } else {
     if (-not $GuiExe) { $GuiExe = Join-Path $GuestStaging "smr-app-test-stage\SafeRoute.exe" }
     if (-not (Test-Path $GuiExe)) {
-        $alt = Join-Path $Work "SafeRoute.exe"
+        $alt = Join-Path $Work "AgentMirror.exe"
         if (Test-Path $alt) { $GuiExe = $alt }
     }
     if (-not (Test-Path $GuiExe)) {
         Log "ERROR: GUI exe not found (pass -CliOnly for CLI-only smoke)"
         exit 1
     }
-    Copy-Item $GuiExe (Join-Path $Work "SafeRoute.exe") -Force
+    Copy-Item $GuiExe (Join-Path $Work "AgentMirror.exe") -Force
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $InstallPs1 -Gui -Quiet
 }
 

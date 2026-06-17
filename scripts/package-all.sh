@@ -59,7 +59,7 @@ echo ""
 source "${ROOT}/scripts/vm/vm-ssh.sh"
 vm_ssh_init
 VERSION="$(grep '^version' "${ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-STABLE_SETUP="${ROOT}/dist/SafeRoute_${VERSION}_x64-setup.exe"
+STABLE_SETUP="${ROOT}/dist/AgentMirror_${VERSION}_x64-setup.exe"
 VM_GUI_BUILT=0
 
 if vm_ssh_require 2>/dev/null; then

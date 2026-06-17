@@ -102,8 +102,8 @@ CLI is **always** built and verified. App + installer are optional (default **on
 |----------|------------|--------------|
 | CLI | `dist/smr-{v}-darwin-{arch}.tar.gz` | `dist/smr-{v}-windows-x86_64.zip` |
 | App | `dist/smr-{v}-darwin-{arch}-app.tar.gz` | `dist/smr-{v}-windows-x86_64-app.zip` |
-| Installer | `dist/SafeRoute_{v}_{arch}.dmg` | `dist/SafeRoute_{v}_x64-setup.exe` |
-| UTM staging | — | `dist/windows-desktop/SafeRoute.exe`, `dist/smr.exe` |
+| Installer | `dist/AgentMirror_{v}_{arch}.dmg` | `dist/AgentMirror_{v}_x64-setup.exe` |
+| UTM staging | — | `dist/windows-desktop/AgentMirror.exe`, `dist/smr.exe` |
 
 **macOS flags:** `--with-app` / `--without-app`, `--with-dmg` / `--without-dmg`, `--cli-only`
 

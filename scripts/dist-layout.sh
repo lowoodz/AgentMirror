@@ -27,18 +27,21 @@ VERSION=${version}
 DIST=${dist}
 ARCH=${arch}
 APP_ARCH=${app_arch}
+DESKTOP_APP_NAME=AgentMirror
+DESKTOP_APP_BUNDLE=AgentMirror.app
+DESKTOP_APP_EXE=AgentMirror.exe
 CLI_DARWIN_ARM64=${dist}/smr-${version}-darwin-arm64.tar.gz
 CLI_DARWIN_X86_64=${dist}/smr-${version}-darwin-x86_64.tar.gz
 APP_DARWIN_ARM64=${dist}/smr-${version}-darwin-arm64-app.tar.gz
 APP_DARWIN_X86_64=${dist}/smr-${version}-darwin-x86_64-app.tar.gz
-DMG_ARM64=${dist}/SafeRoute_${version}_arm64.dmg
-DMG_X86_64=${dist}/SafeRoute_${version}_x86_64.dmg
+DMG_ARM64=${dist}/AgentMirror_${version}_arm64.dmg
+DMG_X86_64=${dist}/AgentMirror_${version}_x86_64.dmg
 CLI_WINDOWS_ZIP=${dist}/smr-${version}-windows-x86_64.zip
 APP_WINDOWS_ZIP=${dist}/smr-${version}-windows-x86_64-app.zip
-NSIS_SETUP=${dist}/SafeRoute_${version}_x64-setup.exe
+NSIS_SETUP=${dist}/AgentMirror_${version}_x64-setup.exe
 CLI_WINDOWS_EXE=${dist}/smr.exe
 WIN_DESKTOP_DIR=${dist}/windows-desktop
-WIN_DESKTOP_EXE=${dist}/windows-desktop/SafeRoute.exe
+WIN_DESKTOP_EXE=${dist}/windows-desktop/AgentMirror.exe
 MANIFEST=${dist}/LATEST-INSTALLERS.txt
 LOG_MACOS_RELEASE=${dist}/macos-release-cycle.log
 LOG_MACOS_INSTALL=${dist}/macos-install-smoke.log
@@ -64,14 +67,14 @@ Ship (upload / hand to users):
                  smr-${VERSION}-darwin-x86_64.tar.gz
   macOS app:     smr-${VERSION}-darwin-arm64-app.tar.gz
                  smr-${VERSION}-darwin-x86_64-app.tar.gz
-  macOS DMG:     SafeRoute_${VERSION}_arm64.dmg
-                 SafeRoute_${VERSION}_x86_64.dmg   (cross-built on Apple Silicon)
+  macOS DMG:     AgentMirror_${VERSION}_arm64.dmg
+                 AgentMirror_${VERSION}_x86_64.dmg   (cross-built on Apple Silicon)
   Windows CLI:   smr-${VERSION}-windows-x86_64.zip
   Windows app:   smr-${VERSION}-windows-x86_64-app.zip
-  Windows NSIS:  SafeRoute_${VERSION}_x64-setup.exe   (Tauri NSIS only)
+  Windows NSIS:  AgentMirror_${VERSION}_x64-setup.exe   (Tauri NSIS only)
 
 UTM / install-test staging (not for end users):
-  dist/windows-desktop/SafeRoute.exe
+  dist/windows-desktop/AgentMirror.exe
   dist/smr.exe
 
 Build / test logs (fixed names, overwritten each run):
@@ -94,19 +97,25 @@ dist_clean() {
   find "$DIST" -maxdepth 1 \( \
     -name 'smr-[0-9]*-darwin-*.tar.gz' -o \
     -name 'smr-[0-9]*-windows-*.zip' -o \
+    -name 'AgentMirror_[0-9]*_*.dmg' -o \
+    -name 'AgentMirror_[0-9]*_*-setup.exe' -o \
     -name 'SafeRoute_[0-9]*_*.dmg' -o \
     -name 'SafeRoute_[0-9]*_*-setup.exe' \
     \) ! -name "*${version}*" -print -delete 2>/dev/null || true
 
   # Duplicate DMG naming (keep _arm64 only)
+  rm -f "$DIST/AgentMirror_${version}_aarch64.dmg" 2>/dev/null || true
   rm -f "$DIST/SafeRoute_${version}_aarch64.dmg" 2>/dev/null || true
 
   # Legacy IExpress
   rm -f \
     "$DIST"/SafeRoute-*-x64-Setup.exe \
+    "$DIST"/AgentMirror-*-x64-Setup.exe \
     "$DIST"/smr-*-windows-x86_64-full.zip 2>/dev/null || true
   rm -f "$WIN_DESKTOP_DIR"/SafeRoute-[0-9]*-x64-Setup.exe 2>/dev/null || true
-  find "$WIN_DESKTOP_DIR" -maxdepth 1 -type f ! -name 'SafeRoute.exe' \
+  rm -f "$WIN_DESKTOP_DIR"/AgentMirror-[0-9]*-x64-Setup.exe 2>/dev/null || true
+  find "$WIN_DESKTOP_DIR" -maxdepth 1 -type f ! -name 'AgentMirror.exe' ! -name 'SafeRoute.exe' \
+    ! -name "AgentMirror_${version}_x64-setup.exe" \
     ! -name "SafeRoute_${version}_x64-setup.exe" -print -delete 2>/dev/null || true
   find "$WIN_DESKTOP_DIR" -maxdepth 1 -type f -name '*setup.sed*' -o -name '*Wrote SED*' \
     -print -delete 2>/dev/null || true
