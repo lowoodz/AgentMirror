@@ -1,30 +1,68 @@
 #!/usr/bin/env bash
-# Generate Tauri app icon PNG from the canonical SVG source.
+# Generate Tauri app icon set from icon-source.png (preferred) or icon.svg.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 mkdir -p icons
 
-SRC="${ROOT}/icons/icon.svg"
+PNG_SRC="${ROOT}/icons/icon-source.png"
+ICON_RAW="${SMR_ICON_RAW:-}"
+
+prepare_png() {
+  local src="$1"
+  local py=""
+  for c in python3.13 python3.12 python3.11 python3; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c "import PIL" 2>/dev/null; then
+      py="$c"
+      break
+    fi
+  done
+  if [[ -z "$py" ]]; then
+    py=python3
+    echo "Installing Pillow for icon preparation…" >&2
+    "$py" -m pip install --quiet Pillow
+  fi
+  "$py" "${ROOT}/prepare_icon_png.py" "$src" -o "$PNG_SRC"
+}
+
+if [[ ! -f "$PNG_SRC" && -n "$ICON_RAW" && -f "$ICON_RAW" ]]; then
+  prepare_png "$ICON_RAW"
+elif [[ "${SMR_ICON_REGEN:-}" == "1" && -n "$ICON_RAW" && -f "$ICON_RAW" ]]; then
+  prepare_png "$ICON_RAW"
+fi
+
+SVG_SRC="${ROOT}/icons/icon.svg"
 OUT="${ROOT}/icons/icon.png"
 
-SIZE="${SMR_ICON_SIZE:-2048}"
-if command -v rsvg-convert >/dev/null 2>&1; then
-  rsvg-convert -w "$SIZE" -h "$SIZE" "$SRC" -o "$OUT"
+SIZE="${SMR_ICON_SIZE:-1024}"
+if [[ -f "$PNG_SRC" ]]; then
+  if [[ "$SIZE" != "1024" ]] && command -v sips >/dev/null 2>&1; then
+    cp "$PNG_SRC" "$OUT"
+    sips -z "$SIZE" "$SIZE" "$OUT" >/dev/null
+    echo "Generated $OUT from icon-source.png (sips, ${SIZE}px)"
+  elif [[ "$SIZE" != "1024" ]] && command -v magick >/dev/null 2>&1; then
+    magick "$PNG_SRC" -resize "${SIZE}x${SIZE}" "$OUT"
+    echo "Generated $OUT from icon-source.png (ImageMagick, ${SIZE}px)"
+  else
+    cp "$PNG_SRC" "$OUT"
+    echo "Using $OUT from icon-source.png (1024px)"
+  fi
+elif command -v rsvg-convert >/dev/null 2>&1; then
+  rsvg-convert -w "$SIZE" -h "$SIZE" "$SVG_SRC" -o "$OUT"
   echo "Generated $OUT from icon.svg (rsvg-convert, ${SIZE}px)"
 elif command -v magick >/dev/null 2>&1; then
-  magick -background none -density 384 "$SRC" -resize "${SIZE}x${SIZE}" "$OUT"
+  magick -background none -density 384 "$SVG_SRC" -resize "${SIZE}x${SIZE}" "$OUT"
   echo "Generated $OUT from icon.svg (ImageMagick)"
 elif [[ "$(uname -s)" == "Darwin" ]] && command -v qlmanage >/dev/null 2>&1; then
   TMPDIR=$(mktemp -d)
-  qlmanage -t -s "$SIZE" -o "$TMPDIR" "$SRC" >/dev/null 2>&1
-  mv "$TMPDIR/$(basename "$SRC").png" "$OUT"
+  qlmanage -t -s "$SIZE" -o "$TMPDIR" "$SVG_SRC" >/dev/null 2>&1
+  mv "$TMPDIR/$(basename "$SVG_SRC").png" "$OUT"
   rmdir "$TMPDIR"
   echo "Generated $OUT from icon.svg (qlmanage, ${SIZE}px)"
 elif [[ -f "$OUT" ]]; then
   echo "Using existing $OUT (install rsvg-convert or ImageMagick to rebuild from SVG)"
 else
-  echo "Error: no icon.png and cannot rasterize icon.svg" >&2
+  echo "Error: no icon source (icon-source.png / icon.svg) and cannot rasterize" >&2
   exit 1
 fi
 
