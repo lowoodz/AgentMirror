@@ -231,6 +231,12 @@ pub struct ReflectionReport {
     /// Number of cognitive events included in the last LLM reflection pass.
     #[serde(default)]
     pub llm_event_count: u32,
+    /// LLM proxy turn count when the last reflection pass completed.
+    #[serde(default)]
+    pub llm_turn_count: u32,
+    /// Run status when the last LLM reflection pass completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_run_status: Option<String>,
 }
 
 /// One global daily report row id (all agents combined).

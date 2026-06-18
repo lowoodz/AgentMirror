@@ -4,12 +4,11 @@ use crate::critic::{evaluate, CriticInput};
 use crate::extract::{drafts_to_events, extract_from_turn, ExtractContext};
 use crate::graph::{build_graph, execution_summary};
 use crate::llm::LlmClient;
-use crate::locale::ReportLanguage;
 use crate::models::{EventKind, InsightConfig, RunRecord, RunStatus, TraceTurn};
 use crate::parser::{apply_messages_delta, parse_request, parse_response};
 use crate::report::{
-    build_rule_reflection_report, finalize_run_if_idle, last_activity_at, outcome_from_status,
-    refresh_running_llm_report, should_generate_llm_report,
+    finalize_run_if_idle, last_activity_at, outcome_from_status, refresh_running_llm_report,
+    should_generate_llm_report,
 };
 use crate::safety::{scan_action_events, SafetyScanner};
 use crate::separator::{
@@ -201,8 +200,7 @@ impl Pipeline {
 
         if self.config.llm_critic {
             if let Some(mut prior_report) = prior {
-                if prior_report.llm_enhanced && run.status == RunStatus::Running && !schedule_llm
-                {
+                if prior_report.llm_enhanced && !schedule_llm {
                     refresh_running_llm_report(
                         &mut prior_report,
                         &run,
@@ -216,9 +214,15 @@ impl Pipeline {
                     return Ok(None);
                 }
             }
+            self.store.mark_audit_processed(&turn.audit_id)?;
+            return Ok(if schedule_llm {
+                Some(run.run_id)
+            } else {
+                None
+            });
         }
 
-        let report = build_rule_reflection_report(
+        let report = crate::report::build_rule_reflection_report(
             &run,
             &all_events,
             &execution_summary,
@@ -228,10 +232,6 @@ impl Pipeline {
         self.store.save_report(&report)?;
 
         self.store.mark_audit_processed(&turn.audit_id)?;
-        Ok(if schedule_llm {
-            Some(run.run_id)
-        } else {
-            None
-        })
+        Ok(None)
     }
 }

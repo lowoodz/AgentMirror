@@ -215,19 +215,49 @@ async fn api_insight_report(
     State(s): State<HttpState>,
     Path(run_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let llm_critic = s.app.config().insight.llm_critic;
     let store = s.app.insight.store();
     let run = store
         .get_run(&run_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let report = store
+    let prior = store
         .get_report(&run_id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let events = store
         .list_events(&run_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let last_activity = smr_insight::report::last_activity_at(&run, &events);
+    let status = smr_insight::report::reflection_report_status(
+        &run,
+        events.len(),
+        prior.as_ref(),
+        last_activity,
+        llm_critic,
+    );
+
+    let displayable = prior
+        .as_ref()
+        .filter(|p| smr_insight::report::report_is_displayable(p, llm_critic));
+
+    if displayable.is_none() {
+        return Ok(Json(serde_json::json!({
+            "report": null,
+            "availability": status.availability,
+            "next_llm_turn": status.next_llm_turn,
+            "turn_count": status.turn_count,
+            "event_count": status.event_count,
+            "run": {
+                "run_id": run.run_id,
+                "goal": run.goal,
+                "status": run.status,
+                "turn_count": run.turn_count,
+            },
+        })));
+    }
+
+    let report = displayable.unwrap();
     let run_actions: Vec<String> = events
         .iter()
         .filter(|e| e.kind == EventKind::Action)

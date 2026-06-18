@@ -32,7 +32,7 @@ insight:
   require_traffic_bodies: true
   daily_report_hour: 8
   retention_days: 30
-  llm_critic: true  # dialectical + logical LLM reflection reports (uses critic_model_group); set false to skip LLM calls
+  llm_critic: true  # reflection reports are LLM-only (every 10 turns while running + on run end/idle); set false for legacy rule baseline
   critic_model_group: high  # fallback group for AgentMirror critic / goal LLM calls
   llm_daily: true  # LLM daily report for all agents (uses reflection reports as input)
   include_failed_requests: false  # set true to trace blocked/failed proxy requests (request body only)

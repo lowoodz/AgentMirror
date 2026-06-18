@@ -1,4 +1,5 @@
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::Serialize;
 
 use crate::critic::{evaluate, CriticInput};
 use crate::graph::{build_graph, execution_summary};
@@ -15,6 +16,8 @@ use crate::store::InsightStore;
 
 /// No new traffic for this long → treat run as done and generate LLM reflection report.
 pub const RUN_REPORT_IDLE_MINUTES: i64 = 10;
+/// While a run is still active, enqueue LLM reflection every N LLM turns.
+pub const LLM_REFLECTION_TURN_INTERVAL: u32 = 10;
 const DAILY_LIST_MAX: usize = 6;
 
 fn run_duration_minutes(run: &RunRecord) -> Option<u32> {
@@ -103,7 +106,7 @@ pub fn build_reflection_report(
         }
         tracing::warn!(
             run_id = %run.run_id,
-            "LLM reflection report unavailable — falling back to rule baseline"
+            "LLM reflection report unavailable — keeping last LLM snapshot if any"
         );
     }
 
@@ -122,12 +125,40 @@ pub fn build_reflection_report(
                 return Ok(prior);
             }
         }
+        anyhow::bail!(
+            "LLM reflection report not available yet for run {}",
+            run.run_id
+        );
     }
 
     build_rule_reflection_report(run, &events, &execution_summary, &safety_findings, language)
 }
 
-/// LLM reports when the run ends, or when the last event is idle ≥ RUN_REPORT_IDLE_MINUTES.
+fn llm_report_covers_state(
+    prior: &ReflectionReport,
+    run: &RunRecord,
+    event_count: usize,
+) -> bool {
+    prior.llm_enhanced
+        && prior.llm_run_status.as_deref() == Some(run.status.as_str())
+        && prior.llm_turn_count >= run.turn_count
+        && prior.llm_event_count >= event_count as u32
+}
+
+fn is_terminal_llm_trigger(run: &RunRecord, last_activity: DateTime<Utc>) -> bool {
+    matches!(
+        run.status,
+        RunStatus::Completed | RunStatus::Failed | RunStatus::Stale
+    ) || (run.status == RunStatus::Running && is_idle_for_report(last_activity))
+}
+
+fn is_periodic_turn_trigger(run: &RunRecord) -> bool {
+    run.status == RunStatus::Running
+        && run.turn_count >= LLM_REFLECTION_TURN_INTERVAL
+        && run.turn_count.is_multiple_of(LLM_REFLECTION_TURN_INTERVAL)
+}
+
+/// LLM reports on run end / idle, and every [`LLM_REFLECTION_TURN_INTERVAL`] turns while running.
 pub fn should_generate_llm_report(
     run: &RunRecord,
     event_count: usize,
@@ -137,15 +168,112 @@ pub fn should_generate_llm_report(
     if event_count < 2 {
         return false;
     }
-    if prior
-        .map(|p| p.llm_enhanced && p.llm_event_count >= event_count as u32)
-        .unwrap_or(false)
-    {
-        return false;
+
+    if is_terminal_llm_trigger(run, last_activity) {
+        if let Some(p) = prior {
+            if llm_report_covers_state(p, run, event_count) {
+                return false;
+            }
+        }
+        return true;
     }
-    match run.status {
-        RunStatus::Completed | RunStatus::Failed | RunStatus::Stale => true,
-        RunStatus::Running => is_idle_for_report(last_activity),
+
+    if is_periodic_turn_trigger(run) {
+        if let Some(p) = prior {
+            if p.llm_enhanced && p.llm_turn_count >= run.turn_count {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    false
+}
+
+/// Whether a stored report should be shown in the UI/API.
+pub fn report_is_displayable(prior: &ReflectionReport, llm_critic: bool) -> bool {
+    prior.llm_enhanced || !llm_critic
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReflectionReportAvailability {
+    Ready,
+    Generating,
+    NotScheduled,
+    InsufficientData,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReflectionReportStatus {
+    pub availability: ReflectionReportAvailability,
+    pub next_llm_turn: Option<u32>,
+    pub turn_count: u32,
+    pub event_count: usize,
+}
+
+fn next_llm_turn_milestone(run: &RunRecord) -> Option<u32> {
+    let interval = LLM_REFLECTION_TURN_INTERVAL;
+    let tc = run.turn_count;
+    if tc < interval {
+        Some(interval)
+    } else {
+        Some(((tc / interval) + 1) * interval)
+    }
+}
+
+/// UI/API hint when no LLM reflection report is available yet.
+pub fn reflection_report_status(
+    run: &RunRecord,
+    event_count: usize,
+    prior: Option<&ReflectionReport>,
+    last_activity: DateTime<Utc>,
+    llm_critic: bool,
+) -> ReflectionReportStatus {
+    let turn_count = run.turn_count;
+    if let Some(p) = prior {
+        if report_is_displayable(p, llm_critic) {
+            return ReflectionReportStatus {
+                availability: ReflectionReportAvailability::Ready,
+                next_llm_turn: None,
+                turn_count,
+                event_count,
+            };
+        }
+    }
+
+    if event_count < 2 {
+        return ReflectionReportStatus {
+            availability: ReflectionReportAvailability::InsufficientData,
+            next_llm_turn: None,
+            turn_count,
+            event_count,
+        };
+    }
+
+    if !llm_critic {
+        return ReflectionReportStatus {
+            availability: ReflectionReportAvailability::Generating,
+            next_llm_turn: None,
+            turn_count,
+            event_count,
+        };
+    }
+
+    if should_generate_llm_report(run, event_count, prior, last_activity) {
+        return ReflectionReportStatus {
+            availability: ReflectionReportAvailability::Generating,
+            next_llm_turn: None,
+            turn_count,
+            event_count,
+        };
+    }
+
+    ReflectionReportStatus {
+        availability: ReflectionReportAvailability::NotScheduled,
+        next_llm_turn: next_llm_turn_milestone(run),
+        turn_count,
+        event_count,
     }
 }
 
@@ -235,6 +363,8 @@ pub fn build_rule_reflection_report(
         reflection_summary: None,
         llm_enhanced: false,
         llm_event_count: 0,
+        llm_turn_count: 0,
+        llm_run_status: None,
     })
 }
 
@@ -255,6 +385,11 @@ pub fn generate_llm_reflection_for_run(
         .ok_or_else(|| anyhow::anyhow!("run not found: {run_id}"))?;
     let report = build_reflection_report(store, &run, safety, llm, llm_critic, language)?;
     let enhanced = report.llm_enhanced;
+    let mut report = report;
+    if enhanced {
+        report.llm_turn_count = run.turn_count;
+        report.llm_run_status = Some(run.status.as_str().to_string());
+    }
     store.save_report(&report)?;
     Ok(enhanced)
 }
@@ -745,6 +880,116 @@ mod tests {
     }
 
     #[test]
+    fn generates_llm_on_every_tenth_turn_while_running() {
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Running,
+            goal: "task".into(),
+            turn_count: 10,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        assert!(should_generate_llm_report(
+            &run,
+            10,
+            None,
+            Utc::now()
+        ));
+    }
+
+    #[test]
+    fn skips_duplicate_periodic_llm_on_same_turn() {
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Running,
+            goal: "task".into(),
+            turn_count: 10,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        let prior = ReflectionReport {
+            run_id: "r1".into(),
+            goal: "task".into(),
+            original_goal: Some("task".into()),
+            execution_summary: String::new(),
+            outcome: RunOutcome::Partial,
+            issues: vec![],
+            risks: vec![],
+            suggestions: vec![],
+            critics: CriticsScore::default(),
+            critic_analyses: Default::default(),
+            generated_at: Utc::now(),
+            dialectical: None,
+            counterfactuals: vec![],
+            estimated_improvement: None,
+            logical_analysis: None,
+            reflection_summary: Some("mid-run".into()),
+            llm_enhanced: true,
+            llm_event_count: 10,
+            llm_turn_count: 10,
+            llm_run_status: Some("running".into()),
+        };
+        assert!(!should_generate_llm_report(
+            &run,
+            10,
+            Some(&prior),
+            Utc::now()
+        ));
+    }
+
+    #[test]
+    fn terminal_llm_runs_again_after_periodic_snapshot() {
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Completed,
+            goal: "task".into(),
+            turn_count: 12,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        let prior = ReflectionReport {
+            run_id: "r1".into(),
+            goal: "task".into(),
+            original_goal: Some("task".into()),
+            execution_summary: String::new(),
+            outcome: RunOutcome::Partial,
+            issues: vec![],
+            risks: vec![],
+            suggestions: vec![],
+            critics: CriticsScore::default(),
+            critic_analyses: Default::default(),
+            generated_at: Utc::now(),
+            dialectical: None,
+            counterfactuals: vec![],
+            estimated_improvement: None,
+            logical_analysis: None,
+            reflection_summary: Some("mid-run".into()),
+            llm_enhanced: true,
+            llm_event_count: 10,
+            llm_turn_count: 10,
+            llm_run_status: Some("running".into()),
+        };
+        assert!(should_generate_llm_report(
+            &run,
+            12,
+            Some(&prior),
+            Utc::now()
+        ));
+    }
+
+    #[test]
     fn skips_llm_when_report_already_current() {
         let run = RunRecord {
             run_id: "r1".into(),
@@ -777,6 +1022,8 @@ mod tests {
             reflection_summary: Some("done".into()),
             llm_enhanced: true,
             llm_event_count: 10,
+            llm_turn_count: 5,
+            llm_run_status: Some("completed".into()),
         };
         assert!(!should_generate_llm_report(
             &run,
@@ -792,5 +1039,70 @@ mod tests {
         assert!(is_idle_for_report(last));
         let recent = Utc::now() - chrono::Duration::minutes(9);
         assert!(!is_idle_for_report(recent));
+    }
+
+    fn sample_run(turn_count: u32, status: RunStatus) -> RunRecord {
+        RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status,
+            goal: "task".into(),
+            turn_count,
+            messages_seen: 0,
+            graph_path: None,
+        }
+    }
+
+    #[test]
+    fn reflection_status_not_scheduled_before_milestone() {
+        let run = sample_run(5, RunStatus::Running);
+        let status = reflection_report_status(&run, 10, None, Utc::now(), true);
+        assert_eq!(
+            status.availability,
+            ReflectionReportAvailability::NotScheduled
+        );
+        assert_eq!(status.next_llm_turn, Some(10));
+    }
+
+    #[test]
+    fn reflection_status_generating_at_milestone() {
+        let run = sample_run(10, RunStatus::Running);
+        let status = reflection_report_status(&run, 10, None, Utc::now(), true);
+        assert_eq!(
+            status.availability,
+            ReflectionReportAvailability::Generating
+        );
+    }
+
+    #[test]
+    fn reflection_status_ready_when_llm_enhanced() {
+        let run = sample_run(10, RunStatus::Running);
+        let prior = ReflectionReport {
+            run_id: "r1".into(),
+            goal: "task".into(),
+            original_goal: None,
+            execution_summary: String::new(),
+            outcome: RunOutcome::Success,
+            issues: vec![],
+            risks: vec![],
+            suggestions: vec![],
+            critics: CriticsScore::default(),
+            critic_analyses: Default::default(),
+            generated_at: Utc::now(),
+            dialectical: None,
+            counterfactuals: vec![],
+            estimated_improvement: None,
+            logical_analysis: None,
+            reflection_summary: None,
+            llm_enhanced: true,
+            llm_event_count: 10,
+            llm_turn_count: 10,
+            llm_run_status: Some("running".into()),
+        };
+        let status = reflection_report_status(&run, 10, Some(&prior), Utc::now(), true);
+        assert_eq!(status.availability, ReflectionReportAvailability::Ready);
     }
 }

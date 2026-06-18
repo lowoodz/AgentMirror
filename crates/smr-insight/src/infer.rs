@@ -312,6 +312,8 @@ fn report_shell(
         reflection_summary: None,
         llm_enhanced: false,
         llm_event_count: 0,
+        llm_turn_count: 0,
+        llm_run_status: None,
     };
     merge_safety_issues(&mut report, safety_notes);
     report
