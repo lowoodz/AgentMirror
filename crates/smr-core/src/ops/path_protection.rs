@@ -425,14 +425,6 @@ fn path_matches(protected: &Path, candidate: &str) -> bool {
     cand == base || cand.starts_with(&format!("{base}/"))
 }
 
-pub fn level_label(level: PathProtectionLevel) -> &'static str {
-    match level {
-        PathProtectionLevel::DenyDelete => "禁止删除",
-        PathProtectionLevel::DenyModify => "禁止修改",
-        PathProtectionLevel::DenyAccess => "禁止访问",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

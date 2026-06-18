@@ -88,6 +88,64 @@ impl UiLanguage {
             }
         }
     }
+
+    pub fn path_protection_level_label(self, level: PathProtectionLevel) -> &'static str {
+        match (self, level) {
+            (Self::En, PathProtectionLevel::DenyDelete) => "deny delete",
+            (Self::En, PathProtectionLevel::DenyModify) => "deny modify",
+            (Self::En, PathProtectionLevel::DenyAccess) => "deny access",
+            (Self::Zh, PathProtectionLevel::DenyDelete) => "禁止删除",
+            (Self::Zh, PathProtectionLevel::DenyModify) => "禁止修改",
+            (Self::Zh, PathProtectionLevel::DenyAccess) => "禁止访问",
+        }
+    }
+
+    pub fn operation_type_label(self, op: OperationType) -> &'static str {
+        match (self, op) {
+            (Self::En, OperationType::CommandExec) => "command execution",
+            (Self::En, OperationType::ApiCall) => "API call",
+            (Self::En, OperationType::NetworkAccess) => "network access",
+            (Self::Zh, OperationType::CommandExec) => "命令执行",
+            (Self::Zh, OperationType::ApiCall) => "API 调用",
+            (Self::Zh, OperationType::NetworkAccess) => "网络访问",
+        }
+    }
+
+    /// Inline replacement when operation security blocks a tool-related field.
+    pub fn operation_block_message(
+        self,
+        op: OperationType,
+        pattern: &str,
+        rule_id: &str,
+    ) -> String {
+        let kind = self.operation_type_label(op);
+        match self {
+            Self::En => format!(
+                "[SMR BLOCKED] Operation \"{kind}: {pattern}\" was blocked by security policy. Rule ID: {rule_id}"
+            ),
+            Self::Zh => format!(
+                "[SMR BLOCKED] 操作「{kind}: {pattern}」已被安全策略拦截。规则 ID: {rule_id}"
+            ),
+        }
+    }
+
+    /// Inline replacement when path protection blocks a tool-related field.
+    pub fn path_protection_block_message(
+        self,
+        level: PathProtectionLevel,
+        path: &str,
+        rule_id: &str,
+    ) -> String {
+        let level_label = self.path_protection_level_label(level);
+        match self {
+            Self::En => format!(
+                "[SMR BLOCKED] Path protection \"{level_label}\" blocked access to {path}. Rule ID: {rule_id}"
+            ),
+            Self::Zh => format!(
+                "[SMR BLOCKED] 路径防护「{level_label}」已拦截对 {path} 的操作。规则 ID: {rule_id}"
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

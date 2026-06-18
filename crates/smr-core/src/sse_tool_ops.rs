@@ -305,7 +305,7 @@ pub fn transform_buffered_sse_ops(body: &str, ops: Option<&OperationSecurity>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{OperationSecurityMode, PathProtectionLevel, PathProtectionRule};
+    use crate::config::{OperationSecurityMode, PathProtectionLevel, PathProtectionRule, UiLanguage};
     use std::path::PathBuf;
 
     fn sample_stat_stream() -> String {
@@ -392,6 +392,7 @@ mod tests {
             }],
             OperationSecurityMode::Enforce,
             OperationSecurityMode::Enforce,
+            UiLanguage::Zh,
         )
         .unwrap();
 
@@ -414,6 +415,7 @@ mod tests {
             }],
             OperationSecurityMode::Enforce,
             OperationSecurityMode::Enforce,
+            UiLanguage::Zh,
         )
         .unwrap();
 
@@ -436,6 +438,7 @@ mod tests {
             }],
             OperationSecurityMode::Enforce,
             OperationSecurityMode::Enforce,
+            UiLanguage::Zh,
         )
         .unwrap();
 
@@ -480,6 +483,7 @@ mod tests {
             }],
             OperationSecurityMode::Enforce,
             OperationSecurityMode::Enforce,
+            UiLanguage::Zh,
         )
         .unwrap();
         let (out, blocks) = transform_buffered_sse_ops(&body, Some(&ops));
@@ -507,6 +511,7 @@ mod tests {
             }],
             OperationSecurityMode::Enforce,
             OperationSecurityMode::Enforce,
+            UiLanguage::Zh,
         )
         .unwrap();
 

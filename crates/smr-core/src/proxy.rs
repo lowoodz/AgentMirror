@@ -121,7 +121,7 @@ impl ProxyService {
 
             if snap.config.pipeline.ops_active() {
                 let ops_fields = filter_ops_request_fields(&json, &extracted);
-                let (ops_replacements, blocks, observes) =
+                let (ops_replacements, blocks, observes, block_kinds) =
                     snap.ops.process_fields_with_mode(&ops_fields)?;
                 safety_blocks += blocks;
                 safety_observations += observes;
@@ -129,7 +129,7 @@ impl ProxyService {
                     inject_texts(&mut json, &ops_replacements)?;
                     append_ops_system_notices(
                         &mut json,
-                        &ops_replacements,
+                        block_kinds,
                         snap.config.server.ui_language,
                     );
                     events.push(
@@ -345,7 +345,7 @@ impl ProxyService {
                             if snap.config.pipeline.ops_active() {
                                 let extracted = extract_texts(&json)?;
                                 let tool_only = filter_tool_related(&json, &extracted);
-                                let (ops_replacements, blocks, observes) =
+                                let (ops_replacements, blocks, observes, _) =
                                     snap.ops.process_fields_with_mode(&tool_only)?;
                                 safety_blocks += blocks;
                                 safety_observations += observes;

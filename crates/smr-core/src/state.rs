@@ -47,6 +47,7 @@ impl AppEngines {
                     &config.path_protection_rules,
                     config.pipeline.operation_security_mode,
                     config.pipeline.effective_path_protection_mode(),
+                    config.server.ui_language,
                 )?
             } else {
                 OperationSecurity::new(
@@ -54,6 +55,7 @@ impl AppEngines {
                     &[],
                     config.pipeline.operation_security_mode,
                     config.pipeline.effective_path_protection_mode(),
+                    config.server.ui_language,
                 )?
             }),
             router: Arc::new(Router::new(config_arc)),
@@ -72,6 +74,7 @@ impl AppEngines {
                     &config.path_protection_rules,
                     config.pipeline.operation_security_mode,
                     config.pipeline.effective_path_protection_mode(),
+                    config.server.ui_language,
                 )?
             } else {
                 OperationSecurity::new(
@@ -79,6 +82,7 @@ impl AppEngines {
                     &[],
                     config.pipeline.operation_security_mode,
                     config.pipeline.effective_path_protection_mode(),
+                    config.server.ui_language,
                 )?
             }),
             router: Arc::new(Router::new(config_arc)),
@@ -176,6 +180,7 @@ impl SharedApp {
             AppEngines::from_config_with_sessions_and_vault(config.clone(), sessions, vault)?
         };
         engines.dlp.sync_runtime_config(&config);
+        engines.ops.sync_runtime_config(config.server.ui_language);
         *self.inner.write() = engines;
         self.sync_insight_safety();
         Ok(())

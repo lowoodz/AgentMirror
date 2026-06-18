@@ -635,7 +635,13 @@ def exec_looks_ok(text: str) -> bool:
     healthy, _ = openclaw_reply_healthy(text)
     if not healthy:
         return False
-    if "SMR BLOCKED" in text or "路径防护" in text or "安全策略" in text:
+    if (
+        "SMR BLOCKED" in text
+        or "路径防护" in text
+        or "Path protection" in text
+        or "安全策略" in text
+        or "security policy" in text
+    ):
         return False
     if re.search(
         r"\b(total|drwx|Volume|Directory of|\.xml|\.html|\.pdf|openclaw-ops-ok|matrix)\b",

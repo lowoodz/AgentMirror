@@ -1,6 +1,7 @@
 server:
   listen: "127.0.0.1:8080"
   default_fallback_group: high
+  # ui_language: en  # en | zh — agent-facing DLP / operation / path protection notices
   # Universal API (recommended): one base URL for OpenAI + Anthropic clients
   #   base_url: http://127.0.0.1:8080/v1
   #   OpenAI SDK → POST /chat/completions (or /v1/chat/completions)
