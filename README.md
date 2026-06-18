@@ -1,6 +1,6 @@
 # AgentMirror
 
-**Desktop app for LLM-safe routing and agent observability & reflection**
+**Desktop app for agent observability & reflection and LLM API proxy/router.**
 
 - Lightweight local model proxy/router compatible with OpenAI and Anthropic client protocols; on API failure, exhausted quota, or rate limits, fallback runs automatically with no interruption.
 - Built-in safeguards: data-leak prevention, redaction, operation blocking, and file-path protection.
@@ -104,6 +104,9 @@ Pre-built packages are on [GitHub Releases](https://github.com/lowoodz/AgentMirr
 |----------|---------|---------|
 | **macOS** (Apple Silicon) | `AgentMirror_*_arm64.dmg` | Open the DMG, drag **AgentMirror.app** to Applications, launch from the menu bar tray |
 | **macOS** (Apple Silicon) | `smr-*-darwin-arm64-app.tar.gz` | Extract `AgentMirror.app` to `/Applications` |
+| **macOS** (Intel) | `AgentMirror_*_x86_64.dmg` | Same as arm64 DMG (cross-built on Apple Silicon hosts) |
+| **macOS** (Intel) | `smr-*-darwin-x86_64-app.tar.gz` | Extract `AgentMirror.app` to `/Applications` |
+| **macOS** (Intel) | `smr-*-darwin-x86_64.tar.gz` | CLI only |
 | **Windows** x86_64 | `AgentMirror_*_x64-setup.exe` | **Recommended:** run the NSIS installer — registers in **Settings → Apps**, installs tray GUI + `smr.exe` CLI, includes uninstaller |
 | **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | Portable GUI + optional `*-setup.exe`; or extract and run `install.ps1 -All` |
 | **Windows** x86_64 | `smr-*-windows-x86_64.zip` | CLI only: extract, run `install.ps1`, then `securemodelroute` |
@@ -208,12 +211,19 @@ AgentMirror applies DLP, operation rules, and path protection to OpenClaw traffi
 Reconstruct what agents did, why, and how to improve — from LLM proxy traffic alone (no extra agent instrumentation).
 
 - **Traffic-based reconstruction** — infer goals, decisions, and tool actions from proxied requests and responses
-- **Causal trajectory** — Goal → Decision → Action → Observation graph per run
-- **Reflection reports** — rule baseline plus optional LLM critique (`insight.llm_critic`)
-- **Daily digests** — per-agent summary of tasks, issues, and recommendations
+- **Causal trajectory** — Goal → Decision → Action → Observation per run; directed graph, mind map, or timeline views
+- **Reflection reports** — **LLM-first by default** (`insight.llm_critic: true`): every 10 turns while a run is active, plus on run completion or after 10+ minutes idle. Five-dimension critique with original/current goal tracking. Rule baseline only when the upstream LLM is unavailable (`llm_critic: false` for legacy rule-only mode)
+- **Daily digests** — **LLM-first by default** (`insight.llm_daily: true`), summarizing per-agent tasks, issues, and recommendations from reflection reports; UI shows generating / no runs / unchanged states
 - **Multi-agent** — separate runs by `X-SMR-Agent-Id`, system-prompt fingerprint, or idle/run boundaries
+- **Agent profile & patterns** — capability profile from tools/stats; action-pattern mining in reflection reports
+- **Run management** — merge/split runs; DLP and operation-safety highlights on run cards
+- **Daily export** — browser print / HTML view (`GET /api/insight/daily/{date}/print`)
 
-Enable traffic snapshots on the **Logs** tab so AgentMirror can analyze request/response bodies (`insight.require_traffic_bodies`). See [AgentMirror design](docs/AgentMirror-Design.md) for API and configuration details.
+Enable traffic snapshots on the **Logs** tab (`insight.require_traffic_bodies` auto-enables `logging.save_traffic_bodies`). Blocked/failed proxy requests are excluded by default; set `insight.include_failed_requests: true` to trace them (request body only).
+
+**Retention:** insight data defaults to **30 days** (`insight.retention_days`); traffic snapshots default to **7 days** (`logging.traffic_retention_days`). Increase traffic retention if you need long-session replay via `POST /api/insight/reset` with `replay_from_traffic: true`.
+
+See [AgentMirror design](docs/AgentMirror-Design.md) for the full API reference.
 
 ### Model routing
 
@@ -268,6 +278,15 @@ pipeline:
   dlp_reversible: true
   operation_security_mode: enforce
 
+insight:
+  enabled: true
+  require_traffic_bodies: true
+  llm_critic: true              # LLM-only reflection reports (default)
+  llm_daily: true               # LLM-only daily digests (default)
+  critic_model_group: high
+  retention_days: 30
+  include_failed_requests: false
+
 fallback_groups:
   high:
     - id: primary
@@ -300,6 +319,7 @@ Override with `SMR_CONFIG`. Prefer `api_key_env` over inline keys—never commit
 ```yaml
 logging:
   save_traffic_bodies: true
+  traffic_retention_days: 7       # insight replay needs snapshots within this window
   traffic_request_capture: after_dlp   # after_dlp (default) | before_dlp (raw, may contain secrets)
   traffic_max_body_bytes: 20971520   # 20 MiB cap
 ```
@@ -320,6 +340,12 @@ Open `http://127.0.0.1:8080/ui` — overview, routing, DLP, path rules, operatio
 | `GET /api/traffic`               | Traffic snapshot list                           |
 | `GET /api/traffic/{id}`          | Full snapshot body                              |
 | `GET /api/events`, `/api/audits` | Events and audit rows                           |
+| `GET /api/insight/agents`, `/runs`, `/runs/{id}/graph`, `/runs/{id}/report` | AgentMirror runs, graphs, reflection reports |
+| `GET /api/insight/daily/{date}`, `POST /api/insight/daily/generate` | Daily digests |
+| `GET /api/insight/agents/{id}/profile` | Agent capability profile |
+| `POST /api/insight/reset`        | Clear insight data; optional traffic replay     |
+
+Full insight API: [docs/AgentMirror-Design.md](docs/AgentMirror-Design.md#6-api).
 
 
 ---
@@ -332,7 +358,7 @@ cp config/test.env.example config/test.env   # gitignored; set SMR_GLM_API_KEY /
 ./scripts/run_all_tests.sh
 ```
 
-Previous README snapshots: [docs/](docs/).
+Further design details: [docs/AgentMirror-Design.md](docs/AgentMirror-Design.md).
 
 ---
 
