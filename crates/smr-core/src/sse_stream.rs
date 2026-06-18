@@ -166,7 +166,12 @@ impl<S> SseResponseTransformStream<S> {
                 return match outcome {
                     GateLineOutcome::Forward(l) => self.process_forward_line(&l),
                     GateLineOutcome::Hold => None,
-                    GateLineOutcome::Release(mut lines) => {
+                    GateLineOutcome::Release { mut lines, block_kinds } => {
+                        if !block_kinds.is_empty() {
+                            if let Some(ops) = &self.ops {
+                                ops.mark_pending_notices(&self.session_id, block_kinds);
+                            }
+                        }
                         self.pending_out.append(&mut lines);
                         self.pop_pending()
                     }
@@ -238,7 +243,12 @@ impl<S: Stream<Item = Result<Bytes, std::convert::Infallible>> + Unpin> Stream
                     if this.ops.is_some() {
                         let ops_ref = this.ops.as_ref().map(|o| o.as_ref());
                         let outcome = this.tool_gate.flush_eof(ops_ref);
-                        if let GateLineOutcome::Release(mut lines) = outcome {
+                        if let GateLineOutcome::Release { mut lines, block_kinds } = outcome {
+                            if !block_kinds.is_empty() {
+                                if let Some(ops) = &this.ops {
+                                    ops.mark_pending_notices(&this.session_id, block_kinds);
+                                }
+                            }
                             this.pending_out.append(&mut lines);
                             if let Some(out) = this.pending_out.pop() {
                                 return Poll::Ready(Some(Ok(Bytes::from(out))));

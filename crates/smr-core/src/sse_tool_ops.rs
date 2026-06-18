@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use crate::ops::OperationSecurity;
+use crate::ops::{OperationSecurity, OpsBlockKinds};
 
 #[derive(Default, Clone)]
 struct AccumulatedCall {
@@ -34,7 +34,10 @@ pub enum GateLineOutcome {
     /// Line absorbed into the gate; emit nothing yet.
     Hold,
     /// Tool-call stream finished — emit returned lines instead of the held stream.
-    Release(Vec<Vec<u8>>),
+    Release {
+        lines: Vec<Vec<u8>>,
+        block_kinds: OpsBlockKinds,
+    },
 }
 
 impl SseToolCallGate {
@@ -144,16 +147,21 @@ impl SseToolCallGate {
         if let Some(ops) = ops {
             for call in &calls {
                 if !call.arguments.is_empty() {
-                    if let Some(blocked) = ops.enforce_tool_call(&call.arguments) {
+                    if let Some((blocked, kinds)) = ops.enforce_tool_call(&call.arguments) {
+                        let notice = ops.notice_text_for_kinds(kinds);
                         let mut out = emit_blocked_tool_stream(
                             call,
                             &blocked,
                             &model,
+                            notice.as_deref(),
                         );
                         if append_done {
                             out.push(b"data: [DONE]\n".to_vec());
                         }
-                        return GateLineOutcome::Release(out);
+                        return GateLineOutcome::Release {
+                            lines: out,
+                            block_kinds: kinds,
+                        };
                     }
                 }
             }
@@ -169,7 +177,10 @@ impl SseToolCallGate {
         if append_done {
             out.push(b"data: [DONE]\n".to_vec());
         }
-        GateLineOutcome::Release(out)
+        GateLineOutcome::Release {
+            lines: out,
+            block_kinds: OpsBlockKinds::default(),
+        }
     }
 
     /// Release held tool-call deltas when the upstream SSE stream ends.
@@ -213,7 +224,12 @@ fn replay_lines(lines: &[String]) -> Vec<Vec<u8>> {
         .collect()
 }
 
-fn emit_blocked_tool_call_sse(call: &AccumulatedCall, blocked_args: &str, model: &str) -> Vec<Vec<u8>> {
+fn emit_blocked_tool_call_sse(
+    call: &AccumulatedCall,
+    blocked_args: &str,
+    model: &str,
+    notice: Option<&str>,
+) -> Vec<Vec<u8>> {
     let id = if call.id.is_empty() {
         "smr-blocked".to_string()
     } else {
@@ -224,6 +240,34 @@ fn emit_blocked_tool_call_sse(call: &AccumulatedCall, blocked_args: &str, model:
     } else {
         call.name.clone()
     };
+
+    let mut out = Vec::new();
+    if let Some(text) = notice {
+        let role_chunk = json!({
+            "choices": [{
+                "delta": { "role": "assistant" },
+                "finish_reason": null,
+                "index": 0
+            }],
+            "model": model,
+            "object": "chat.completion.chunk"
+        });
+        let content_chunk = json!({
+            "choices": [{
+                "delta": { "content": format!("{text}\n") },
+                "finish_reason": null,
+                "index": 0
+            }],
+            "model": model,
+            "object": "chat.completion.chunk"
+        });
+        for chunk in [role_chunk, content_chunk] {
+            let mut line = b"data: ".to_vec();
+            line.extend_from_slice(&serde_json::to_vec(&chunk).unwrap_or_default());
+            line.push(b'\n');
+            out.push(line);
+        }
+    }
 
     let chunk1 = json!({
         "choices": [{
@@ -254,7 +298,6 @@ fn emit_blocked_tool_call_sse(call: &AccumulatedCall, blocked_args: &str, model:
         "object": "chat.completion.chunk"
     });
 
-    let mut out = Vec::new();
     for chunk in [chunk1, chunk2] {
         let mut line = b"data: ".to_vec();
         line.extend_from_slice(&serde_json::to_vec(&chunk).unwrap_or_default());
@@ -268,15 +311,20 @@ fn emit_blocked_tool_stream(
     call: &AccumulatedCall,
     blocked_args: &str,
     model: &str,
+    notice: Option<&str>,
 ) -> Vec<Vec<u8>> {
-    emit_blocked_tool_call_sse(call, blocked_args, model)
+    emit_blocked_tool_call_sse(call, blocked_args, model, notice)
 }
 
 /// Process a complete SSE body (buffered upstream response) with tool-call gating.
-pub fn transform_buffered_sse_ops(body: &str, ops: Option<&OperationSecurity>) -> (String, u32) {
+pub fn transform_buffered_sse_ops(
+    body: &str,
+    ops: Option<&OperationSecurity>,
+) -> (String, u32, OpsBlockKinds) {
     let mut gate = SseToolCallGate::default();
     let mut out = String::new();
     let mut blocks = 0u32;
+    let mut block_kinds = OpsBlockKinds::default();
 
     for line in body.lines() {
         let line_bytes = line.as_bytes();
@@ -288,8 +336,12 @@ pub fn transform_buffered_sse_ops(body: &str, ops: Option<&OperationSecurity>) -
                 }
             }
             GateLineOutcome::Hold => {}
-            GateLineOutcome::Release(lines) => {
-                if lines.len() <= 3 && lines.iter().any(|l| l.windows(11).any(|w| w == b"smr_blocked"))
+            GateLineOutcome::Release { lines, block_kinds: kinds } => {
+                if !kinds.is_empty() {
+                    blocks += 1;
+                    block_kinds.merge(kinds);
+                } else if lines.len() <= 3
+                    && lines.iter().any(|l| l.windows(11).any(|w| w == b"smr_blocked"))
                 {
                     blocks += 1;
                 }
@@ -299,7 +351,7 @@ pub fn transform_buffered_sse_ops(body: &str, ops: Option<&OperationSecurity>) -
             }
         }
     }
-    (out, blocks)
+    (out, blocks, block_kinds)
 }
 
 #[cfg(test)]
@@ -396,10 +448,14 @@ mod tests {
         )
         .unwrap();
 
-        let (out, blocks) = transform_buffered_sse_ops(&sample_stat_stream(), Some(&ops));
+        let (out, blocks, kinds) = transform_buffered_sse_ops(&sample_stat_stream(), Some(&ops));
         assert_eq!(blocks, 1);
+        assert!(kinds.path);
         assert!(out.contains("SMR BLOCKED"));
         assert!(out.contains("路径防护"));
+        assert!(out.contains("重要路径防护"));
+        assert!(out.contains("command"));
+        assert!(out.contains("path_protection"));
         assert!(!out.contains("stat /secure/vault"));
     }
 
@@ -421,8 +477,9 @@ mod tests {
 
         let mut stream = sample_stat_stream();
         stream = stream.replace("/secure/vault", "/tmp/public");
-        let (out, blocks) = transform_buffered_sse_ops(&stream, Some(&ops));
+        let (out, blocks, kinds) = transform_buffered_sse_ops(&stream, Some(&ops));
         assert_eq!(blocks, 0);
+        assert!(kinds.is_empty());
         assert!(out.contains("stat /tmp/public"));
     }
 
@@ -443,9 +500,10 @@ mod tests {
         .unwrap();
 
         let path = "/data/nlp/table-nlp";
-        let (out, blocks) =
+        let (out, blocks, kinds) =
             transform_buffered_sse_ops(&sample_deepseek_ls_stream(path), Some(&ops));
         assert_eq!(blocks, 0);
+        assert!(kinds.is_empty());
         assert!(out.contains("finish_reason"));
         assert!(out.contains("tool_calls"));
         let args = assembled_tool_args(&out);
@@ -486,7 +544,7 @@ mod tests {
             UiLanguage::Zh,
         )
         .unwrap();
-        let (out, blocks) = transform_buffered_sse_ops(&body, Some(&ops));
+        let (out, blocks, _kinds) = transform_buffered_sse_ops(&body, Some(&ops));
         assert_eq!(blocks, 0);
         assert!(
             out.contains(r#""arguments":"{"#) || out.contains(r#""arguments":"{\"command\""#),
@@ -515,11 +573,12 @@ mod tests {
         )
         .unwrap();
 
-        let (out, blocks) = transform_buffered_sse_ops(
+        let (out, blocks, kinds) = transform_buffered_sse_ops(
             &sample_deepseek_ls_stream("/secure/vault/secret"),
             Some(&ops),
         );
         assert_eq!(blocks, 1);
+        assert!(kinds.path);
         assert!(out.contains("SMR BLOCKED"));
     }
 }

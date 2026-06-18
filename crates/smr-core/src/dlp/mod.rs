@@ -118,6 +118,7 @@ impl DlpEngine {
         }
         let mut replacements = Vec::new();
         let mut needs_system_notice = false;
+        let dlp_notice_already_sent = self.sessions.dlp_system_notice_sent(session_id);
         for item in extracted {
             let scan_files = is_model_input(item, request_json);
             let whole_block = scan_files && is_tool_result_content(item, request_json);
@@ -130,15 +131,21 @@ impl DlpEngine {
             )?;
             if sanitized != item.text {
                 replacements.push((item.clone(), sanitized.clone()));
-                if self.replacement_requires_system_notice(
-                    item,
-                    &item.text,
-                    &sanitized,
-                    request_json,
-                ) {
+                if !dlp_notice_already_sent
+                    && !needs_system_notice
+                    && self.replacement_requires_system_notice(
+                        item,
+                        &item.text,
+                        &sanitized,
+                        request_json,
+                    )
+                {
                     needs_system_notice = true;
                 }
             }
+        }
+        if needs_system_notice {
+            self.sessions.mark_dlp_system_notice_sent(session_id);
         }
         let count = replacements.len();
         Ok((replacements, count, needs_system_notice))

@@ -3,6 +3,7 @@ use smr_protocol::{extract_texts, inject_response_texts, parse_json_body, serial
 
 use crate::ops::OperationSecurity;
 use crate::sse_sanitize::sanitize_openai_client_sse_chunk;
+use crate::ops::OpsBlockKinds;
 use crate::sse_tool_ops::transform_buffered_sse_ops;
 
 /// Scan SSE chunks: DLP (response-side file/content redaction) and operation security.
@@ -11,20 +12,22 @@ pub fn process_sse_response(
     session_id: &str,
     dlp: Option<&crate::dlp::DlpEngine>,
     ops: Option<&OperationSecurity>,
-) -> anyhow::Result<(Bytes, u32, u32, u32)> {
+) -> anyhow::Result<(Bytes, u32, u32, u32, OpsBlockKinds)> {
     let mut text = body.to_vec();
     let mut blocks = 0u32;
-    let mut observes = 0u32;
+    let observes = 0u32;
     let mut dlp_count = 0u32;
     let mut modified = false;
+    let mut block_kinds = OpsBlockKinds::default();
 
     if ops.is_some() {
         let body_str = String::from_utf8_lossy(&text);
-        let (transformed, gate_blocks) = transform_buffered_sse_ops(&body_str, ops);
+        let (transformed, gate_blocks, kinds) = transform_buffered_sse_ops(&body_str, ops);
         if gate_blocks > 0 {
             modified = true;
             blocks += gate_blocks;
         }
+        block_kinds.merge(kinds);
         if transformed != body_str {
             modified = true;
             text = transformed.into_bytes();
@@ -73,9 +76,9 @@ pub fn process_sse_response(
     }
 
     if modified {
-        Ok((Bytes::from(new_body), blocks, observes, dlp_count))
+        Ok((Bytes::from(new_body), blocks, observes, dlp_count, block_kinds))
     } else {
-        Ok((body.clone(), blocks, observes, dlp_count))
+        Ok((body.clone(), blocks, observes, dlp_count, block_kinds))
     }
 }
 

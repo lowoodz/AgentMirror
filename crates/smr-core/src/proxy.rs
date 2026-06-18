@@ -19,7 +19,9 @@ use crate::router::{convert_response_body, ForwardOptions, RouteBody, RouteResul
 use crate::sse_sanitize::sanitize_openai_client_json;
 use crate::sse_stream::SseTransformConfig;
 use crate::state::SharedApp;
-use crate::security_notice::{append_dlp_system_notice, append_ops_system_notices};
+use crate::security_notice::{
+    append_dlp_system_notice, append_ops_system_notices, prepend_ops_notices_to_completion,
+};
 use crate::streaming::{
     force_upstream_non_stream, is_sse_content_type, openai_chat_completion_to_sse,
     process_sse_response, request_has_tools, request_wants_stream,
@@ -119,24 +121,30 @@ impl ProxyService {
                 snap.dlp.register_path_triggers(session_id, &json);
             }
 
+            let mut ops_notices_appended = false;
             if snap.config.pipeline.ops_active() {
                 let ops_fields = filter_ops_request_fields(&json, &extracted);
+                let mut notice_kinds = snap.ops.take_pending_notices(session_id);
                 let (ops_replacements, blocks, observes, block_kinds) =
                     snap.ops.process_fields_with_mode(&ops_fields)?;
                 safety_blocks += blocks;
                 safety_observations += observes;
+                notice_kinds.merge(block_kinds);
                 if !ops_replacements.is_empty() {
                     inject_texts(&mut json, &ops_replacements)?;
-                    append_ops_system_notices(
-                        &mut json,
-                        block_kinds,
-                        snap.config.server.ui_language,
-                    );
                     events.push(
                         EventKind::OpBlock,
                         format!("blocked {} dangerous request tool_call(s)", ops_replacements.len()),
                         None,
                     );
+                }
+                if !notice_kinds.is_empty() {
+                    append_ops_system_notices(
+                        &mut json,
+                        notice_kinds,
+                        snap.config.server.ui_language,
+                    );
+                    ops_notices_appended = true;
                 }
             }
 
@@ -155,7 +163,7 @@ impl ProxyService {
                 if !dlp_replacements.is_empty() {
                     info!(count = dlp_replacements.len(), "DLP sanitized request fields");
                     inject_texts(&mut json, &dlp_replacements)?;
-                    if dlp_notice {
+                    if dlp_notice && !ops_notices_appended {
                         append_dlp_system_notice(&mut json, snap.config.server.ui_language);
                     }
                     events.push(
@@ -280,7 +288,8 @@ impl ProxyService {
                     && (is_sse_content_type(&resp_headers) || wants_stream)
                 {
                     let before = resp_body.clone();
-                    let (new_body, blocks, observes, sse_dlp) = process_sse_response(
+                    let (new_body, blocks, observes, sse_dlp, sse_block_kinds) =
+                        process_sse_response(
                         &resp_body,
                         session_id,
                         if snap.config.pipeline.dlp_active() {
@@ -298,6 +307,9 @@ impl ProxyService {
                     safety_blocks += blocks;
                     safety_observations += observes;
                     dlp_count += sse_dlp;
+                    if !sse_block_kinds.is_empty() {
+                        snap.ops.mark_pending_notices(session_id, sse_block_kinds);
+                    }
                     if resp_body != before {
                         if sse_dlp > 0 {
                             events.push(
@@ -345,7 +357,7 @@ impl ProxyService {
                             if snap.config.pipeline.ops_active() {
                                 let extracted = extract_texts(&json)?;
                                 let tool_only = filter_tool_related(&json, &extracted);
-                                let (ops_replacements, blocks, observes, _) =
+                                let (ops_replacements, blocks, observes, block_kinds) =
                                     snap.ops.process_fields_with_mode(&tool_only)?;
                                 safety_blocks += blocks;
                                 safety_observations += observes;
@@ -355,7 +367,14 @@ impl ProxyService {
                                         "operation security blocked response fields"
                                     );
                                     inject_response_texts(&mut json, &ops_replacements)?;
+                                    prepend_ops_notices_to_completion(
+                                        &mut json,
+                                        block_kinds,
+                                        snap.config.server.ui_language,
+                                    );
                                     resp_body = Bytes::from(serialize_json_body(&json)?);
+                                    snap.ops
+                                        .mark_pending_notices(session_id, block_kinds);
                                     events.push(
                                         EventKind::OpBlock,
                                         "blocked dangerous tool_call in response",

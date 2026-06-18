@@ -1,3 +1,4 @@
+use dashmap::DashMap;
 use parking_lot::RwLock;
 use regex::Regex;
 
@@ -15,12 +16,25 @@ pub struct OpsBlockKinds {
     pub operation: bool,
 }
 
+impl OpsBlockKinds {
+    pub fn is_empty(self) -> bool {
+        !self.path && !self.operation
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.path |= other.path;
+        self.operation |= other.operation;
+    }
+}
+
 pub struct OperationSecurity {
     rules: Vec<CompiledRule>,
     path_protection: PathProtection,
     operation_mode: OperationSecurityMode,
     path_protection_mode: OperationSecurityMode,
     ui_language: RwLock<UiLanguage>,
+    /// Response-side blocks queue system notices for the next client request.
+    pending_notices: DashMap<String, OpsBlockKinds>,
 }
 
 struct CompiledRule {
@@ -76,6 +90,7 @@ impl OperationSecurity {
             operation_mode,
             path_protection_mode,
             ui_language: RwLock::new(ui_language),
+            pending_notices: DashMap::new(),
         })
     }
 
@@ -83,8 +98,41 @@ impl OperationSecurity {
         *self.ui_language.write() = ui_language;
     }
 
-    fn ui_language(&self) -> UiLanguage {
+    pub fn ui_language(&self) -> UiLanguage {
         *self.ui_language.read()
+    }
+
+    pub fn mark_pending_notices(&self, session_id: &str, kinds: OpsBlockKinds) {
+        if kinds.is_empty() {
+            return;
+        }
+        self.pending_notices
+            .entry(session_id.to_string())
+            .and_modify(|existing| existing.merge(kinds))
+            .or_insert(kinds);
+    }
+
+    pub fn take_pending_notices(&self, session_id: &str) -> OpsBlockKinds {
+        self.pending_notices
+            .remove(session_id)
+            .map(|(_, kinds)| kinds)
+            .unwrap_or_default()
+    }
+
+    pub fn notice_text_for_kinds(&self, kinds: OpsBlockKinds) -> Option<String> {
+        let lang = self.ui_language();
+        let mut parts = Vec::new();
+        if kinds.path {
+            parts.push(lang.path_protection_system_notice());
+        }
+        if kinds.operation {
+            parts.push(lang.operation_security_system_notice());
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("\n"))
+        }
     }
 
     pub fn process_response(
@@ -129,10 +177,17 @@ impl OperationSecurity {
     }
 
     /// Assembled streaming tool-call arguments (e.g. exec JSON). Returns blocked payload when enforce triggers.
-    pub fn enforce_tool_call(&self, arguments: &str) -> Option<String> {
+    pub fn enforce_tool_call(&self, arguments: &str) -> Option<(String, OpsBlockKinds)> {
         self.check_and_enforce(arguments)
             .filter(|(_, enforced, _)| *enforced)
-            .map(|(payload, _, _)| payload)
+            .map(|(payload, _, kind)| {
+                let mut kinds = OpsBlockKinds::default();
+                match kind {
+                    BlockKind::Operation => kinds.operation = true,
+                    BlockKind::PathProtection => kinds.path = true,
+                }
+                (payload, kinds)
+            })
     }
 
     /// Returns a short finding for AgentMirror when text matches any enabled policy.
@@ -151,7 +206,7 @@ impl OperationSecurity {
 
     fn check_and_enforce(&self, text: &str) -> Option<(String, bool, BlockKind)> {
         let matched = self.check_text(text)?;
-        let kind = matched.block_kind();
+        let block_kind = matched.block_kind();
         let (enforce, rule_id, observe_kind) = match &matched {
             SecurityMatch::Operation { rule_id, .. } => (
                 self.operation_mode == OperationSecurityMode::Enforce,
@@ -165,14 +220,14 @@ impl OperationSecurity {
             ),
         };
         if enforce {
-            Some((matched.payload(), true, kind))
+            Some((matched.payload(), true, block_kind))
         } else {
             tracing::warn!(
                 rule_id = %rule_id,
                 kind = observe_kind,
                 "security observe: policy match detected"
             );
-            Some((matched.payload(), false, kind))
+            Some((matched.payload(), false, block_kind))
         }
     }
 
@@ -186,7 +241,7 @@ impl OperationSecurity {
                     &compiled.rule.id,
                 );
                 return Some(SecurityMatch::Operation {
-                    payload: wrap_blocked_payload(text, &msg, compiled.rule.operation),
+                    payload: wrap_blocked_payload(text, &msg, BlockKind::Operation),
                     rule_id: compiled.rule.id.clone(),
                 });
             }
@@ -195,7 +250,7 @@ impl OperationSecurity {
         if let Some((rule_id, level, path)) = self.path_protection.check(text) {
             let msg = lang.path_protection_block_message(level, &path, &rule_id);
             return Some(SecurityMatch::PathProtection {
-                payload: wrap_blocked_payload(text, &msg, OperationType::CommandExec),
+                payload: wrap_blocked_payload(text, &msg, BlockKind::PathProtection),
                 rule_id,
             });
         }
@@ -276,17 +331,44 @@ fn is_network_access(text: &str) -> bool {
         || lower.contains("https://")
 }
 
-fn wrap_blocked_payload(_original: &str, message: &str, op: OperationType) -> String {
-    if _original.trim_start().starts_with('{') {
-        serde_json::json!({
-            "smr_blocked": true,
-            "operation": format!("{:?}", op),
-            "message": message,
-        })
-        .to_string()
-    } else {
-        message.to_string()
+fn wrap_blocked_payload(original: &str, message: &str, kind: BlockKind) -> String {
+    if !original.trim_start().starts_with('{') {
+        return message.to_string();
     }
+
+    let smr_block_kind = match kind {
+        BlockKind::Operation => "operation_security",
+        BlockKind::PathProtection => "path_protection",
+    };
+    // OpenClaw `exec` requires a `command` field — use a shell no-op plus the block text.
+    let command = format!(": # {message}");
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(original) {
+        if let Some(obj) = value.as_object() {
+            let cmd_key = if obj.contains_key("command") {
+                "command"
+            } else if obj.contains_key("cmd") {
+                "cmd"
+            } else {
+                "command"
+            };
+            return serde_json::json!({
+                "smr_blocked": true,
+                "smr_block_kind": smr_block_kind,
+                cmd_key: command,
+                "message": message,
+            })
+            .to_string();
+        }
+    }
+
+    serde_json::json!({
+        "smr_blocked": true,
+        "smr_block_kind": smr_block_kind,
+        "command": command,
+        "message": message,
+    })
+    .to_string()
 }
 
 #[cfg(test)]
@@ -339,6 +421,61 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert!(out[0].1.contains("security policy"));
         assert!(out[0].1.contains("command execution"));
+    }
+
+    #[test]
+    fn path_protection_blocked_exec_preserves_command_schema() {
+        use crate::config::{PathProtectionLevel, PathProtectionRule};
+        use std::path::PathBuf;
+
+        let ops = test_ops(
+            &[],
+            &[PathProtectionRule {
+                id: "vault".into(),
+                enabled: true,
+                path: PathBuf::from("/secure/vault"),
+                level: PathProtectionLevel::DenyAccess,
+            }],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        );
+        let blocked = ops
+            .enforce_tool_call(r#"{"command":"ls /secure/vault"}"#)
+            .expect("blocked")
+            .0;
+        let parsed: serde_json::Value = serde_json::from_str(&blocked).unwrap();
+        assert_eq!(parsed["smr_block_kind"], "path_protection");
+        assert!(parsed.get("command").and_then(|v| v.as_str()).is_some());
+        assert!(blocked.contains("SMR BLOCKED"));
+        assert!(blocked.contains("路径防护"));
+    }
+
+    #[test]
+    fn pending_notices_merge_and_take() {
+        use crate::config::{PathProtectionLevel, PathProtectionRule};
+        use std::path::PathBuf;
+
+        let ops = test_ops(
+            &[],
+            &[PathProtectionRule {
+                id: "vault".into(),
+                enabled: true,
+                path: PathBuf::from("/secure/vault"),
+                level: PathProtectionLevel::DenyAccess,
+            }],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        );
+        let mut path_only = OpsBlockKinds::default();
+        path_only.path = true;
+        ops.mark_pending_notices("sess-1", path_only);
+        let mut op_only = OpsBlockKinds::default();
+        op_only.operation = true;
+        ops.mark_pending_notices("sess-1", op_only);
+        let taken = ops.take_pending_notices("sess-1");
+        assert!(taken.path);
+        assert!(taken.operation);
+        assert!(ops.take_pending_notices("sess-1").is_empty());
     }
 
     #[test]

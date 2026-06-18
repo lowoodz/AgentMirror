@@ -20,6 +20,43 @@ pub fn append_dlp_system_notice(body: &mut serde_json::Value, lang: UiLanguage) 
     append_system_message(body, lang.dlp_security_system_notice());
 }
 
+/// Prepend ops notices into an OpenAI chat completion assistant message (response JSON).
+pub fn prepend_ops_notices_to_completion(
+    body: &mut serde_json::Value,
+    kinds: OpsBlockKinds,
+    lang: UiLanguage,
+) {
+    if kinds.is_empty() {
+        return;
+    }
+    let mut parts = Vec::new();
+    if kinds.path {
+        parts.push(lang.path_protection_system_notice());
+    }
+    if kinds.operation {
+        parts.push(lang.operation_security_system_notice());
+    }
+    let notice = parts.join("\n");
+    let Some(message) = body
+        .get_mut("choices")
+        .and_then(|c| c.as_array_mut())
+        .and_then(|c| c.first_mut())
+        .and_then(|c| c.get_mut("message"))
+    else {
+        return;
+    };
+    let existing = message
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    let merged = if existing.is_empty() {
+        notice
+    } else {
+        format!("{notice}\n\n{existing}")
+    };
+    message["content"] = serde_json::Value::String(merged);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,5 +106,31 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("path protection"));
+    }
+
+    #[test]
+    fn prepend_ops_notices_into_completion_body() {
+        let mut body = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "tool_calls": []
+                }
+            }]
+        });
+        prepend_ops_notices_to_completion(
+            &mut body,
+            OpsBlockKinds {
+                path: true,
+                operation: false,
+            },
+            UiLanguage::Zh,
+        );
+        let content = body["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap();
+        assert!(content.contains("重要路径防护"));
+        assert!(content.contains("hello"));
     }
 }

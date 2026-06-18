@@ -15,6 +15,7 @@ pub struct ActiveFileContent {
 struct SessionState {
     active: Vec<ActiveFileContent>,
     remaining_calls: u32,
+    dlp_system_notice_sent: bool,
 }
 
 pub struct SessionGuard {
@@ -31,6 +32,7 @@ impl Clone for SessionGuard {
                 Mutex::new(SessionState {
                     active: state.active.clone(),
                     remaining_calls: state.remaining_calls,
+                    dlp_system_notice_sent: state.dlp_system_notice_sent,
                 }),
             );
         }
@@ -59,6 +61,7 @@ impl SessionGuard {
             Mutex::new(SessionState {
                 active: Vec::new(),
                 remaining_calls: 0,
+                dlp_system_notice_sent: false,
             })
         });
         let mut state = entry.lock().unwrap();
@@ -119,6 +122,24 @@ impl SessionGuard {
         {
             state.remaining_calls = state.remaining_calls.max(max_window);
         }
+    }
+
+    pub fn dlp_system_notice_sent(&self, session_id: &str) -> bool {
+        self.sessions
+            .get(session_id)
+            .map(|entry| entry.lock().unwrap().dlp_system_notice_sent)
+            .unwrap_or(false)
+    }
+
+    pub fn mark_dlp_system_notice_sent(&self, session_id: &str) {
+        let entry = self.sessions.entry(session_id.to_string()).or_insert_with(|| {
+            Mutex::new(SessionState {
+                active: Vec::new(),
+                remaining_calls: 0,
+                dlp_system_notice_sent: false,
+            })
+        });
+        entry.lock().unwrap().dlp_system_notice_sent = true;
     }
 
     pub fn sanitize_with_active(
