@@ -21,6 +21,28 @@ fn workspace_root() -> std::path::PathBuf {
         .join("../..")
 }
 
+/// Restores `SMR_CONFIG_DIR` on drop (integration tests that need an isolated file index).
+struct SmrConfigDirGuard {
+    prev: Option<String>,
+}
+
+impl SmrConfigDirGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let prev = std::env::var("SMR_CONFIG_DIR").ok();
+        std::env::set_var("SMR_CONFIG_DIR", path);
+        Self { prev }
+    }
+}
+
+impl Drop for SmrConfigDirGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var("SMR_CONFIG_DIR", v),
+            None => std::env::remove_var("SMR_CONFIG_DIR"),
+        }
+    }
+}
+
 fn test_config(upstream_base: &str) -> AppConfig {
     let mut groups = HashMap::new();
     groups.insert(
@@ -376,6 +398,8 @@ async fn openai_client_skips_non_matching_upstream_protocol() {
 
 #[tokio::test]
 async fn file_session_dlp_via_proxy() {
+    let config_home = tempfile::TempDir::new().unwrap();
+    let _config_dir = SmrConfigDirGuard::set(config_home.path());
     let tmp = tempfile::TempDir::new().unwrap();
     let secret = "P".repeat(65);
     std::fs::write(tmp.path().join("probe.txt"), &secret).unwrap();

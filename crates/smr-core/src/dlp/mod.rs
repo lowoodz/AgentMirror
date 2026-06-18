@@ -22,6 +22,7 @@ use smr_protocol::{
     extract_tool_call_texts, is_model_input, is_tool_result_content,
     ExtractedText,
 };
+use std::path::PathBuf;
 
 pub struct DlpEngine {
     content: ContentDlp,
@@ -47,11 +48,34 @@ impl DlpEngine {
         sessions: SessionGuard,
         vault: TokenVault,
     ) -> anyhow::Result<Self> {
+        Self::with_sessions_vault_and_file_index(config, sessions, vault, None)
+    }
+
+    /// Test / isolated runs: file index under `index_root` instead of the global config dir.
+    pub fn with_file_index_root(config: &AppConfig, index_root: PathBuf) -> anyhow::Result<Self> {
+        Self::with_sessions_vault_and_file_index(
+            config,
+            SessionGuard::new(),
+            TokenVault::new(),
+            Some(index_root),
+        )
+    }
+
+    fn with_sessions_vault_and_file_index(
+        config: &AppConfig,
+        sessions: SessionGuard,
+        vault: TokenVault,
+        file_index_root: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
         let enabled = config.pipeline.dlp_active();
         let reversible = config.pipeline.dlp_reversible;
+        let file = match file_index_root {
+            Some(root) => FileDlp::with_index_root(root, &config.file_rules)?,
+            None => FileDlp::new(&config.file_rules)?,
+        };
         Ok(Self {
             content: ContentDlp::new(&config.content_rules, &config.pipeline)?,
-            file: FileDlp::new(&config.file_rules)?,
+            file,
             sessions,
             vault,
             enabled,
@@ -319,7 +343,39 @@ mod file_session_tests {
     };
     use smr_protocol::extract_texts;
     use std::fs;
+    use std::time::Duration;
     use tempfile::TempDir;
+
+    /// File DLP tests must not write indexes under the real config dir (sandbox / stale hydrate).
+    struct IsolatedFileDlp {
+        _index_root: TempDir,
+        engine: DlpEngine,
+    }
+
+    impl IsolatedFileDlp {
+        fn new(config: &AppConfig) -> Self {
+            let index_root = TempDir::new().expect("temp file-index dir");
+            let engine =
+                DlpEngine::with_file_index_root(config, index_root.path().to_path_buf())
+                    .expect("dlp engine");
+            engine.reload(config).expect("dlp reload");
+            wait_file_index_ready(&engine);
+            Self {
+                _index_root: index_root,
+                engine,
+            }
+        }
+    }
+
+    fn wait_file_index_ready(dlp: &DlpEngine) {
+        for _ in 0..400 {
+            if dlp.is_file_index_ready() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(dlp.is_file_index_ready(), "file index not ready");
+    }
 
     #[test]
     fn session_trigger_then_scan_redacts_file_content() {
@@ -354,9 +410,8 @@ mod file_session_tests {
             insight: Default::default(),
         };
 
-        let dlp = DlpEngine::new(&config).unwrap();
-        dlp.reload(&config).unwrap();
-        assert!(dlp.is_file_index_ready(), "file index not ready");
+        let harness = IsolatedFileDlp::new(&config);
+        let dlp = &harness.engine;
 
         let session = "test-sess";
         let probe_path = probe.to_string_lossy().replace('\\', "/");
@@ -439,15 +494,8 @@ mod file_session_tests {
             insight: Default::default(),
         };
 
-        let dlp = DlpEngine::new(&config).unwrap();
-        dlp.reload(&config).unwrap();
-        for _ in 0..300 {
-            if dlp.is_file_index_ready() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(dlp.is_file_index_ready());
+        let harness = IsolatedFileDlp::new(&config);
+        let dlp = &harness.engine;
 
         let dir = tmp.path().to_string_lossy().replace('\\', "/");
         let session = "zone-ls";
@@ -507,15 +555,8 @@ mod file_session_tests {
             insight: Default::default(),
         };
 
-        let dlp = DlpEngine::new(&config).unwrap();
-        dlp.reload(&config).unwrap();
-        for _ in 0..400 {
-            if dlp.is_file_index_ready() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(dlp.is_file_index_ready());
+        let harness = IsolatedFileDlp::new(&config);
+        let dlp = &harness.engine;
 
         let zone_str = zone.to_string_lossy().replace('\\', "/");
         let session = "ls-listing";
@@ -575,15 +616,8 @@ mod file_session_tests {
             insight: Default::default(),
         };
 
-        let dlp = DlpEngine::new(&config).unwrap();
-        dlp.reload(&config).unwrap();
-        for _ in 0..300 {
-            if dlp.is_file_index_ready() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(dlp.is_file_index_ready());
+        let harness = IsolatedFileDlp::new(&config);
+        let dlp = &harness.engine;
 
         let zone_str = zone.to_string_lossy().replace('\\', "/");
         let session = "exec-cd-session";
@@ -664,15 +698,8 @@ mod file_session_tests {
             insight: Default::default(),
         };
 
-        let dlp = DlpEngine::new(&config).unwrap();
-        dlp.reload(&config).unwrap();
-        for _ in 0..400 {
-            if dlp.is_file_index_ready() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(dlp.is_file_index_ready());
+        let harness = IsolatedFileDlp::new(&config);
+        let dlp = &harness.engine;
 
         let session = "openclaw-pdftotext";
         let command = format!(
@@ -758,15 +785,8 @@ mod file_session_tests {
             insight: Default::default(),
         };
 
-        let dlp = DlpEngine::new(&config).unwrap();
-        dlp.reload(&config).unwrap();
-        for _ in 0..400 {
-            if dlp.is_file_index_ready() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(dlp.is_file_index_ready());
+        let harness = IsolatedFileDlp::new(&config);
+        let dlp = &harness.engine;
 
         let session = "postscript-bypass";
         let zone_str = zone.to_string_lossy().replace('\\', "/");
@@ -856,15 +876,8 @@ mod file_session_tests {
             insight: Default::default(),
         };
 
-        let dlp = DlpEngine::new(&config).unwrap();
-        dlp.reload(&config).unwrap();
-        for _ in 0..400 {
-            if dlp.is_file_index_ready() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(dlp.is_file_index_ready());
+        let harness = IsolatedFileDlp::new(&config);
+        let dlp = &harness.engine;
 
         let session = "scripts-hex-bypass";
         let script_path = script.to_string_lossy().replace('\\', "/");

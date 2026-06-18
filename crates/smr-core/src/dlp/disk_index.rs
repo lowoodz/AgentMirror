@@ -138,7 +138,10 @@ impl Drop for FileIndexManager {
 
 impl FileIndexManager {
     pub fn new(rules: &[FileRule]) -> Self {
-        let index_root = paths::config_dir().join("file-index");
+        Self::with_index_root(paths::config_dir().join("file-index"), rules)
+    }
+
+    pub fn with_index_root(index_root: PathBuf, rules: &[FileRule]) -> Self {
         let alive = Arc::new(AtomicBool::new(true));
         let inner = Arc::new(RwLock::new(IndexState {
             ready: AtomicBool::new(false),

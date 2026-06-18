@@ -3,6 +3,12 @@
 use std::path::PathBuf;
 
 pub fn config_dir() -> PathBuf {
+    if let Ok(override_dir) = std::env::var("SMR_CONFIG_DIR") {
+        let trimmed = override_dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("securemodelroute")
@@ -42,6 +48,18 @@ pub fn init_default_config(example: &str) -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_dir_honors_smr_config_dir_override() {
+        let prior = std::env::var("SMR_CONFIG_DIR").ok();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var("SMR_CONFIG_DIR", tmp.path());
+        assert_eq!(config_dir(), tmp.path());
+        match prior {
+            Some(v) => std::env::set_var("SMR_CONFIG_DIR", v),
+            None => std::env::remove_var("SMR_CONFIG_DIR"),
+        }
+    }
 
     #[test]
     fn config_dir_has_name() {

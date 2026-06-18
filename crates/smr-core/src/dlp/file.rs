@@ -22,6 +22,12 @@ impl FileDlp {
         })
     }
 
+    pub fn with_index_root(index_root: PathBuf, rules: &[FileRule]) -> Result<Self> {
+        Ok(Self {
+            index: FileIndexManager::with_index_root(index_root, rules),
+        })
+    }
+
     pub fn reload(&self, rules: &[FileRule]) -> Result<()> {
         self.index.rebuild_sync(rules)
     }
