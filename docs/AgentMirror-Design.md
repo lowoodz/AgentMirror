@@ -6,7 +6,6 @@
 
 | Document | Purpose |
 |----------|---------|
-| [`AgentMirror-Detailed-Plan.md`](AgentMirror-Detailed-Plan.md) | Full original implementation plan (canonical reference) |
 | `Agent_Cognitive_Reconstruction_Design.docx`, `ACRP_Complete_Design.docx` | Source design documents |
 | `Agent-Reflection-Prompt.txt` | Pipeline requirements checklist |
 
