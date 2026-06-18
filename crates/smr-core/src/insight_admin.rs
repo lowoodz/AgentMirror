@@ -331,11 +331,21 @@ async fn api_insight_daily(
     Path(date): Path<String>,
     Query(q): Query<DailyQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let llm_daily = s.app.config().insight.llm_daily;
     let store = s.app.insight.store();
+    let parsed_date = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let status = smr_insight::report::daily_report_status(&store, parsed_date, llm_daily)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let reports = store
         .get_daily_report(&date, q.agent_id.as_deref())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "date": date, "reports": reports })))
+    Ok(Json(serde_json::json!({
+        "date": date,
+        "reports": reports,
+        "availability": status.availability,
+        "run_count": status.run_count,
+    })))
 }
 
 async fn api_insight_daily_print(
@@ -367,9 +377,30 @@ async fn api_insight_generate_daily(
         chrono::Local::now().date_naive()
     };
     let app = s.app.clone();
-    let count = tokio::task::spawn_blocking(move || app.insight.generate_daily_for_date(date))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(serde_json::json!({ "date": date.to_string(), "generated": count })))
+    let date_str = date.to_string();
+    let (outcome, report) =
+        tokio::task::spawn_blocking(move || app.insight.generate_daily_for_date(date))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let generated = if outcome == smr_insight::report::DailyGenerateOutcome::Generated {
+        1
+    } else {
+        0
+    };
+    let reports = if let Some(report) = report {
+        vec![report]
+    } else {
+        s.app
+            .insight
+            .store()
+            .get_daily_report(&date_str, None)
+            .unwrap_or_default()
+    };
+    Ok(Json(serde_json::json!({
+        "date": date.to_string(),
+        "outcome": outcome,
+        "generated": generated,
+        "reports": reports,
+    })))
 }

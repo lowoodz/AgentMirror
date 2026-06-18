@@ -12,8 +12,8 @@ use crate::metrics::{InsightMetrics, InsightMetricsSnapshot, SharedMetrics};
 use crate::models::{InsightConfig, TraceTurn};
 use crate::pipeline::Pipeline;
 use crate::report::{
-    daily_report_markdown, generate_all_agents_daily_report, generate_llm_reflection_for_run,
-    sweep_idle_running_runs,
+    daily_report_markdown, generate_llm_reflection_for_run, sweep_idle_running_runs,
+    try_generate_daily_report, DailyGenerateOutcome,
 };
 use crate::safety::SafetyScanner;
 use crate::spill::SpillQueue;
@@ -198,22 +198,26 @@ impl InsightService {
         }
     }
 
-    pub fn generate_daily_for_date(&self, date: NaiveDate) -> anyhow::Result<usize> {
+    pub fn generate_daily_for_date(
+        &self,
+        date: NaiveDate,
+    ) -> anyhow::Result<(DailyGenerateOutcome, Option<crate::models::DailyReport>)> {
         let cfg = self.config.read().clone();
         let llm = self.llm.lock().clone();
-        if let Some(report) = generate_all_agents_daily_report(
+        let (outcome, report) = try_generate_daily_report(
             &self.store,
             date,
             llm.as_deref(),
             cfg.llm_daily,
             cfg.report_language(),
-        )? {
-            persist_daily_report(&self.store, &report)?;
-            self.metrics.bump_activity();
-            Ok(1)
-        } else {
-            Ok(0)
+        )?;
+        if outcome == DailyGenerateOutcome::Generated {
+            if let Some(ref report) = report {
+                persist_daily_report(&self.store, report)?;
+                self.metrics.bump_activity();
+            }
         }
+        Ok((outcome, report))
     }
 
     pub fn reset(&self) -> anyhow::Result<crate::store::ResetStats> {
@@ -446,25 +450,51 @@ fn spawn_daily_scheduler(
                     }
                     let yesterday = now.date_naive() - chrono::Duration::days(1);
                     let llm_client = llm.lock().clone();
-                    if let Ok(Some(report)) = generate_all_agents_daily_report(
+                    match try_generate_daily_report(
                         &store,
                         yesterday,
                         llm_client.as_deref(),
                         cfg.llm_daily,
                         cfg.report_language(),
                     ) {
-                        if let Err(err) = persist_daily_report(&store, &report) {
-                            warn!(?err, "AgentMirror scheduled daily report persist failed");
-                        } else {
+                        Ok((DailyGenerateOutcome::Generated, report)) => {
+                            if let Some(report) = report {
+                                if let Err(err) = persist_daily_report(&store, &report) {
+                                    warn!(?err, "AgentMirror scheduled daily report persist failed");
+                                } else {
+                                    let _ = store.set_meta(META_LAST_DAILY_REPORT_DATE, &today);
+                                    metrics.bump_activity();
+                                    tracing::info!(
+                                        date = %report.date,
+                                        "AgentMirror scheduled daily report generated"
+                                    );
+                                }
+                            } else {
+                                warn!(
+                                    date = %yesterday,
+                                    "AgentMirror scheduled daily report missing payload"
+                                );
+                            }
+                        }
+                        Ok((DailyGenerateOutcome::Unchanged, _)) => {
                             let _ = store.set_meta(META_LAST_DAILY_REPORT_DATE, &today);
-                            metrics.bump_activity();
-                            tracing::info!(
-                                date = %report.date,
-                                "AgentMirror scheduled daily report generated"
+                            tracing::debug!(
+                                date = %yesterday,
+                                "AgentMirror scheduled daily report skipped — already up to date"
                             );
                         }
-                    } else {
-                        let _ = store.set_meta(META_LAST_DAILY_REPORT_DATE, &today);
+                        Ok((DailyGenerateOutcome::NoRuns, _)) => {
+                            let _ = store.set_meta(META_LAST_DAILY_REPORT_DATE, &today);
+                        }
+                        Ok((DailyGenerateOutcome::Failed, _)) => {
+                            warn!(
+                                date = %yesterday,
+                                "AgentMirror scheduled daily report LLM failed"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(?err, "AgentMirror scheduled daily report failed");
+                        }
                     }
                     let retention = cfg.retention_days;
                     if retention > 0 {

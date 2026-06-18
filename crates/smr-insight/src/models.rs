@@ -270,6 +270,9 @@ pub struct DailyReport {
     pub progress_narrative: Option<String>,
     #[serde(default)]
     pub llm_enhanced: bool,
+    /// Fingerprint of runs included when this report was generated (run_id:turn:status).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fingerprint: Option<String>,
     /// Language used when generating this report (`en` / `zh`, synced from server.ui_language).
     #[serde(default = "default_report_language")]
     pub report_language: String,

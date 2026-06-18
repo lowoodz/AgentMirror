@@ -34,7 +34,7 @@ insight:
   retention_days: 30
   llm_critic: true  # reflection reports are LLM-only (every 10 turns while running + on run end/idle); set false for legacy rule baseline
   critic_model_group: high  # fallback group for AgentMirror critic / goal LLM calls
-  llm_daily: true  # LLM daily report for all agents (uses reflection reports as input)
+  llm_daily: true  # daily reports are LLM-only (uses per-run reflection reports as input); set false for legacy rule baseline
   include_failed_requests: false  # set true to trace blocked/failed proxy requests (request body only)
   # report_language follows server.ui_language (en/zh) automatically
   # Runs with no new events for 10+ minutes are finalized and get an LLM reflection report.

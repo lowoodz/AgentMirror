@@ -655,7 +655,7 @@ fn daily_system_prompt(language: ReportLanguage) -> String {
     )
 }
 
-/// Enhance a rule-built daily report using reflection reports as LLM input.
+/// Generate a daily report via LLM using per-run reflection inputs.
 pub fn generate_daily_report_llm(
     client: &dyn LlmClient,
     date: NaiveDate,
