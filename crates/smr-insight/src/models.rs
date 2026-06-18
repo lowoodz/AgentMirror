@@ -264,6 +264,9 @@ pub struct DailyReport {
     pub progress_narrative: Option<String>,
     #[serde(default)]
     pub llm_enhanced: bool,
+    /// Language used when generating this report (`en` / `zh`, synced from server.ui_language).
+    #[serde(default = "default_report_language")]
+    pub report_language: String,
     /// Deprecated — kept for stored-report compatibility.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_sections: Vec<DailyAgentSection>,
@@ -407,6 +410,12 @@ impl Default for InsightConfig {
             llm_daily: true,
             include_failed_requests: false,
         }
+    }
+}
+
+impl DailyReport {
+    pub fn language(&self) -> crate::locale::ReportLanguage {
+        crate::locale::ReportLanguage::parse(&self.report_language)
     }
 }
 

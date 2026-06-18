@@ -3,8 +3,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use crate::critic::{evaluate, CriticInput};
 use crate::graph::{build_graph, execution_summary};
 use crate::infer::{generate_daily_report_llm, generate_reflection_report_llm, DailyRunReflectionInput};
-use crate::llm::LlmClient;
 use crate::locale::ReportLanguage;
+use crate::llm::LlmClient;
 use crate::models::{
     CognitiveEvent, DailyAgentSection, DailyIssueItem, DailyReport, DailyRunSummary,
     DailyTaskProgress, CriticsScore, DAILY_REPORT_ALL_AGENTS, Issue, ReflectionReport,
@@ -79,7 +79,7 @@ pub fn build_reflection_report(
 
     let summary = execution_summary(&events);
     let execution_summary = if summary.is_empty() {
-        "No actions recorded yet".to_string()
+        language.empty_execution_summary().to_string()
     } else {
         summary
     };
@@ -117,13 +117,14 @@ pub fn build_reflection_report(
                     &execution_summary,
                     &events,
                     &safety_findings,
+                    language,
                 );
                 return Ok(prior);
             }
         }
     }
 
-    build_rule_reflection_report(run, &events, &execution_summary, &safety_findings)
+    build_rule_reflection_report(run, &events, &execution_summary, &safety_findings, language)
 }
 
 /// LLM reports when the run ends, or when the last event is idle ≥ RUN_REPORT_IDLE_MINUTES.
@@ -154,15 +155,19 @@ pub fn refresh_running_llm_report(
     execution_summary: &str,
     events: &[crate::models::CognitiveEvent],
     safety_findings: &[String],
+    language: ReportLanguage,
 ) {
     report.execution_summary = execution_summary.to_string();
     merge_safety_into_report(report, safety_findings);
-    let (_, _, _, _, outcome) = evaluate(CriticInput {
-        events,
-        turn_count: run.turn_count,
-        goal: &run.goal,
-        safety_findings,
-    });
+    let (_, _, _, _, outcome) = evaluate(
+        CriticInput {
+            events,
+            turn_count: run.turn_count,
+            goal: &run.goal,
+            safety_findings,
+        },
+        language,
+    );
     report.outcome = outcome;
 }
 
@@ -193,13 +198,17 @@ pub fn build_rule_reflection_report(
     events: &[crate::models::CognitiveEvent],
     execution_summary: &str,
     safety_findings: &[String],
+    language: ReportLanguage,
 ) -> anyhow::Result<ReflectionReport> {
-    let (critics, critic_analyses, issues, suggestions, outcome) = evaluate(CriticInput {
-        events,
-        turn_count: run.turn_count,
-        goal: &run.goal,
-        safety_findings,
-    });
+    let (critics, critic_analyses, issues, suggestions, outcome) = evaluate(
+        CriticInput {
+            events,
+            turn_count: run.turn_count,
+            goal: &run.goal,
+            safety_findings,
+        },
+        language,
+    );
 
     let risks = issues
         .iter()
@@ -350,10 +359,9 @@ pub fn generate_all_agents_daily_report(
                 });
             if let Some(issue) = report.issues.first() {
                 let (dimension, score) = lowest_critic_dimension(&report.critics);
-                let line = format!(
-                    "Run #{}: {}",
-                    run_short_id(&run.run_id),
-                    issue.message
+                let line = language.daily_issue_run_line(
+                    &run_short_id(&run.run_id),
+                    &issue.message,
                 );
                 if !top_issues.contains(&line) {
                     top_issues.push(line.clone());
@@ -406,14 +414,13 @@ pub fn generate_all_agents_daily_report(
         })
         .collect();
 
-    let summary = format!(
-        "{} runs on {} — {} completed, {} in progress, {} failed, {} LLM turns total.",
+    let summary = language.daily_baseline_summary(
         runs.len(),
         date,
         runs_completed,
         runs_running,
         runs_failed,
-        total_turns
+        total_turns,
     );
 
     let mut report = DailyReport {
@@ -435,6 +442,7 @@ pub fn generate_all_agents_daily_report(
         tasks_overview: None,
         progress_narrative: None,
         llm_enhanced: false,
+        report_language: language.as_str().to_string(),
         agent_sections,
     };
 
@@ -466,7 +474,7 @@ pub fn generate_daily_report(
 }
 
 pub fn daily_report_markdown(report: &DailyReport) -> String {
-    let zh = report.display_name.chars().any(|c| c > '\u{007F}');
+    let zh = report.language() == ReportLanguage::Zh;
     let badge = if report.llm_enhanced { "LLM" } else { "规则基线" };
     let badge_en = if report.llm_enhanced {
         "LLM"

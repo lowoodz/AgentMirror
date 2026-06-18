@@ -146,6 +146,20 @@ impl UiLanguage {
             ),
         }
     }
+
+    pub fn insight_operation_rule_match(self, rule_id: &str) -> String {
+        match self {
+            Self::En => format!("Matched operation security rule: {rule_id}"),
+            Self::Zh => format!("匹配操作安全规则：{rule_id}"),
+        }
+    }
+
+    pub fn insight_path_protection_rule_match(self, rule_id: &str) -> String {
+        match self {
+            Self::En => format!("Matched path protection rule: {rule_id}"),
+            Self::Zh => format!("匹配路径防护规则：{rule_id}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

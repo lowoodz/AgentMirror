@@ -4,6 +4,7 @@ use crate::critic::{evaluate, CriticInput};
 use crate::extract::{drafts_to_events, extract_from_turn, ExtractContext};
 use crate::graph::{build_graph, execution_summary};
 use crate::llm::LlmClient;
+use crate::locale::ReportLanguage;
 use crate::models::{EventKind, InsightConfig, RunRecord, RunStatus, TraceTurn};
 use crate::parser::{apply_messages_delta, parse_request, parse_response};
 use crate::report::{
@@ -172,12 +173,16 @@ impl Pipeline {
         run.graph_path = Some(graph_path);
 
         let safety_findings = scan_action_events(&all_events, self.safety.as_deref());
-        let (_, _, _, _, outcome) = evaluate(CriticInput {
-            events: &all_events,
-            turn_count: run.turn_count,
-            goal: &run.goal,
-            safety_findings: &safety_findings,
-        });
+        let language = self.config.report_language();
+        let (_, _, _, _, outcome) = evaluate(
+            CriticInput {
+                events: &all_events,
+                turn_count: run.turn_count,
+                goal: &run.goal,
+                safety_findings: &safety_findings,
+            },
+            language,
+        );
         run.status = outcome_from_status(run.status, outcome);
 
         self.store.update_run(&run)?;
@@ -189,7 +194,7 @@ impl Pipeline {
 
         let summary = execution_summary(&all_events);
         let execution_summary = if summary.is_empty() {
-            "No actions recorded yet".to_string()
+            language.empty_execution_summary().to_string()
         } else {
             summary
         };
@@ -204,6 +209,7 @@ impl Pipeline {
                         &execution_summary,
                         &all_events,
                         &safety_findings,
+                        language,
                     );
                     self.store.save_report(&prior_report)?;
                     self.store.mark_audit_processed(&turn.audit_id)?;
@@ -217,6 +223,7 @@ impl Pipeline {
             &all_events,
             &execution_summary,
             &safety_findings,
+            language,
         )?;
         self.store.save_report(&report)?;
 

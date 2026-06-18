@@ -138,12 +138,13 @@ impl OperationSecurity {
     /// Returns a short finding for AgentMirror when text matches any enabled policy.
     pub fn insight_policy_match(&self, text: &str) -> Option<String> {
         let matched = self.check_text(text)?;
+        let lang = self.ui_language();
         Some(match matched {
             SecurityMatch::Operation { rule_id, .. } => {
-                format!("Matched operation security rule: {rule_id}")
+                lang.insight_operation_rule_match(&rule_id)
             }
             SecurityMatch::PathProtection { rule_id, .. } => {
-                format!("Matched path protection rule: {rule_id}")
+                lang.insight_path_protection_rule_match(&rule_id)
             }
         })
     }

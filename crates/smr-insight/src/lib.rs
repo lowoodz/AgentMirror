@@ -12,6 +12,7 @@ pub mod pattern;
 pub mod pipeline;
 pub mod profile;
 pub mod report;
+pub mod rule_baseline;
 pub mod safety;
 pub mod separator;
 pub mod spill;

@@ -47,7 +47,7 @@ pub fn daily_reports_html(reports: &[DailyReport], title: &str) -> String {
 }
 
 fn render_daily_report_html(rep: &DailyReport) -> String {
-    let zh = rep.display_name.chars().any(|c| c > '\u{007F}');
+    let zh = rep.language() == crate::locale::ReportLanguage::Zh;
     let mode_label = if rep.llm_enhanced {
         if zh { "LLM" } else { "LLM" }
     } else if zh {
