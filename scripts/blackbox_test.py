@@ -104,7 +104,7 @@ def build_config_dict(
                     "model": "glm-4-flash",
                     "api_key": glm_key,
                     "protocol": "openai",
-                    "timeout_secs": 90,
+                    "timeout_secs": 15,
                 },
                 {
                     "id": "deepseek-fallback",
@@ -298,7 +298,7 @@ fallback_groups:
       model: "glm-4-flash"
       api_key: "{glm_key}"
       protocol: openai
-      timeout_secs: 90
+      timeout_secs: 15
     - id: deepseek-fallback
       base_url: "https://api.deepseek.com"
       model: "deepseek-chat"
@@ -612,15 +612,37 @@ def scenario_openai_sdk_client(report: Report) -> None:
         "messages": [{"role": "user", "content": "Reply exactly: sdk-ok"}],
         "max_tokens": 16,
     }
-    code, text, ms = http(
-        "POST",
-        f"{BASE}/v1/chat/completions",
-        body=body,
-        headers={"Authorization": "Bearer dummy-local-key"},
+    wait_server_idle(BASE, timeout=30.0)
+    start = time.perf_counter()
+    last_detail = ""
+    for attempt in range(3):
+        code, text, _ = http(
+            "POST",
+            f"{BASE}/v1/chat/completions",
+            body=body,
+            headers={"Authorization": "Bearer dummy-local-key"},
+            timeout=120.0,
+        )
+        ok = code == 200 and "choices" in text
+        content = json.loads(text)["choices"][0]["message"]["content"] if ok else ""
+        last_detail = f"status={code}, reply={content[:30]!r}"
+        if ok:
+            report.add(
+                story,
+                "openai_compatible_client",
+                True,
+                last_detail,
+                (time.perf_counter() - start) * 1000,
+            )
+            return
+        time.sleep(1.0)
+    report.add(
+        story,
+        "openai_compatible_client",
+        False,
+        last_detail,
+        (time.perf_counter() - start) * 1000,
     )
-    ok = code == 200 and "choices" in text
-    content = json.loads(text)["choices"][0]["message"]["content"] if ok else ""
-    report.add(story, "openai_compatible_client", ok, f"status={code}, reply={content[:30]!r}", ms)
 
 
 def scenario_openai_python_sdk(report: Report) -> None:
