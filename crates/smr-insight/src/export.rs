@@ -39,6 +39,22 @@ pub fn daily_reports_html(reports: &[DailyReport], title: &str) -> String {
          .daily-marker.icon.run {{ color:#0284c7; }}\
          .run-tag {{ font-family:ui-monospace,monospace; font-size:11px; color:var(--blue); }}\
          .score {{ color:var(--muted); font-size:12px; }}\
+         .overview-panel {{ display:flex; flex-direction:column; gap:10px; padding:10px 12px; border-radius:8px; background:var(--inset); border:1px solid var(--border); }}\
+         .overview-stats {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }}\
+         .overview-stat {{ display:flex; flex-direction:row; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; background:var(--surface); border:1px solid var(--border); min-width:0; }}\
+         .overview-emoji {{ font-size:18px; line-height:1; flex-shrink:0; align-self:center; }}\
+         .overview-stat-body {{ display:flex; flex-direction:column; justify-content:center; gap:2px; min-width:0; flex:1; }}\
+         .overview-val {{ font-size:18px; font-weight:700; line-height:1.1; }}\
+         .overview-lbl {{ font-size:10px; color:var(--muted); line-height:1.25; }}\
+         .overview-bar {{ display:flex; width:100%; height:8px; border-radius:999px; overflow:hidden; border:1px solid var(--border); background:#e2e8f0; }}\
+         .overview-bar-seg {{ height:100%; min-width:0; }}\
+         .overview-bar-seg.done {{ background:linear-gradient(90deg,#22c55e,#16a34a); }}\
+         .overview-bar-seg.run {{ background:linear-gradient(90deg,#38bdf8,#0284c7); }}\
+         .overview-bar-seg.fail {{ background:linear-gradient(90deg,#f87171,#dc2626); }}\
+         .overview-bar-seg.empty {{ flex:1; background:#cbd5e1; }}\
+         .overview-bar-head {{ display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; font-weight:600; color:var(--muted); }}\
+         .overview-legend {{ display:flex; flex-wrap:wrap; gap:6px 12px; margin-top:6px; font-size:11px; color:var(--muted); }}\
+         .overview-legend span {{ white-space:nowrap; }}\
          @media print {{ body {{ background:#fff; padding:10mm; }} .report {{ box-shadow:none; }} }}\
          </style></head><body>\
          <h1>{title}</h1>{body}</body></html>",
@@ -74,26 +90,7 @@ fn render_daily_report_html(rep: &DailyReport) -> String {
 
     body.push_str(r#"<section class="section"><h2>"#);
     body.push_str(if zh { "总览" } else { "Overview" });
-    body.push_str(r#"</h2><ul class="daily-items overview">"#);
-    body.push_str(&format!(
-        "<li><span class=\"daily-marker dot overview\"></span><span>{}: {}</span></li>",
-        if zh { "活跃 Agent" } else { "Active agents" },
-        rep.active_agents
-    ));
-    body.push_str(&format!(
-        "<li><span class=\"daily-marker dot overview\"></span><span>{}: {} / {}: {} / {}: {}</span></li>",
-        if zh { "完成任务" } else { "Completed" },
-        rep.runs_completed,
-        if zh { "进行中" } else { "In progress" },
-        rep.runs_running,
-        if zh { "失败" } else { "Failed" },
-        rep.runs_failed,
-    ));
-    body.push_str(&format!(
-        "<li><span class=\"daily-marker dot overview\"></span><span>{}: {}</span></li></ul></section>",
-        if zh { "总 LLM 轮次" } else { "Total LLM turns" },
-        rep.total_turns,
-    ));
+    body.push_str(&render_daily_overview_html(rep, zh));
 
     let tasks = daily_tasks(rep);
     if !tasks.is_empty() {
@@ -157,6 +154,82 @@ fn render_daily_report_html(rep: &DailyReport) -> String {
 
     body.push_str("</div></article>");
     body
+}
+
+fn render_daily_overview_html(rep: &DailyReport, zh: bool) -> String {
+    let done = rep.runs_completed;
+    let running = rep.runs_running;
+    let failed = rep.runs_failed;
+    let total = done + running + failed;
+    let bar_total = total.max(1);
+    let pct = |n: u32| {
+        if total == 0 {
+            0
+        } else {
+            ((n as f64 / bar_total as f64) * 100.0).round().max(2.0) as u32
+        }
+    };
+    let task_lbl = if zh { "任务" } else { "Tasks" };
+    let agents_lbl = if zh { "活跃 Agent" } else { "Active agents" };
+    let turns_lbl = if zh { "总 LLM 轮次" } else { "Total LLM turns" };
+    let done_lbl = if zh {
+        format!("完成 {done}")
+    } else {
+        format!("Done {done}")
+    };
+    let run_lbl = if zh {
+        format!("进行中 {running}")
+    } else {
+        format!("Running {running}")
+    };
+    let fail_lbl = if zh {
+        format!("失败 {failed}")
+    } else {
+        format!("Failed {failed}")
+    };
+    let bar_segs = if total == 0 {
+        r#"<div class="overview-bar-seg empty"></div>"#.to_string()
+    } else {
+        let mut segs = String::new();
+        if done > 0 {
+            segs.push_str(&format!(
+                r#"<div class="overview-bar-seg done" style="width:{}%"></div>"#,
+                pct(done)
+            ));
+        }
+        if running > 0 {
+            segs.push_str(&format!(
+                r#"<div class="overview-bar-seg run" style="width:{}%"></div>"#,
+                pct(running)
+            ));
+        }
+        if failed > 0 {
+            segs.push_str(&format!(
+                r#"<div class="overview-bar-seg fail" style="width:{}%"></div>"#,
+                pct(failed)
+            ));
+        }
+        segs
+    };
+    format!(
+        r#"</h2><div class="overview-panel"><div class="overview-stats">
+        <div class="overview-stat"><span class="overview-emoji">🤖</span><div class="overview-stat-body"><span class="overview-val">{active}</span><span class="overview-lbl">{agents_lbl}</span></div></div>
+        <div class="overview-stat"><span class="overview-emoji">📋</span><div class="overview-stat-body"><span class="overview-val">{total}</span><span class="overview-lbl">{task_lbl}</span></div></div>
+        <div class="overview-stat"><span class="overview-emoji">💬</span><div class="overview-stat-body"><span class="overview-val">{turns}</span><span class="overview-lbl">{turns_lbl}</span></div></div>
+        </div><div class="overview-bar-head"><span>📊</span><span>{task_lbl}</span></div>
+        <div class="overview-bar">{bar_segs}</div>
+        <div class="overview-legend"><span>✅ {done_lbl}</span><span>⏳ {run_lbl}</span><span>❌ {fail_lbl}</span></div>
+        </div></section>"#,
+        active = rep.active_agents,
+        turns = rep.total_turns,
+        agents_lbl = html_escape(agents_lbl),
+        task_lbl = html_escape(task_lbl),
+        turns_lbl = html_escape(turns_lbl),
+        done_lbl = html_escape(&done_lbl),
+        run_lbl = html_escape(&run_lbl),
+        fail_lbl = html_escape(&fail_lbl),
+        bar_segs = bar_segs,
+    )
 }
 
 fn daily_tasks(rep: &DailyReport) -> Vec<DailyTaskProgress> {
