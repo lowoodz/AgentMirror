@@ -185,3 +185,30 @@ fn runs_on_date_includes_cross_midnight_activity() {
         "cross-midnight run should appear on the day it ended"
     );
 }
+
+#[test]
+fn agents_on_date_lists_only_agents_with_runs_that_day() {
+    let (_dir, store) = open_store();
+    seed_agent(&store, "agent-a");
+    seed_agent(&store, "agent-b");
+    let day = NaiveDate::from_ymd_opt(2026, 6, 12).unwrap();
+    let started = Utc.with_ymd_and_hms(2026, 6, 12, 10, 0, 0).unwrap();
+    store
+        .insert_run(&RunRecord {
+            run_id: "run-a".to_string(),
+            agent_id: "agent-a".to_string(),
+            session_id: "sess-a".to_string(),
+            started_at: started,
+            ended_at: Some(started + chrono::Duration::minutes(5)),
+            status: RunStatus::Completed,
+            goal: "task a".to_string(),
+            turn_count: 1,
+            messages_seen: 0,
+            graph_path: None,
+        })
+        .unwrap();
+
+    let agents = store.agents_on_date(day).unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id, "agent-a");
+}

@@ -18,6 +18,17 @@ use smr_insight::profile::build_profile;
 struct RunsQuery {
     agent_id: Option<String>,
     limit: Option<usize>,
+    date: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AgentsQuery {
+    date: Option<String>,
+    limit: Option<usize>,
+}
+
+fn parse_insight_date(date: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
 }
 
 #[derive(Deserialize)]
@@ -111,9 +122,18 @@ async fn api_insight_status(State(s): State<HttpState>) -> Json<serde_json::Valu
     }))
 }
 
-async fn api_insight_agents(State(s): State<HttpState>) -> Json<serde_json::Value> {
+async fn api_insight_agents(
+    State(s): State<HttpState>,
+    Query(q): Query<AgentsQuery>,
+) -> Json<serde_json::Value> {
     let store = s.app.insight.store();
-    let agents = store.list_agents(200).unwrap_or_default();
+    let limit = q.limit.unwrap_or(200).min(500);
+    let agents = if let Some(date_str) = q.date.as_deref().and_then(parse_insight_date) {
+        store.agents_on_date(date_str).unwrap_or_default()
+    } else {
+        store.list_agents(limit).unwrap_or_default()
+    };
+    let agents: Vec<_> = agents.into_iter().take(limit).collect();
     Json(serde_json::json!({ "agents": agents }))
 }
 
@@ -158,9 +178,22 @@ async fn api_insight_runs(
 ) -> Json<serde_json::Value> {
     let store = s.app.insight.store();
     let limit = q.limit.unwrap_or(100).min(500);
-    let runs = store
-        .list_runs(q.agent_id.as_deref(), limit)
-        .unwrap_or_default();
+    let mut runs = if let Some(date) = q.date.as_deref().and_then(parse_insight_date) {
+        if let Some(agent_id) = q.agent_id.as_deref() {
+            store.runs_for_agent_on_date(agent_id, date)
+        } else {
+            store.runs_on_date(date)
+        }
+        .unwrap_or_default()
+    } else {
+        store
+            .list_runs(q.agent_id.as_deref(), limit)
+            .unwrap_or_default()
+    };
+    if q.date.is_some() {
+        runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        runs.truncate(limit);
+    }
     let run_ids: Vec<String> = runs.iter().map(|r| r.run_id.clone()).collect();
     let audit_map = store.audit_ids_map_for_runs(&run_ids).unwrap_or_default();
     let audit_ids: Vec<String> = audit_map

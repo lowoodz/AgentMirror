@@ -579,10 +579,26 @@ fn build_rule_daily_content(
 }
 
 /// Stable fingerprint of runs on a calendar day — used to detect stale daily reports.
-pub fn daily_runs_fingerprint(runs: &[RunRecord]) -> String {
+/// Includes reflection report timestamps so a daily digest regenerates when underlying
+/// reflection reports change.
+pub fn daily_runs_fingerprint(store: &InsightStore, runs: &[RunRecord]) -> String {
     let mut parts: Vec<String> = runs
         .iter()
-        .map(|r| format!("{}:{}:{}", r.run_id, r.turn_count, r.status.as_str()))
+        .map(|r| {
+            let report_ts = store
+                .get_report(&r.run_id)
+                .ok()
+                .flatten()
+                .map(|rep| rep.generated_at.timestamp())
+                .unwrap_or(0);
+            format!(
+                "{}:{}:{}:{}",
+                r.run_id,
+                r.turn_count,
+                r.status.as_str(),
+                report_ts
+            )
+        })
         .collect();
     parts.sort();
     parts.join("|")
@@ -616,7 +632,7 @@ pub fn daily_report_status(
             has_llm_report: false,
         });
     }
-    let fp = daily_runs_fingerprint(&runs);
+    let fp = daily_runs_fingerprint(store, &runs);
     let reports = store.get_daily_report(&date.to_string(), None)?;
     if let Some(report) = reports.first() {
         let displayable = !llm_daily || report.llm_enhanced;
@@ -662,7 +678,7 @@ pub fn try_generate_daily_report(
     }
 
     let runs = store.runs_on_date(date)?;
-    let fingerprint = daily_runs_fingerprint(&runs);
+    let fingerprint = daily_runs_fingerprint(store, &runs);
     let Some(mut report) =
         generate_all_agents_daily_report(store, date, llm, llm_daily, language, &fingerprint)?
     else {
@@ -793,7 +809,7 @@ pub fn generate_daily_report(
     date: NaiveDate,
 ) -> anyhow::Result<Option<DailyReport>> {
     let runs = store.runs_on_date(date)?;
-    let fp = daily_runs_fingerprint(&runs);
+    let fp = daily_runs_fingerprint(store, &runs);
     generate_all_agents_daily_report(store, date, None, false, ReportLanguage::En, &fp)
 }
 
@@ -1246,6 +1262,92 @@ mod tests {
     }
 
     #[test]
+    fn daily_status_needs_regeneration_when_reflection_updates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store =
+            InsightStore::open(dir.path(), dir.path().join("graphs")).expect("store");
+        let date = chrono::Local::now().date_naive();
+        store
+            .upsert_agent(&crate::models::AgentRecord {
+                agent_id: "a1".into(),
+                display_name: "Agent".into(),
+                agent_type: "agent".into(),
+                system_hash: String::new(),
+                tools_json: "[]".into(),
+                first_seen: Utc::now(),
+                last_seen: Utc::now(),
+            })
+            .expect("agent");
+        let run = RunRecord {
+            run_id: "r1".into(),
+            agent_id: "a1".into(),
+            session_id: "s1".into(),
+            started_at: Utc::now(),
+            ended_at: Some(Utc::now()),
+            status: RunStatus::Completed,
+            goal: "task".into(),
+            turn_count: 3,
+            messages_seen: 0,
+            graph_path: None,
+        };
+        store.insert_run(&run).expect("run");
+        let fp_before = daily_runs_fingerprint(&store, std::slice::from_ref(&run));
+        let report = DailyReport {
+            date: date.to_string(),
+            agent_id: DAILY_REPORT_ALL_AGENTS.to_string(),
+            display_name: "All".into(),
+            summary: String::new(),
+            active_agents: 1,
+            runs_completed: 1,
+            runs_failed: 0,
+            runs_running: 0,
+            total_turns: 3,
+            task_progress: vec![],
+            daily_issues: vec![],
+            top_issues: vec![],
+            top_suggestions: vec![],
+            run_summaries: vec![],
+            generated_at: Utc::now(),
+            tasks_overview: None,
+            progress_narrative: None,
+            llm_enhanced: true,
+            source_fingerprint: Some(fp_before),
+            report_language: "en".into(),
+            agent_sections: vec![],
+        };
+        store.save_daily_report(&report).expect("save");
+        store
+            .save_report(&ReflectionReport {
+                run_id: "r1".into(),
+                goal: "task".into(),
+                original_goal: Some("task".into()),
+                execution_summary: "done".into(),
+                outcome: RunOutcome::Success,
+                issues: vec![],
+                risks: vec![],
+                suggestions: vec![],
+                critics: CriticsScore::default(),
+                critic_analyses: Default::default(),
+                generated_at: Utc::now(),
+                dialectical: None,
+                counterfactuals: vec![],
+                estimated_improvement: None,
+                logical_analysis: None,
+                reflection_summary: Some("summary".into()),
+                llm_enhanced: true,
+                llm_event_count: 3,
+                llm_turn_count: 3,
+                llm_run_status: Some("completed".into()),
+            })
+            .expect("reflection");
+        let status = daily_report_status(&store, date, true).expect("status");
+        assert_eq!(
+            status.availability,
+            DailyReportAvailability::NeedsGeneration
+        );
+    }
+
+    #[test]
     fn daily_status_up_to_date_when_fingerprint_matches() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store =
@@ -1275,7 +1377,7 @@ mod tests {
             graph_path: None,
         };
         store.insert_run(&run).expect("run");
-        let fp = daily_runs_fingerprint(std::slice::from_ref(&run));
+        let fp = daily_runs_fingerprint(&store, std::slice::from_ref(&run));
         let report = DailyReport {
             date: date.to_string(),
             agent_id: DAILY_REPORT_ALL_AGENTS.to_string(),

@@ -481,6 +481,26 @@ impl InsightStore {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
+    /// Agents that had at least one run overlapping the given calendar day.
+    pub fn agents_on_date(&self, date: NaiveDate) -> Result<Vec<AgentRecord>> {
+        let runs = self.runs_on_date(date)?;
+        let mut seen = std::collections::BTreeSet::new();
+        let mut agents = Vec::new();
+        for run in runs {
+            if seen.insert(run.agent_id.clone()) {
+                if let Some(agent) = self.get_agent(&run.agent_id)? {
+                    agents.push(agent);
+                }
+            }
+        }
+        agents.sort_by(|a, b| {
+            a.display_name
+                .cmp(&b.display_name)
+                .then_with(|| a.agent_id.cmp(&b.agent_id))
+        });
+        Ok(agents)
+    }
+
     pub fn graph_path_for_run(&self, run_id: &str) -> PathBuf {
         self.graphs_dir.join(format!("{run_id}.json"))
     }
