@@ -241,17 +241,12 @@ impl InsightTapState {
                 None
             }
         };
-        turn.response_body = if let Some(agg) = aggregated {
-            if smr_insight::usage::extract_token_usage(&agg).is_empty()
-                && !smr_insight::usage::extract_token_usage(&raw).is_empty()
-            {
-                raw
-            } else {
-                agg
-            }
+        let client_body = if let Some(agg) = aggregated {
+            agg
         } else {
-            raw
+            raw.clone()
         };
+        turn.response_body = prefer_body_with_usage(client_body, Some(raw));
         if !turn.request_body.is_empty() || !turn.response_body.is_empty() {
             self.insight.submit_turn(turn);
         }
@@ -287,6 +282,19 @@ impl Drop for InsightTapStream {
     fn drop(&mut self) {
         self.state.flush();
     }
+}
+
+/// Prefer a response body that carries token usage (upstream JSON over client SSE).
+pub fn prefer_body_with_usage(client: Vec<u8>, upstream: Option<Vec<u8>>) -> Vec<u8> {
+    if !smr_insight::usage::extract_token_usage(&client).is_empty() {
+        return client;
+    }
+    if let Some(up) = upstream {
+        if !smr_insight::usage::extract_token_usage(&up).is_empty() {
+            return up;
+        }
+    }
+    client
 }
 
 /// Accumulate SSE response bytes, aggregate deltas, and submit to AgentMirror when the stream ends.

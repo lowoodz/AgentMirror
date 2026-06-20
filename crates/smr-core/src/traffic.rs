@@ -141,13 +141,14 @@ impl TrafficLog {
     }
 
     /// Load request/response bodies saved for an audit (`request_out` + `response_out`).
+    /// When `response_out` is client-facing SSE without usage, fall back to upstream `response_in`.
     pub fn bodies_for_audit(&self, audit_id: &str) -> Option<(Vec<u8>, Vec<u8>)> {
         let records = self.list_by_audit(audit_id);
         if records.is_empty() {
             return None;
         }
         let request = read_body_for_phases(&records, &["request_out", "request_in"]);
-        let response = read_body_for_phases(&records, &["response_out"]);
+        let response = response_body_for_replay(&records);
         if request.is_none() && response.is_none() {
             return None;
         }
@@ -497,6 +498,25 @@ fn read_body_for_phases(records: &[TrafficRecord], phases: &[&str]) -> Option<Ve
     None
 }
 
+fn response_body_for_replay(records: &[TrafficRecord]) -> Option<Vec<u8>> {
+    let out = read_body_for_phases(records, &["response_out"]);
+    let upstream = read_body_for_phases(records, &["response_in"]);
+    match (out, upstream) {
+        (Some(client), Some(up)) => {
+            if smr_insight::usage::extract_token_usage(&client).is_empty()
+                && !smr_insight::usage::extract_token_usage(&up).is_empty()
+            {
+                Some(up)
+            } else {
+                Some(client)
+            }
+        }
+        (Some(client), None) => Some(client),
+        (None, Some(up)) => Some(up),
+        (None, None) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +584,26 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, id);
         assert_eq!(records[0].session_id, "sess-1");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bodies_for_audit_prefers_response_in_when_out_has_no_usage() {
+        let dir = std::env::temp_dir().join(format!("smr-traffic-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = test_log(dir.clone());
+        let audit = "audit-usage-fallback";
+        let sse = b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n";
+        let json = br#"{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}"#;
+        log.record(audit, "sess", "response_out", sse, ABS_MAX_BODY_BYTES);
+        log.record(audit, "sess", "response_in", json, ABS_MAX_BODY_BYTES);
+        log.record(audit, "sess", "request_out", br#"{"messages":[]}"#, ABS_MAX_BODY_BYTES);
+
+        let (req, resp) = log.bodies_for_audit(audit).unwrap();
+        assert_eq!(req, br#"{"messages":[]}"#);
+        assert_eq!(resp, json);
+        let usage = smr_insight::usage::extract_token_usage(&resp);
+        assert_eq!(usage.total_tokens, 12);
         let _ = std::fs::remove_dir_all(dir);
     }
 

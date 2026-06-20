@@ -195,6 +195,14 @@ pub fn openai_chat_completion_to_sse(completion: &serde_json::Value) -> anyhow::
     let mut fin = base();
     fin["choices"] = json!([{"index": 0, "delta": {}, "finish_reason": finish}]);
     append_sse_line(&mut out, &fin);
+    if let Some(usage) = completion.get("usage") {
+        if usage.is_object() && !usage.as_object().is_some_and(|o| o.is_empty()) {
+            let mut usage_chunk = base();
+            usage_chunk["choices"] = json!([]);
+            usage_chunk["usage"] = usage.clone();
+            append_sse_line(&mut out, &usage_chunk);
+        }
+    }
     out.push_str("data: [DONE]\n\n");
     Ok(Bytes::from(out))
 }
@@ -240,5 +248,25 @@ mod tests {
         });
         ensure_openai_stream_usage(&mut body);
         assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn openai_chat_completion_to_sse_includes_usage_chunk() {
+        let completion = json!({
+            "id": "c1",
+            "model": "m",
+            "created": 1,
+            "choices": [{
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+        });
+        let sse = openai_chat_completion_to_sse(&completion).unwrap();
+        let text = String::from_utf8_lossy(&sse);
+        assert!(text.contains(r#""usage""#));
+        assert!(text.contains(r#""total_tokens":7"#));
+        let usage = smr_insight::usage::extract_token_usage(&sse);
+        assert_eq!(usage.total_tokens, 7);
     }
 }

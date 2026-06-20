@@ -250,6 +250,7 @@ impl ProxyService {
 
         let cross_protocol = client_protocol != endpoint_protocol;
 
+        let mut insight_response_snapshot: Option<Vec<u8>> = None;
         let proxy_body = match attempt.body {
             RouteBody::SseStream(stream) => {
                 if needs_stream_transform {
@@ -419,6 +420,9 @@ impl ProxyService {
                         if let Ok(mut json) = parse_json_body(&resp_body) {
                             let _ = sanitize_openai_client_json(&mut json);
                             if client_wants_stream {
+                                if snap.config.insight.enabled {
+                                    insight_response_snapshot = Some(resp_body.to_vec());
+                                }
                                 resp_body = openai_chat_completion_to_sse(&json)?;
                                 resp_headers.insert(
                                     http::header::CONTENT_TYPE,
@@ -521,13 +525,17 @@ impl ProxyService {
             proxy_body = match proxy_body {
                 ProxyBody::Buffered(b) => {
                     if !insight_request_snapshot.is_empty() || !b.is_empty() {
+                        let response_body = crate::insight_sse::prefer_body_with_usage(
+                            b.to_vec(),
+                            insight_response_snapshot,
+                        );
                         self.app.insight.submit_turn(smr_insight::TraceTurn {
                             audit_id: audit.id.clone(),
                             session_id: session_id.to_string(),
                             agent_header,
                             timestamp: audit.timestamp,
                             request_body: insight_request_snapshot,
-                            response_body: b.to_vec(),
+                            response_body,
                         });
                     }
                     ProxyBody::Buffered(b)
