@@ -310,6 +310,10 @@ def normalize_upstream_body(body: dict | None) -> dict:
         return {}
     out = dict(body)
     out.pop("model", None)
+    # AgentMirror injects include_usage on OpenAI streams for token stats (harmless upstream hint).
+    opts = out.get("stream_options")
+    if isinstance(opts, dict) and set(opts.keys()) <= {"include_usage"} and opts.get("include_usage") is True:
+        out.pop("stream_options", None)
     return out
 
 
