@@ -95,7 +95,10 @@ fn test_config(upstream_base: &str) -> AppConfig {
     }
 }
 
-fn make_app(config: AppConfig) -> (Arc<SharedApp>, ProxyService) {
+fn make_app(mut config: AppConfig) -> (Arc<SharedApp>, ProxyService) {
+    // Avoid background insight LLM probes hitting mock upstreams during tests.
+    config.insight.llm_critic = false;
+    config.insight.llm_daily = false;
     let mut tmp = NamedTempFile::new().unwrap();
     write!(tmp, "{}", serde_yaml::to_string(&config).unwrap()).unwrap();
     let storage = Arc::new(

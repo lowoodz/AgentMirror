@@ -467,6 +467,9 @@ mod tests {
             turn_count: 1,
             messages_seen: 3,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(!should_start_new_run(&req, Some(&run), Utc::now()));
     }
@@ -506,6 +509,9 @@ mod tests {
             turn_count: 5,
             messages_seen: 10,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(!should_start_new_run(&req, Some(&run), Utc::now()));
     }
@@ -552,6 +558,9 @@ mod tests {
             turn_count: 2,
             messages_seen: 1,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(!should_start_new_run(&req, Some(&run), Utc::now()));
     }
@@ -570,6 +579,9 @@ mod tests {
             turn_count: 1,
             messages_seen: 1,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(should_start_new_run(&req, Some(&run), Utc::now()));
     }
@@ -588,6 +600,9 @@ mod tests {
             turn_count: 2,
             messages_seen: 2,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(should_start_new_run(&req, Some(&run), Utc::now()));
     }

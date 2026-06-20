@@ -128,13 +128,33 @@ async fn api_insight_agents(
 ) -> Json<serde_json::Value> {
     let store = s.app.insight.store();
     let limit = q.limit.unwrap_or(200).min(500);
-    let agents = if let Some(date_str) = q.date.as_deref().and_then(parse_insight_date) {
-        store.agents_on_date(date_str).unwrap_or_default()
+    let date = q.date.as_deref().and_then(parse_insight_date);
+    let agents = if let Some(date) = date {
+        store.agents_on_date(date).unwrap_or_default()
     } else {
         store.list_agents(limit).unwrap_or_default()
     };
     let agents: Vec<_> = agents.into_iter().take(limit).collect();
-    Json(serde_json::json!({ "agents": agents }))
+    let token_totals = date
+        .and_then(|d| store.agent_token_totals_on_date(d).ok())
+        .unwrap_or_default();
+    let agents_json: Vec<_> = agents
+        .into_iter()
+        .map(|a| {
+            let daily_tokens = token_totals.get(&a.agent_id).copied().unwrap_or(0);
+            serde_json::json!({
+                "agent_id": a.agent_id,
+                "display_name": a.display_name,
+                "agent_type": a.agent_type,
+                "system_hash": a.system_hash,
+                "tools_json": a.tools_json,
+                "first_seen": a.first_seen,
+                "last_seen": a.last_seen,
+                "daily_tokens": daily_tokens,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "agents": agents_json }))
 }
 
 async fn api_insight_agent_profile(

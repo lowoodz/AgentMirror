@@ -45,6 +45,9 @@ fn seed_run_with_actions(
             turn_count: actions.len() as u32,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         })
         .unwrap();
     for (i, summary) in actions.iter().enumerate() {
@@ -173,6 +176,9 @@ fn runs_on_date_includes_cross_midnight_activity() {
             turn_count: 2,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         })
         .unwrap();
 
@@ -205,6 +211,9 @@ fn agents_on_date_lists_only_agents_with_runs_that_day() {
             turn_count: 1,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         })
         .unwrap();
 

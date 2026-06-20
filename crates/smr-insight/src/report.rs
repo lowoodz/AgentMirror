@@ -422,6 +422,7 @@ struct DailyReportInputs {
     runs_failed: u32,
     runs_running: u32,
     total_turns: u32,
+    total_tokens: u64,
     active_agents: u32,
     run_summaries: Vec<DailyRunSummary>,
     run_inputs: Vec<DailyRunReflectionInput>,
@@ -437,6 +438,7 @@ fn collect_daily_report_inputs(
     let mut runs_failed = 0u32;
     let mut runs_running = 0u32;
     let mut total_turns = 0u32;
+    let mut total_tokens = 0u64;
     let mut run_summaries = Vec::new();
     let mut run_inputs = Vec::new();
     let mut per_agent_runs: std::collections::HashMap<String, u32> =
@@ -444,6 +446,7 @@ fn collect_daily_report_inputs(
 
     for run in runs {
         total_turns += run.turn_count;
+        total_tokens += run.total_tokens;
         *per_agent_runs.entry(run.agent_id.clone()).or_insert(0) += 1;
         match run.status {
             RunStatus::Completed => runs_completed += 1,
@@ -519,6 +522,7 @@ fn collect_daily_report_inputs(
         runs_failed,
         runs_running,
         total_turns,
+        total_tokens,
         active_agents,
         run_summaries,
         run_inputs,
@@ -592,10 +596,11 @@ pub fn daily_runs_fingerprint(store: &InsightStore, runs: &[RunRecord]) -> Strin
                 .map(|rep| rep.generated_at.timestamp())
                 .unwrap_or(0);
             format!(
-                "{}:{}:{}:{}",
+                "{}:{}:{}:{}:{}",
                 r.run_id,
                 r.turn_count,
                 r.status.as_str(),
+                r.total_tokens,
                 report_ts
             )
         })
@@ -718,6 +723,7 @@ fn assemble_daily_report(
         runs_failed: inputs.runs_failed,
         runs_running: inputs.runs_running,
         total_turns: inputs.total_turns,
+        total_tokens: inputs.total_tokens,
         task_progress,
         daily_issues,
         top_issues,
@@ -838,7 +844,8 @@ pub fn daily_report_markdown(report: &DailyReport) -> String {
             "- 完成任务: {} / 进行中: {} / 失败: {}\n",
             report.runs_completed, report.runs_running, report.runs_failed
         ));
-        out.push_str(&format!("- 总 LLM 轮次: {}\n\n", report.total_turns));
+        out.push_str(&format!("- 总 LLM 轮次: {}\n", report.total_turns));
+        out.push_str(&format!("- Token 消耗: {}\n\n", report.total_tokens));
     } else {
         out.push_str(&format!(
             "# {} · Daily             Generated {} ({}) \n\n",
@@ -850,7 +857,8 @@ pub fn daily_report_markdown(report: &DailyReport) -> String {
             "- Completed: {} / In progress: {} / Failed: {}\n",
             report.runs_completed, report.runs_running, report.runs_failed
         ));
-        out.push_str(&format!("- Total LLM turns: {}\n\n", report.total_turns));
+        out.push_str(&format!("- Total LLM turns: {}\n", report.total_turns));
+        out.push_str(&format!("- Token usage: {}\n\n", report.total_tokens));
     }
 
     let tasks = if !report.task_progress.is_empty() {
@@ -1035,6 +1043,9 @@ mod tests {
             turn_count: 5,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(!should_generate_llm_report(
             &run,
@@ -1057,6 +1068,9 @@ mod tests {
             turn_count: 5,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         let last = Utc::now() - chrono::Duration::minutes(11);
         assert!(should_generate_llm_report(&run, 10, None, last));
@@ -1075,6 +1089,9 @@ mod tests {
             turn_count: 5,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(should_generate_llm_report(
             &run,
@@ -1097,6 +1114,9 @@ mod tests {
             turn_count: 10,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         assert!(should_generate_llm_report(
             &run,
@@ -1119,6 +1139,9 @@ mod tests {
             turn_count: 10,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         let prior = ReflectionReport {
             run_id: "r1".into(),
@@ -1163,6 +1186,9 @@ mod tests {
             turn_count: 12,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         let prior = ReflectionReport {
             run_id: "r1".into(),
@@ -1207,6 +1233,9 @@ mod tests {
             turn_count: 5,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         let prior = ReflectionReport {
             run_id: "r1".into(),
@@ -1258,6 +1287,9 @@ mod tests {
             turn_count,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         }
     }
 
@@ -1289,6 +1321,9 @@ mod tests {
             turn_count: 3,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         store.insert_run(&run).expect("run");
         let fp_before = daily_runs_fingerprint(&store, std::slice::from_ref(&run));
@@ -1302,6 +1337,7 @@ mod tests {
             runs_failed: 0,
             runs_running: 0,
             total_turns: 3,
+            total_tokens: 0,
             task_progress: vec![],
             daily_issues: vec![],
             top_issues: vec![],
@@ -1375,6 +1411,9 @@ mod tests {
             turn_count: 3,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         store.insert_run(&run).expect("run");
         let fp = daily_runs_fingerprint(&store, std::slice::from_ref(&run));
@@ -1388,6 +1427,7 @@ mod tests {
             runs_failed: 0,
             runs_running: 0,
             total_turns: 3,
+            total_tokens: 0,
             task_progress: vec![],
             daily_issues: vec![],
             top_issues: vec![],
@@ -1434,6 +1474,9 @@ mod tests {
             turn_count: 3,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         store.insert_run(&run).expect("run");
         let (outcome, report) =

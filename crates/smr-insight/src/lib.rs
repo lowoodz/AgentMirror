@@ -18,6 +18,7 @@ pub mod separator;
 pub mod spill;
 pub mod store;
 pub mod token_budget;
+pub mod usage;
 pub mod worker;
 
 pub use locale::ReportLanguage;

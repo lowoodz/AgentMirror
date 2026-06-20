@@ -32,6 +32,7 @@ struct SseInsightAggregator {
     tool_calls: BTreeMap<usize, AggregatedToolCall>,
     args_prepend_order: Option<bool>,
     finish_reason: Option<String>,
+    usage: Option<Value>,
 }
 
 impl SseInsightAggregator {
@@ -47,6 +48,11 @@ impl SseInsightAggregator {
         let Ok(json) = serde_json::from_str::<Value>(payload) else {
             return;
         };
+        if let Some(usage) = json.get("usage") {
+            if usage.is_object() && !usage.as_object().is_some_and(|o| o.is_empty()) {
+                self.usage = Some(usage.clone());
+            }
+        }
         let choice = json.get("choices").and_then(|c| c.as_array()).and_then(|a| a.first());
         if let Some(reason) = choice
             .and_then(|c| c.get("finish_reason"))
@@ -133,6 +139,10 @@ impl SseInsightAggregator {
                 "finish_reason": finish,
             }]
         });
+        let mut body = body;
+        if let Some(usage) = &self.usage {
+            body["usage"] = usage.clone();
+        }
         serde_json::to_vec(&body).unwrap_or_default()
     }
 }
@@ -215,6 +225,7 @@ impl InsightTapState {
             pending.clear();
         }
         let mut turn = self.turn.clone();
+        let raw = self.raw.lock().unwrap().clone();
         let aggregated = {
             let agg = self.aggregator.lock().unwrap();
             if agg.has_payload() {
@@ -223,7 +234,17 @@ impl InsightTapState {
                 None
             }
         };
-        turn.response_body = aggregated.unwrap_or_else(|| self.raw.lock().unwrap().clone());
+        turn.response_body = if let Some(agg) = aggregated {
+            if smr_insight::usage::extract_token_usage(&agg).is_empty()
+                && !smr_insight::usage::extract_token_usage(&raw).is_empty()
+            {
+                raw
+            } else {
+                agg
+            }
+        } else {
+            raw
+        };
         if !turn.request_body.is_empty() || !turn.response_body.is_empty() {
             self.insight.submit_turn(turn);
         }
@@ -289,6 +310,18 @@ mod tests {
     fn insight_sse_limit_is_at_least_8mb() {
         assert_eq!(insight_sse_byte_limit(1024), INSIGHT_SSE_MIN_BYTES);
         assert_eq!(insight_sse_byte_limit(30 * 1024 * 1024), 30 * 1024 * 1024);
+    }
+
+    #[test]
+    fn aggregator_preserves_stream_usage() {
+        let mut agg = SseInsightAggregator::default();
+        agg.ingest_line(r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#);
+        agg.ingest_line(
+            r#"data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":22,"total_tokens":33}}"#,
+        );
+        let body = agg.to_response_json();
+        let usage = smr_insight::usage::extract_token_usage(&body);
+        assert_eq!(usage.total_tokens, 33);
     }
 
     #[test]

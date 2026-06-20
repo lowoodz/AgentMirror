@@ -172,6 +172,7 @@ fn render_daily_overview_html(rep: &DailyReport, zh: bool) -> String {
     let task_lbl = if zh { "任务" } else { "Tasks" };
     let agents_lbl = if zh { "活跃 Agent" } else { "Active agents" };
     let turns_lbl = if zh { "总 LLM 轮次" } else { "Total LLM turns" };
+    let tokens_lbl = if zh { "Token 消耗" } else { "Token usage" };
     let done_lbl = if zh {
         format!("完成 {done}")
     } else {
@@ -216,15 +217,18 @@ fn render_daily_overview_html(rep: &DailyReport, zh: bool) -> String {
         <div class="overview-stat"><span class="overview-emoji">🤖</span><div class="overview-stat-body"><span class="overview-val">{active}</span><span class="overview-lbl">{agents_lbl}</span></div></div>
         <div class="overview-stat"><span class="overview-emoji">📋</span><div class="overview-stat-body"><span class="overview-val">{total}</span><span class="overview-lbl">{task_lbl}</span></div></div>
         <div class="overview-stat"><span class="overview-emoji">💬</span><div class="overview-stat-body"><span class="overview-val">{turns}</span><span class="overview-lbl">{turns_lbl}</span></div></div>
+        <div class="overview-stat"><span class="overview-emoji">🔢</span><div class="overview-stat-body"><span class="overview-val">{tokens}</span><span class="overview-lbl">{tokens_lbl}</span></div></div>
         </div><div class="overview-bar-head"><span>📊</span><span>{task_lbl}</span></div>
         <div class="overview-bar">{bar_segs}</div>
         <div class="overview-legend"><span>✅ {done_lbl}</span><span>⏳ {run_lbl}</span><span>❌ {fail_lbl}</span></div>
         </div></section>"#,
         active = rep.active_agents,
         turns = rep.total_turns,
+        tokens = rep.total_tokens,
         agents_lbl = html_escape(agents_lbl),
         task_lbl = html_escape(task_lbl),
         turns_lbl = html_escape(turns_lbl),
+        tokens_lbl = html_escape(tokens_lbl),
         done_lbl = html_escape(&done_lbl),
         run_lbl = html_escape(&run_lbl),
         fail_lbl = html_escape(&fail_lbl),

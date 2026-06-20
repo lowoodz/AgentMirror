@@ -16,6 +16,7 @@ use crate::separator::{
     should_start_new_run, skip_run_deduplication,
 };
 use crate::store::InsightStore;
+use crate::usage::extract_token_usage;
 
 pub struct Pipeline {
     store: Arc<InsightStore>,
@@ -105,6 +106,9 @@ impl Pipeline {
                 turn_count: 0,
                 messages_seen: 0,
                 graph_path: None,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
             };
             self.store.insert_run(&record)?;
             run = Some(record);
@@ -116,6 +120,7 @@ impl Pipeline {
         }
         run.turn_count += 1;
         run.ended_at = Some(turn.timestamp);
+        extract_token_usage(&turn.response_body).merge_into(&mut run);
 
         let refined_goal = infer_goal_from_request(&full_req);
         if !is_weak_goal(&refined_goal)

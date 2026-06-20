@@ -82,6 +82,15 @@ pub struct RunRecord {
     /// Messages already processed from OpenAI-style `messages[]` history.
     pub messages_seen: u32,
     pub graph_path: Option<String>,
+    /// Prompt / input tokens reported by the upstream LLM API for this run.
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    /// Completion / output tokens reported by the upstream LLM API for this run.
+    #[serde(default)]
+    pub completion_tokens: u64,
+    /// Total tokens (`usage.total_tokens` or prompt + completion).
+    #[serde(default)]
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +263,9 @@ pub struct DailyReport {
     pub runs_failed: u32,
     pub runs_running: u32,
     pub total_turns: u32,
+    /// Sum of `RunRecord.total_tokens` for runs on this report date.
+    #[serde(default)]
+    pub total_tokens: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub task_progress: Vec<DailyTaskProgress>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

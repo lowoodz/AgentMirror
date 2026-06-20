@@ -881,6 +881,9 @@ mod tests {
             turn_count: 3,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         let report = generate_reflection_report_llm(
             Some(&mock),
@@ -919,6 +922,9 @@ mod tests {
             turn_count: 100,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         let mut events = Vec::new();
         let long_summary = "查".repeat(600);

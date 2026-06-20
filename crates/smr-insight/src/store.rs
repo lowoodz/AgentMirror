@@ -12,6 +12,8 @@ use crate::models::{
 };
 use crate::separator::{goals_related, is_bootstrap_goal, is_weak_goal, run_continue_window};
 
+const RUN_SELECT: &str = "run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path, prompt_tokens, completion_tokens, total_tokens";
+
 pub struct InsightStore {
     conn: Mutex<Connection>,
     graphs_dir: PathBuf,
@@ -45,6 +47,9 @@ impl InsightStore {
                 turn_count INTEGER NOT NULL DEFAULT 0,
                 messages_seen INTEGER NOT NULL DEFAULT 0,
                 graph_path TEXT,
+                prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (agent_id) REFERENCES insight_agents(agent_id)
             );
             CREATE TABLE IF NOT EXISTS insight_events (
@@ -87,6 +92,12 @@ impl InsightStore {
             "ALTER TABLE insight_runs ADD COLUMN messages_seen INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        for col in ["prompt_tokens", "completion_tokens", "total_tokens"] {
+            let _ = conn.execute(
+                &format!("ALTER TABLE insight_runs ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"),
+                [],
+            );
+        }
         Ok(Self {
             conn: Mutex::new(conn),
             graphs_dir,
@@ -188,8 +199,8 @@ impl InsightStore {
     pub fn insert_run(&self, run: &RunRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO insight_runs (run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO insight_runs (run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path, prompt_tokens, completion_tokens, total_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 run.run_id,
                 run.agent_id,
@@ -201,6 +212,9 @@ impl InsightStore {
                 run.turn_count,
                 run.messages_seen,
                 run.graph_path,
+                run.prompt_tokens,
+                run.completion_tokens,
+                run.total_tokens,
             ],
         )?;
         Ok(())
@@ -209,7 +223,7 @@ impl InsightStore {
     pub fn update_run(&self, run: &RunRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE insight_runs SET ended_at = ?2, status = ?3, goal = ?4, turn_count = ?5, messages_seen = ?6, graph_path = ?7
+            "UPDATE insight_runs SET ended_at = ?2, status = ?3, goal = ?4, turn_count = ?5, messages_seen = ?6, graph_path = ?7, prompt_tokens = ?8, completion_tokens = ?9, total_tokens = ?10
              WHERE run_id = ?1",
             params![
                 run.run_id,
@@ -219,6 +233,9 @@ impl InsightStore {
                 run.turn_count,
                 run.messages_seen,
                 run.graph_path,
+                run.prompt_tokens,
+                run.completion_tokens,
+                run.total_tokens,
             ],
         )?;
         Ok(())
@@ -227,8 +244,7 @@ impl InsightStore {
     pub fn get_run(&self, run_id: &str) -> Result<Option<RunRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-             FROM insight_runs WHERE run_id = ?1",
+            &format!("SELECT {RUN_SELECT} FROM insight_runs WHERE run_id = ?1"),
         )?;
         let mut rows = stmt.query(params![run_id])?;
         if let Some(row) = rows.next()? {
@@ -241,15 +257,13 @@ impl InsightStore {
         let conn = self.conn.lock().unwrap();
         if let Some(agent_id) = agent_id {
             let mut stmt = conn.prepare(
-                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-                 FROM insight_runs WHERE agent_id = ?1 ORDER BY started_at DESC LIMIT ?2",
+                &format!("SELECT {RUN_SELECT} FROM insight_runs WHERE agent_id = ?1 ORDER BY started_at DESC LIMIT ?2"),
             )?;
             let rows = stmt.query_map(params![agent_id, limit as i64], map_run)?;
             Ok(rows.filter_map(|r| r.ok()).collect())
         } else {
             let mut stmt = conn.prepare(
-                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-                 FROM insight_runs ORDER BY started_at DESC LIMIT ?1",
+                &format!("SELECT {RUN_SELECT} FROM insight_runs ORDER BY started_at DESC LIMIT ?1"),
             )?;
             let rows = stmt.query_map(params![limit as i64], map_run)?;
             Ok(rows.filter_map(|r| r.ok()).collect())
@@ -259,10 +273,9 @@ impl InsightStore {
     pub fn find_active_run(&self, agent_id: &str, session_id: &str) -> Result<Option<RunRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-             FROM insight_runs
+            &format!("SELECT {RUN_SELECT} FROM insight_runs
              WHERE agent_id = ?1 AND session_id = ?2
-             ORDER BY started_at DESC LIMIT 1",
+             ORDER BY started_at DESC LIMIT 1"),
         )?;
         let mut rows = stmt.query(params![agent_id, session_id])?;
         if let Some(row) = rows.next()? {
@@ -274,10 +287,9 @@ impl InsightStore {
     pub fn list_runs_for_session(&self, session_id: &str, limit: usize) -> Result<Vec<RunRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-             FROM insight_runs
+            &format!("SELECT {RUN_SELECT} FROM insight_runs
              WHERE session_id = ?1
-             ORDER BY started_at DESC LIMIT ?2",
+             ORDER BY started_at DESC LIMIT ?2"),
         )?;
         let rows = stmt.query_map(params![session_id, limit as i64], map_run)?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -313,10 +325,9 @@ impl InsightStore {
         if !goal.trim().is_empty() && goal != "Unknown task" {
             let conn = self.conn.lock().unwrap();
             let mut stmt = conn.prepare(
-                "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-                 FROM insight_runs
+                &format!("SELECT {RUN_SELECT} FROM insight_runs
                  WHERE agent_id = ?1
-                 ORDER BY started_at DESC LIMIT 12",
+                 ORDER BY started_at DESC LIMIT 12"),
             )?;
             let rows = stmt.query_map(params![agent_id], map_run)?;
             for run in rows.filter_map(|r| r.ok()) {
@@ -335,10 +346,9 @@ impl InsightStore {
     pub fn find_active_run_for_session(&self, session_id: &str) -> Result<Option<RunRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-             FROM insight_runs
+            &format!("SELECT {RUN_SELECT} FROM insight_runs
              WHERE session_id = ?1
-             ORDER BY started_at DESC LIMIT 1",
+             ORDER BY started_at DESC LIMIT 1"),
         )?;
         let mut rows = stmt.query(params![session_id])?;
         if let Some(row) = rows.next()? {
@@ -452,10 +462,9 @@ impl InsightStore {
         let end = date.and_hms_opt(23, 59, 59).unwrap().and_utc();
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-             FROM insight_runs
+            &format!("SELECT {RUN_SELECT} FROM insight_runs
              WHERE started_at <= ?2 AND (ended_at IS NULL OR ended_at >= ?1)
-             ORDER BY started_at ASC",
+             ORDER BY started_at ASC"),
         )?;
         let rows = stmt.query_map(
             params![start.to_rfc3339(), end.to_rfc3339()],
@@ -469,10 +478,9 @@ impl InsightStore {
         let end = date.and_hms_opt(23, 59, 59).unwrap().and_utc();
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT run_id, agent_id, session_id, started_at, ended_at, status, goal, turn_count, messages_seen, graph_path
-             FROM insight_runs
+            &format!("SELECT {RUN_SELECT} FROM insight_runs
              WHERE agent_id = ?1 AND started_at <= ?3 AND (ended_at IS NULL OR ended_at >= ?2)
-             ORDER BY started_at ASC",
+             ORDER BY started_at ASC"),
         )?;
         let rows = stmt.query_map(
             params![agent_id, start.to_rfc3339(), end.to_rfc3339()],
@@ -499,6 +507,27 @@ impl InsightStore {
                 .then_with(|| a.agent_id.cmp(&b.agent_id))
         });
         Ok(agents)
+    }
+
+    /// Per-agent sum of `total_tokens` for runs overlapping the calendar day.
+    pub fn agent_token_totals_on_date(
+        &self,
+        date: NaiveDate,
+    ) -> Result<std::collections::HashMap<String, u64>> {
+        let start = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let end = date.and_hms_opt(23, 59, 59).unwrap().and_utc();
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT agent_id, COALESCE(SUM(total_tokens), 0)
+             FROM insight_runs
+             WHERE started_at <= ?2 AND (ended_at IS NULL OR ended_at >= ?1)
+             GROUP BY agent_id",
+        )?;
+        let rows = stmt.query_map(
+            params![start.to_rfc3339(), end.to_rfc3339()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64)),
+        )?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
     pub fn graph_path_for_run(&self, run_id: &str) -> PathBuf {
@@ -587,6 +616,9 @@ impl InsightStore {
             turn_count: 0,
             messages_seen: 0,
             graph_path: None,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
         };
         self.insert_run(&new_run)?;
 
@@ -923,6 +955,9 @@ fn map_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         turn_count: row.get::<_, i64>(7)? as u32,
         messages_seen: row.get::<_, i64>(8)? as u32,
         graph_path: row.get(9)?,
+        prompt_tokens: row.get::<_, i64>(10).unwrap_or(0).max(0) as u64,
+        completion_tokens: row.get::<_, i64>(11).unwrap_or(0).max(0) as u64,
+        total_tokens: row.get::<_, i64>(12).unwrap_or(0).max(0) as u64,
     })
 }
 
