@@ -112,6 +112,29 @@ pub fn force_upstream_non_stream(json: &mut serde_json::Value) {
     }
 }
 
+/// Ask OpenAI-compatible upstreams to include token usage in the final SSE chunk (AgentMirror).
+pub fn ensure_openai_stream_usage(json: &mut serde_json::Value) {
+    if json.get("stream").and_then(|s| s.as_bool()) != Some(true) {
+        return;
+    }
+    if request_has_tools(json) {
+        return;
+    }
+    match json.get_mut("stream_options") {
+        Some(opts) if opts.is_object() => {
+            if opts.get("include_usage").is_none() {
+                opts["include_usage"] = serde_json::Value::Bool(true);
+            }
+        }
+        Some(_) => {
+            json["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+        None => {
+            json["stream_options"] = serde_json::json!({ "include_usage": true });
+        }
+    }
+}
+
 /// Synthesize OpenAI SSE from a buffered chat completion (OpenClaw expects stream when stream:true).
 pub fn openai_chat_completion_to_sse(completion: &serde_json::Value) -> anyhow::Result<Bytes> {
     use serde_json::json;
@@ -196,6 +219,26 @@ mod tests {
         });
         force_upstream_non_stream(&mut body);
         assert_eq!(body.get("stream"), Some(&json!(false)));
+        assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn ensure_openai_stream_usage_adds_include_usage() {
+        let mut body = json!({"stream": true, "model": "gpt"});
+        ensure_openai_stream_usage(&mut body);
+        assert_eq!(
+            body["stream_options"]["include_usage"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn ensure_openai_stream_usage_skips_tools() {
+        let mut body = json!({
+            "stream": true,
+            "tools": [{"type": "function", "function": {"name": "x", "parameters": {}}}]
+        });
+        ensure_openai_stream_usage(&mut body);
         assert!(body.get("stream_options").is_none());
     }
 }

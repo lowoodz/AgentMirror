@@ -39,14 +39,24 @@ pub fn extract_token_usage(body: &[u8]) -> TokenUsage {
             return usage;
         }
     }
-    if looks_like_sse(body) {
-        return usage_from_sse(body);
+    if contains_sse_data_lines(body) {
+        let usage = usage_from_sse(body);
+        if !usage.is_empty() {
+            return usage;
+        }
     }
     TokenUsage::default()
 }
 
 fn usage_from_value(json: &Value) -> Option<TokenUsage> {
     if let Some(usage) = json.get("usage").and_then(parse_usage_object) {
+        return Some(usage);
+    }
+    if let Some(usage) = json
+        .get("message")
+        .and_then(|m| m.get("usage"))
+        .and_then(parse_usage_object)
+    {
         return Some(usage);
     }
     json.get("usageMetadata")
@@ -125,17 +135,15 @@ fn usage_from_sse(body: &[u8]) -> TokenUsage {
         let Ok(json) = serde_json::from_str::<Value>(payload) else {
             continue;
         };
-        if let Some(usage) = json.get("usage").and_then(parse_usage_object) {
+        if let Some(usage) = usage_from_value(&json) {
             last = usage;
         }
     }
     last
 }
 
-fn looks_like_sse(body: &[u8]) -> bool {
-    let sample = body.iter().take(512).copied().collect::<Vec<_>>();
-    let text = String::from_utf8_lossy(&sample);
-    text.contains("data:") && (text.contains("choices") || text.contains("usage"))
+fn contains_sse_data_lines(body: &[u8]) -> bool {
+    String::from_utf8_lossy(body).contains("data:")
 }
 
 #[cfg(test)]
@@ -165,6 +173,32 @@ mod tests {
         let body = b"data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"total_tokens\":7}}\n\n";
         let u = extract_token_usage(body);
         assert_eq!(u.total_tokens, 7);
+    }
+
+    #[test]
+    fn anthropic_sse_usage_after_long_prefix() {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"event: message_start\n");
+        body.extend_from_slice(
+            br#"data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"claude"}}"#,
+        );
+        body.extend_from_slice(b"\n\n");
+        for _ in 0..40 {
+            body.extend_from_slice(b"event: content_block_delta\n");
+            body.extend_from_slice(
+                br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}"#,
+            );
+            body.extend_from_slice(b"\n\n");
+        }
+        body.extend_from_slice(b"event: message_delta\n");
+        body.extend_from_slice(
+            br#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":5}}"#,
+        );
+        body.extend_from_slice(b"\n\n");
+        let u = extract_token_usage(&body);
+        assert_eq!(u.prompt_tokens, 100);
+        assert_eq!(u.completion_tokens, 5);
+        assert_eq!(u.total_tokens, 105);
     }
 
     #[test]

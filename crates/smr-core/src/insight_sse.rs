@@ -53,6 +53,13 @@ impl SseInsightAggregator {
                 self.usage = Some(usage.clone());
             }
         }
+        if self.usage.is_none() {
+            if let Some(usage) = json.get("message").and_then(|m| m.get("usage")) {
+                if usage.is_object() && !usage.as_object().is_some_and(|o| o.is_empty()) {
+                    self.usage = Some(usage.clone());
+                }
+            }
+        }
         let choice = json.get("choices").and_then(|c| c.as_array()).and_then(|a| a.first());
         if let Some(reason) = choice
             .and_then(|c| c.get("finish_reason"))

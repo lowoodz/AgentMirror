@@ -23,8 +23,8 @@ use crate::security_notice::{
     append_dlp_system_notice, append_ops_system_notices, prepend_ops_notices_to_completion,
 };
 use crate::streaming::{
-    force_upstream_non_stream, is_sse_content_type, openai_chat_completion_to_sse,
-    process_sse_response, request_has_tools, request_wants_stream,
+    ensure_openai_stream_usage, force_upstream_non_stream, is_sse_content_type,
+    openai_chat_completion_to_sse, process_sse_response, request_has_tools, request_wants_stream,
 };
 
 pub struct ProxyService {
@@ -178,6 +178,11 @@ impl ProxyService {
             if client_wants_stream && request_has_tools(&json) {
                 force_upstream_non_stream(&mut json);
                 wants_stream = false;
+            } else if snap.config.insight.enabled
+                && client_protocol == ApiProtocol::OpenAi
+                && client_wants_stream
+            {
+                ensure_openai_stream_usage(&mut json);
             }
 
             forward_body = serialize_json_body(&json)?;
