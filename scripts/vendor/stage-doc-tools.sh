@@ -6,6 +6,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="${1:-${ROOT}/resources/doc-tools}"
 FORCE_ARCH="${2:-}"
+VERIFY_ONLY=false
+if [[ "${3:-}" == "--verify-only" ]]; then
+  VERIFY_ONLY=true
+fi
 
 usage() {
   cat <<'EOF'
@@ -63,9 +67,6 @@ host_is_apple_silicon() {
 STAGE="${OUT}/${OS}-${ARCH_LABEL}"
 BIN="${STAGE}/bin"
 LIB="${STAGE}/lib"
-
-rm -rf "$STAGE"
-mkdir -p "$BIN" "$LIB"
 
 pdftotext_matches_arch() {
   local bin="$1"
@@ -137,6 +138,117 @@ copy_non_system_dylib() {
   echo "${LIB}/${base}"
 }
 
+resolve_abs_lib() {
+  local dep="$1"
+  if [[ -f "$dep" ]]; then
+    echo "$dep"
+    return 0
+  fi
+  if [[ "$dep" == /usr/local/opt/* ]]; then
+    local alt="/opt/homebrew/opt/${dep#/usr/local/opt/}"
+    if [[ -f "$alt" ]]; then
+      echo "$alt"
+      return 0
+    fi
+  elif [[ "$dep" == /opt/homebrew/opt/* ]]; then
+    local alt="/usr/local/opt/${dep#/opt/homebrew/opt/}"
+    if [[ -f "$alt" ]]; then
+      echo "$alt"
+      return 0
+    fi
+  elif [[ "$dep" == /usr/local/Cellar/* ]]; then
+    local rest="${dep#/usr/local/Cellar/}"
+    local alt="/opt/homebrew/Cellar/${rest}"
+    if [[ -f "$alt" ]]; then
+      echo "$alt"
+      return 0
+    fi
+  elif [[ "$dep" == /opt/homebrew/Cellar/* ]]; then
+    local rest="${dep#/opt/homebrew/Cellar/}"
+    local alt="/usr/local/Cellar/${rest}"
+    if [[ -f "$alt" ]]; then
+      echo "$alt"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+stage_brew_support_libs() {
+  local pkg
+  for pkg in libxau libxdmcp; do
+    local prefix
+    for prefix in /opt/homebrew/opt /usr/local/opt; do
+      [[ -d "${prefix}/${pkg}/lib" ]] || continue
+      local f
+      for f in "${prefix}/${pkg}/lib/"*.dylib; do
+        [[ -f "$f" ]] || continue
+        copy_non_system_dylib "$f" >/dev/null || true
+      done
+    done
+  done
+}
+
+macos_otool_deps() {
+  local target="$1"
+  otool -L "$target" 2>/dev/null | tail -n +2 | awk '{print $1}' || true
+}
+
+rewrite_macos_loader_paths() {
+  local target="$1"
+  local lib_ref="$2"
+  local dep
+  while IFS= read -r dep; do
+    [[ -n "$dep" ]] || continue
+    case "$dep" in
+      /usr/lib/*|/System/*) continue ;;
+      @loader_path/*|@rpath/*) continue ;;
+    esac
+    local base
+    base="$(basename "$dep")"
+    [[ -f "${LIB}/${base}" ]] || continue
+    install_name_tool -change "$dep" "${lib_ref}/${base}" "$target" 2>/dev/null || true
+  done < <(macos_otool_deps "$target")
+}
+
+finalize_macos_loader_paths() {
+  local pass
+  for pass in $(seq 1 4); do
+    local lib
+    for lib in "${LIB}"/*.dylib; do
+      [[ -f "$lib" ]] || continue
+      install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" 2>/dev/null || true
+      rewrite_macos_loader_paths "$lib" "@loader_path"
+    done
+    rewrite_macos_loader_paths "${BIN}/pdftotext" "@loader_path/../lib"
+    install_name_tool -add_rpath @loader_path/../lib "${BIN}/pdftotext" 2>/dev/null || true
+  done
+}
+
+verify_macos_bundle() {
+  local bad=0
+  local target dep
+  for target in "${BIN}/pdftotext" "${LIB}"/*.dylib; do
+    [[ -f "$target" ]] || continue
+    while IFS= read -r dep; do
+      [[ -n "$dep" ]] || continue
+      case "$dep" in
+        /usr/local/*|/opt/homebrew/*)
+          echo "ERROR: $(basename "$target") still links external ${dep}" >&2
+          bad=1
+          ;;
+      esac
+    done < <(macos_otool_deps "$target")
+  done
+  for dep_name in libXau.6.dylib libXdmcp.6.dylib; do
+    if [[ ! -f "${LIB}/${dep_name}" ]]; then
+      echo "ERROR: missing bundled ${dep_name}" >&2
+      bad=1
+    fi
+  done
+  return "$bad"
+}
+
 bundle_linux_pdftotext() {
   local src="$1"
   cp -f "$src" "${BIN}/pdftotext"
@@ -197,7 +309,8 @@ bundle_macos_pdftotext() {
           fi
           ;;
         /*)
-          resolved="$dep"
+          resolved="$(resolve_abs_lib "$dep" 2>/dev/null || true)"
+          [[ -n "$resolved" ]] || resolved="$dep"
           if [[ -f "$resolved" ]]; then
             local copied
             copied="$(copy_non_system_dylib "$resolved")"
@@ -205,13 +318,12 @@ bundle_macos_pdftotext() {
           fi
           ;;
       esac
-    done < <(otool -L "$target" 2>/dev/null | tail -n +2 | awk '{print $1}' || true)
+    done < <(macos_otool_deps "$target")
   done
 
-  for lib in "${LIB}"/*.dylib; do
-    [[ -f "$lib" ]] || continue
-    install_name_tool -id "@loader_path/$(basename "$lib")" "$lib" 2>/dev/null || true
-  done
+  stage_brew_support_libs
+
+  finalize_macos_loader_paths
 
   # Core poppler only (libpoppler.NNN.dylib), not libpoppler-cpp / libpoppler-glib.
   local core_poppler=""
@@ -230,7 +342,7 @@ bundle_macos_pdftotext() {
     while IFS= read -r dep; do
       [[ "$dep" == @rpath/libpoppler* ]] || continue
       install_name_tool -change "$dep" "${rel}/${base}" "$target" 2>/dev/null || true
-    done < <(otool -L "$target" 2>/dev/null | tail -n +2 | awk '{print $1}' || true)
+    done < <(macos_otool_deps "$target")
   }
 
   for lib in "${LIB}"/*.dylib; do
@@ -238,13 +350,33 @@ bundle_macos_pdftotext() {
     rewrite_poppler_rpath "$lib" "@loader_path"
   done
   rewrite_poppler_rpath "${BIN}/pdftotext"
-  install_name_tool -add_rpath @loader_path/../lib "${BIN}/pdftotext" 2>/dev/null || true
+  finalize_macos_loader_paths
+
+  if ! verify_macos_bundle; then
+    echo "ERROR: macOS doc-tools bundle verification failed" >&2
+    exit 1
+  fi
 
   # Brew poppler dylibs are often 0400; Tauri resource bundler must read them.
   find "${STAGE}" -type f -exec chmod a+r {} \;
   find "${STAGE}" -type d -exec chmod a+rx {} \;
   chmod 755 "${BIN}/pdftotext"
 }
+
+if [[ "$VERIFY_ONLY" == true ]]; then
+  if [[ ! -x "${BIN}/pdftotext" ]]; then
+    echo "ERROR: ${STAGE} missing pdftotext (not staged)" >&2
+    exit 1
+  fi
+  if verify_macos_bundle; then
+    echo "==> verify doc-tools: ${STAGE} ok"
+    exit 0
+  fi
+  exit 1
+fi
+
+rm -rf "$STAGE"
+mkdir -p "$BIN" "$LIB"
 
 PDFTOTEXT="$(find_pdftotext)" || {
   echo "ERROR: pdftotext not found for darwin-${ARCH_LABEL}." >&2

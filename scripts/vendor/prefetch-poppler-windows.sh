@@ -16,6 +16,10 @@ EXTRACT="${CACHE}/poppler-${POPPLER_VERSION}"
 
 if [[ -f "${BIN}/pdftotext.exe" ]]; then
   echo "==> prefetch-poppler-windows: already staged at ${STAGE}"
+  for skip in poppler-glib.dll poppler-cpp.dll; do
+    rm -f "${BIN}/${skip}" "${LIB}/${skip}"
+  done
+  bash "${ROOT}/scripts/vendor/stage-vcrt-dlls.sh" "${BIN}"
   exit 0
 fi
 
@@ -41,12 +45,17 @@ POPPLER_BIN="${EXTRACT}/Library/bin"
 [[ -f "${POPPLER_BIN}/pdftotext.exe" ]] || { echo "pdftotext.exe missing in ${POPPLER_BIN}" >&2; exit 1; }
 
 cp -f "${POPPLER_BIN}/pdftotext.exe" "${BIN}/pdftotext.exe"
+SKIP_DLLS=(poppler-glib.dll poppler-cpp.dll)
 for dll in "${POPPLER_BIN}"/*.dll; do
   [[ -f "$dll" ]] || continue
   base="$(basename "$dll")"
+  for skip in "${SKIP_DLLS[@]}"; do
+    [[ "$base" == "$skip" ]] && continue 2
+  done
   cp -f "$dll" "${LIB}/${base}"
   cp -f "$dll" "${BIN}/${base}"
 done
 
 echo "==> prefetch-poppler-windows: staged at ${STAGE} ($(du -sh "${STAGE}" | awk '{print $1}'))"
+bash "${ROOT}/scripts/vendor/stage-vcrt-dlls.sh" "${BIN}"
 # Do not touch resources/doc-tools/current (macOS Tauri bundle symlink).

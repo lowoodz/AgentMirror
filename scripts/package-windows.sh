@@ -34,6 +34,9 @@ else
   cat > "${ROOT}/.cargo/config.toml" <<EOF
 [target.${TARGET}]
 linker = "x86_64-w64-mingw32-gcc"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
 EOF
   echo "==> Using mingw-w64 as Windows cross linker"
 fi

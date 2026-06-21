@@ -1325,6 +1325,24 @@ fn signature_lengths(min_len: usize, chunk_len: usize) -> Vec<usize> {
     lens
 }
 
+/// Largest byte index `<= index` that is a valid UTF-8 boundary in `s`.
+fn floor_utf8_boundary(s: &str, index: usize) -> usize {
+    let mut i = index.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Smallest byte index `>= index` that is a valid UTF-8 boundary in `s`.
+fn ceil_utf8_boundary(s: &str, index: usize) -> usize {
+    let mut i = index.min(s.len());
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
 fn haystack_scan_blocks<'a>(hay: &'a str, chunk_size: usize, overlap: usize) -> Vec<(usize, &'a str)> {
     if hay.is_empty() {
         return Vec::new();
@@ -1336,12 +1354,29 @@ fn haystack_scan_blocks<'a>(hay: &'a str, chunk_size: usize, overlap: usize) -> 
     let mut blocks = Vec::new();
     let mut start = 0usize;
     while start < hay.len() {
-        let end = (start + chunk_size).min(hay.len());
+        start = ceil_utf8_boundary(hay, start);
+        if start >= hay.len() {
+            break;
+        }
+        let raw_end = (start + chunk_size).min(hay.len());
+        let end = if raw_end >= hay.len() {
+            hay.len()
+        } else {
+            floor_utf8_boundary(hay, raw_end)
+        };
+        if end <= start {
+            break;
+        }
         blocks.push((start, &hay[start..end]));
         if end >= hay.len() {
             break;
         }
-        start += step;
+        let next = start.saturating_add(step);
+        start = if next <= start {
+            end
+        } else {
+            ceil_utf8_boundary(hay, next)
+        };
     }
     blocks
 }
@@ -2056,6 +2091,26 @@ mod tests {
 
     fn assert_redacted(out: &str, secret: &str, case: &str) {
         assert!(!out.contains(secret), "{case}: expected redaction");
+    }
+
+    #[test]
+    fn haystack_scan_blocks_respects_utf8_char_boundaries() {
+        // Repro Win2: step=8128 landed inside a 3-byte CJK char and panicked on slice.
+        let prefix = "网页".repeat(4000); // ~8000 bytes of multi-byte text
+        let hay = format!("{prefix}千问大模型");
+        assert!(hay.len() > 8192, "fixture must exceed one chunk");
+
+        let blocks = haystack_scan_blocks(&hay, 8192, 64);
+        assert!(!blocks.is_empty());
+        for (start, block) in &blocks {
+            assert!(hay.is_char_boundary(*start));
+            assert!(hay.is_char_boundary(start + block.len()));
+            assert_eq!(&hay[*start..*start + block.len()], *block);
+        }
+
+        let fixture = setup_txt_scan("unrelated indexed file body for boundary test", false);
+        let out = fixture.scan(&hay);
+        assert_eq!(out, hay, "unrelated index must not alter haystack");
     }
 
     fn assert_unchanged(out: &str, input: &str, case: &str) {

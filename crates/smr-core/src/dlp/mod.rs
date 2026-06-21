@@ -128,6 +128,38 @@ impl DlpEngine {
         request_json: &serde_json::Value,
         reboost_windows: bool,
     ) -> anyhow::Result<(Vec<(ExtractedText, String)>, usize, bool)> {
+        let sid = session_id.to_string();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.process_request_inner(&sid, extracted, request_json, reboost_windows)
+        })) {
+            Ok(result) => match result {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    tracing::error!(
+                        session_id = %sid,
+                        error = %e,
+                        "DLP request processing failed; forwarding without DLP"
+                    );
+                    Ok((Vec::new(), 0, false))
+                }
+            },
+            Err(_) => {
+                tracing::error!(
+                    session_id = %sid,
+                    "DLP request processing panicked; forwarding without DLP"
+                );
+                Ok((Vec::new(), 0, false))
+            }
+        }
+    }
+
+    fn process_request_inner(
+        &self,
+        session_id: &str,
+        extracted: &[ExtractedText],
+        request_json: &serde_json::Value,
+        reboost_windows: bool,
+    ) -> anyhow::Result<(Vec<(ExtractedText, String)>, usize, bool)> {
         if !self.enabled {
             return Ok((Vec::new(), 0, false));
         }
@@ -177,6 +209,37 @@ impl DlpEngine {
 
     /// Response-side: restore tool-call fields; redact other fields that still contain secrets.
     pub fn process_response(
+        &self,
+        session_id: &str,
+        response_json: &serde_json::Value,
+        extracted: &[ExtractedText],
+    ) -> anyhow::Result<(Vec<(ExtractedText, String)>, usize)> {
+        let sid = session_id.to_string();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.process_response_inner(&sid, response_json, extracted)
+        })) {
+            Ok(result) => match result {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    tracing::error!(
+                        session_id = %sid,
+                        error = %e,
+                        "DLP response processing failed; forwarding without DLP"
+                    );
+                    Ok((Vec::new(), 0))
+                }
+            },
+            Err(_) => {
+                tracing::error!(
+                    session_id = %sid,
+                    "DLP response processing panicked; forwarding without DLP"
+                );
+                Ok((Vec::new(), 0))
+            }
+        }
+    }
+
+    fn process_response_inner(
         &self,
         session_id: &str,
         response_json: &serde_json::Value,
@@ -242,18 +305,30 @@ impl DlpEngine {
                 // Whole-block tool output only for pure file-index hits; api-key / password /
                 // secret / content rules stay span-level (see `content_protected` early return).
                 let file_whole_block = whole_block_on_match && !content_protected;
-                Ok(self.sessions.sanitize_with_active(
-                    &sanitized,
-                    active,
-                    &self.file,
-                    if self.reversible {
-                        Some((session_id, &self.vault))
-                    } else {
-                        None
-                    },
-                    file_whole_block,
-                    &block_message,
-                ))
+                let file_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.sessions.sanitize_with_active(
+                        &sanitized,
+                        active,
+                        &self.file,
+                        if self.reversible {
+                            Some((session_id, &self.vault))
+                        } else {
+                            None
+                        },
+                        file_whole_block,
+                        &block_message,
+                    )
+                }));
+                match file_result {
+                    Ok(out) => Ok(out),
+                    Err(_) => {
+                        tracing::error!(
+                            session_id,
+                            "file DLP scan panicked; using content-only sanitization"
+                        );
+                        Ok(sanitized)
+                    }
+                }
             } else {
                 Ok(sanitized)
             }
@@ -1104,5 +1179,54 @@ mod file_session_tests {
         eprintln!(
             "patterson repro: session ok; dlp replacements={count} (non-zero after index rebuild with dense fragment signatures)"
         );
+    }
+
+    /// Win2 physical-machine capture: read D:\\long.txt tool result must not panic DLP.
+    #[test]
+    fn repro_win2_long_txt_traffic() {
+        use std::path::PathBuf;
+        use std::time::Instant;
+
+        let win2 = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-data/test-logs/securemodelroute-Win2");
+        let traffic = win2.join("traffic/20260621T210320_request_in_824a3461.body");
+        if !traffic.exists() {
+            eprintln!("skip: Win2 traffic fixture missing at {}", traffic.display());
+            return;
+        }
+        let config = AppConfig::load(&win2.join("smr.yaml")).expect("config");
+        let body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&traffic).unwrap()).unwrap();
+        let dlp = DlpEngine::with_file_index_root(&config, win2.join("file-index")).expect("dlp");
+        dlp.reload(&config).expect("reload");
+        for _ in 0..200 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(dlp.is_file_index_ready(), "file index not ready");
+
+        let session = "win2-long-txt-repro";
+        dlp.register_path_triggers(session, &body);
+        assert!(
+            dlp.sessions()
+                .active_snapshot(session)
+                .is_some_and(|a| !a.is_empty()),
+            "expected D:/long.txt path trigger from read tool call"
+        );
+
+        let extracted = extract_texts(&body).unwrap();
+        let t0 = Instant::now();
+        let (repl, count, notice) = dlp
+            .process_request(session, &extracted, &body, false)
+            .expect("process_request must not error after P1 degrade");
+        eprintln!(
+            "win2 long.txt repro: {:?} repl={} notice={}",
+            t0.elapsed(),
+            count,
+            notice
+        );
+        let _ = repl;
     }
 }

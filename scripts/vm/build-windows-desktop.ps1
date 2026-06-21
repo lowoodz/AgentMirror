@@ -294,6 +294,13 @@ Set-Location $BuildRoot
 $env:CARGO_TARGET_DIR = Join-Path $BuildRoot "target"
 $env:CARGO_BUILD_TARGET = $TargetTriple
 $env:PYTHONUTF8 = "1"
+$env:STATIC_VCRUNTIME = "true"
+$crtStatic = "-C target-feature=+crt-static"
+if ($env:RUSTFLAGS) {
+    if ($env:RUSTFLAGS -notmatch 'crt-static') { $env:RUSTFLAGS = "$env:RUSTFLAGS $crtStatic" }
+} else {
+    $env:RUSTFLAGS = $crtStatic
+}
 
 if (-not (Ensure-Rust)) {
     Log "ERROR: cargo not available"

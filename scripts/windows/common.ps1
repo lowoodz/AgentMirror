@@ -30,10 +30,17 @@ function Set-SmrBuildEnv {
     $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
     $env:CARGO_TARGET_DIR = Join-Path $Root "target"
     $env:PYTHONUTF8 = "1"
+    $env:STATIC_VCRUNTIME = "true"
+    $crtStatic = "-C target-feature=+crt-static"
+    if ($env:RUSTFLAGS) {
+        if ($env:RUSTFLAGS -notmatch 'crt-static') { $env:RUSTFLAGS = "$env:RUSTFLAGS $crtStatic" }
+    } else {
+        $env:RUSTFLAGS = $crtStatic
+    }
     $homePrefix = if ($env:USERPROFILE) { "$($env:USERPROFILE)\" } else { "" }
     if ($homePrefix) {
         $extra = "--remap-path-prefix=$homePrefix=~/"
-        if ($env:RUSTFLAGS) { $env:RUSTFLAGS = "$env:RUSTFLAGS $extra" } else { $env:RUSTFLAGS = $extra }
+        if ($env:RUSTFLAGS -match 'remap-path-prefix') { } else { $env:RUSTFLAGS = "$env:RUSTFLAGS $extra" }
     }
     if ($env:CI -or $env:GITHUB_ACTIONS) {
         $env:CI = "true"

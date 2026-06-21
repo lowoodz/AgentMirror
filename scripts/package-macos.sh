@@ -35,8 +35,12 @@ stage_macos_tools() {
   local label="$1"
   local dest="${DOC_TOOLS}/darwin-${label}"
   if [[ -f "${dest}/bin/pdftotext" ]]; then
-    echo "    darwin-${label} already staged ($(du -sh "${dest}" | awk '{print $1}')), reuse"
-    return 0
+    if bash "${ROOT}/scripts/vendor/stage-doc-tools.sh" "${DOC_TOOLS}" "${label}" --verify-only; then
+      echo "    darwin-${label} already staged ($(du -sh "${dest}" | awk '{print $1}')), reuse"
+      return 0
+    fi
+    echo "    darwin-${label} bundle stale or incomplete, re-staging..."
+    rm -rf "${dest}"
   fi
   echo "    staging darwin-${label}..."
   bash "${ROOT}/scripts/vendor/stage-doc-tools.sh" "${DOC_TOOLS}" "${label}"

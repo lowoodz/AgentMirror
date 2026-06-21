@@ -153,12 +153,27 @@ impl ProxyService {
                 .is_some_and(|before| before != &json);
 
             if snap.config.pipeline.dlp_active() {
-                let (dlp_replacements, count, dlp_notice) = snap.dlp.process_request(
+                let (dlp_replacements, count, dlp_notice) = match snap.dlp.process_request(
                     session_id,
                     &extracted,
                     &json,
                     ops_modified,
-                )?;
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!(
+                            session_id = %session_id,
+                            error = %e,
+                            "DLP request processing failed; forwarding without DLP"
+                        );
+                        events.push(
+                            EventKind::Error,
+                            format!("DLP degraded on request: {e}"),
+                            None,
+                        );
+                        (Vec::new(), 0, false)
+                    }
+                };
                 dlp_count += count as u32;
                 if !dlp_replacements.is_empty() {
                     info!(count = dlp_replacements.len(), "DLP sanitized request fields");
@@ -343,8 +358,25 @@ impl ProxyService {
                         if let Ok(mut json) = parse_json_body(&resp_body) {
                             if snap.config.pipeline.dlp_active() {
                                 let extracted = extract_texts(&json)?;
-                                let (dlp_replacements, count) =
-                                    snap.dlp.process_response(session_id, &json, &extracted)?;
+                                let (dlp_replacements, count) = match snap
+                                    .dlp
+                                    .process_response(session_id, &json, &extracted)
+                                {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        tracing::error!(
+                                            session_id = %session_id,
+                                            error = %e,
+                                            "DLP response processing failed; forwarding without DLP"
+                                        );
+                                        events.push(
+                                            EventKind::Error,
+                                            format!("DLP degraded on response: {e}"),
+                                            None,
+                                        );
+                                        (Vec::new(), 0)
+                                    }
+                                };
                                 dlp_count += count as u32;
                                 if !dlp_replacements.is_empty() {
                                     inject_response_texts(&mut json, &dlp_replacements)?;

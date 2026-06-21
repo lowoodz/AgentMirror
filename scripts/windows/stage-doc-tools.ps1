@@ -22,7 +22,24 @@ $Lib = Join-Path $Stage "lib"
 $Cache = Join-Path $Root "dist\vendor-cache"
 
 if (Test-Path (Join-Path $Bin "pdftotext.exe")) {
-    Write-Host "==> doc-tools already staged at $Stage (skip download)"
+    $VcrtScript = Join-Path $Root "scripts\vendor\stage-vcrt-dlls.sh"
+    $needVcrt = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") | Where-Object {
+        -not (Test-Path (Join-Path $Bin $_))
+    }
+    if ($needVcrt.Count -gt 0) {
+        if (Test-Path $VcrtScript) {
+            $bash = Get-Command bash -ErrorAction SilentlyContinue
+            if ($bash) { & $bash.Source $VcrtScript $Bin }
+        }
+        if ($needVcrt | Where-Object { -not (Test-Path (Join-Path $Bin $_)) }) {
+            $sys = Join-Path $env:WINDIR "System32"
+            foreach ($dll in $needVcrt) {
+                $src = Join-Path $sys $dll
+                if (Test-Path $src) { Copy-Item $src (Join-Path $Bin $dll) -Force }
+            }
+        }
+    }
+    Write-Host "==> doc-tools already staged at $Stage (skip poppler download)"
     Get-ChildItem $Bin | Select-Object Name, Length
     return
 }
@@ -71,9 +88,27 @@ if (-not (Test-Path (Join-Path $PopplerBin "pdftotext.exe"))) {
 }
 
 Copy-Item (Join-Path $PopplerBin "pdftotext.exe") (Join-Path $Bin "pdftotext.exe") -Force
+$SkipDlls = @("poppler-glib.dll", "poppler-cpp.dll")
 Get-ChildItem $PopplerBin -Filter "*.dll" | ForEach-Object {
+    if ($SkipDlls -contains $_.Name) { return }
     Copy-Item $_.FullName (Join-Path $Lib $_.Name) -Force
     Copy-Item $_.FullName (Join-Path $Bin $_.Name) -Force
+}
+
+$VcrtScript = Join-Path $Root "scripts\vendor\stage-vcrt-dlls.sh"
+if (Test-Path $VcrtScript) {
+    $bash = Get-Command bash -ErrorAction SilentlyContinue
+    if ($bash) {
+        & $bash.Source $VcrtScript $Bin
+    } else {
+        $sys = Join-Path $env:WINDIR "System32"
+        foreach ($dll in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+            $src = Join-Path $sys $dll
+            if (Test-Path $src) {
+                Copy-Item $src (Join-Path $Bin $dll) -Force
+            }
+        }
+    }
 }
 
 Write-Host "==> staged doc-tools at $Stage"
