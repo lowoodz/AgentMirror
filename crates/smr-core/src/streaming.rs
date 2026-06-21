@@ -170,15 +170,21 @@ pub fn openai_chat_completion_to_sse(completion: &serde_json::Value) -> anyhow::
     append_sse_line(&mut out, &role);
 
     if let Some(msg) = message {
-        if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
-            if !content.is_empty() {
-                let mut chunk = base();
-                chunk["choices"] = json!([{
-                    "index": 0,
-                    "delta": {"content": content},
-                    "finish_reason": null
-                }]);
-                append_sse_line(&mut out, &chunk);
+        let has_tool_calls = msg
+            .get("tool_calls")
+            .and_then(|t| t.as_array())
+            .is_some_and(|a| !a.is_empty());
+        if !has_tool_calls {
+            if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
+                if !content.is_empty() {
+                    let mut chunk = base();
+                    chunk["choices"] = json!([{
+                        "index": 0,
+                        "delta": {"content": content},
+                        "finish_reason": null
+                    }]);
+                    append_sse_line(&mut out, &chunk);
+                }
             }
         }
         if let Some(tool_calls) = msg.get("tool_calls") {
@@ -268,5 +274,32 @@ mod tests {
         assert!(text.contains(r#""total_tokens":7"#));
         let usage = smr_insight::usage::extract_token_usage(&sse);
         assert_eq!(usage.total_tokens, 7);
+    }
+
+    #[test]
+    fn openai_chat_completion_to_sse_skips_content_when_tool_calls_present() {
+        let completion = json!({
+            "id": "c1",
+            "model": "m",
+            "created": 1,
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "planning only",
+                    "tool_calls": [{
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "exec", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}
+        });
+        let sse = openai_chat_completion_to_sse(&completion).unwrap();
+        let text = String::from_utf8_lossy(&sse);
+        assert!(!text.contains(r#""content":"planning only"#));
+        assert!(text.contains(r#""tool_calls""#));
+        assert!(text.contains(r#""finish_reason":"tool_calls"#));
     }
 }

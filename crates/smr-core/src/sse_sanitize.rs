@@ -11,7 +11,7 @@ pub fn sanitize_openai_client_sse_chunk(chunk: &mut Value) -> bool {
     let mut keep = false;
     for choice in choices {
         if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
-            fold_reasoning_into_content(delta);
+            fold_or_drop_reasoning(delta);
             if delta_has_payload(delta) {
                 keep = true;
             }
@@ -25,6 +25,21 @@ pub fn sanitize_openai_client_sse_chunk(chunk: &mut Value) -> bool {
         }
     }
     keep
+}
+
+fn object_has_tool_calls(obj: &Map<String, Value>) -> bool {
+    obj.get("tool_calls")
+        .and_then(|t| t.as_array())
+        .is_some_and(|a| !a.is_empty())
+}
+
+/// When tool calls are present, drop `reasoning_content` without folding into `content`
+/// so OpenClaw does not treat planning text as the final assistant reply.
+fn fold_or_drop_reasoning(obj: &mut Map<String, Value>) -> bool {
+    if object_has_tool_calls(obj) {
+        return obj.remove("reasoning_content").is_some();
+    }
+    fold_reasoning_into_content(obj)
 }
 
 fn fold_reasoning_into_content(obj: &mut Map<String, Value>) -> bool {
@@ -74,10 +89,10 @@ pub fn sanitize_openai_client_json(body: &mut Value) -> bool {
     let mut modified = false;
     for choice in choices {
         if let Some(message) = choice.get_mut("message").and_then(|m| m.as_object_mut()) {
-            modified |= fold_reasoning_into_content(message);
+            modified |= fold_or_drop_reasoning(message);
         }
         if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
-            modified |= fold_reasoning_into_content(delta);
+            modified |= fold_or_drop_reasoning(delta);
         }
     }
     modified
@@ -125,10 +140,13 @@ mod tests {
         });
         assert!(sanitize_openai_client_sse_chunk(&mut chunk));
         assert!(chunk["choices"][0]["delta"].get("tool_calls").is_some());
+        assert!(chunk["choices"][0]["delta"].get("reasoning_content").is_none());
+        let content = chunk["choices"][0]["delta"].get("content");
+        assert!(content.is_none() || content.and_then(|v| v.as_str()).is_some_and(|s| s.is_empty()));
     }
 
     #[test]
-    fn strips_reasoning_from_buffered_message_json() {
+    fn drops_reasoning_without_folding_when_buffered_message_has_tool_calls() {
         let mut body = json!({
             "choices": [{
                 "finish_reason": "tool_calls",
@@ -136,6 +154,22 @@ mod tests {
                     "content": "",
                     "reasoning_content": "think",
                     "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}]
+                }
+            }]
+        });
+        assert!(sanitize_openai_client_json(&mut body));
+        assert!(body["choices"][0]["message"].get("reasoning_content").is_none());
+        assert_eq!(body["choices"][0]["message"]["content"], "");
+    }
+
+    #[test]
+    fn strips_reasoning_from_buffered_message_json_without_tools() {
+        let mut body = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "content": "",
+                    "reasoning_content": "think"
                 }
             }]
         });
