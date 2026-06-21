@@ -28,6 +28,9 @@ print(out)
 
 vm_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '${GUEST_WORK//\//\\}' | Out-Null\""
 
+GUEST_COUNT="${GUEST_WORK}/count-fixture"
+vm_ssh "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '${GUEST_COUNT//\//\\}' | Out-Null; New-Item -ItemType File -Force -Path '${GUEST_COUNT//\//\\}\\a.txt','${GUEST_COUNT//\//\\}\\b.txt' | Out-Null\""
+
 if [[ -f "${ROOT}/config/test.env" ]]; then
   vm_scp_to "${ROOT}/config/test.env" "${GUEST_WORK}/test.env"
 fi
@@ -42,7 +45,7 @@ REMOTE_PS="${SMR_GUEST_STAGING}/run-transparency-client-live-remote.ps1"
 vm_scp_to "${ROOT}/scripts/vm/run-transparency-client-live-remote.ps1" "$REMOTE_PS"
 
 # Count dir is resolved on the guest (USERPROFILE). Do not pass host placeholder paths.
-if vm_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File \"${REMOTE_PS//\//\\}\" -GuestWork \"${GUEST_WORK//\//\\}\"" | tee "$LOG_LOCAL"; then
+if vm_ssh "powershell -NoProfile -ExecutionPolicy Bypass -File \"${REMOTE_PS//\//\\}\" -GuestWork \"${GUEST_WORK//\//\\}\" -CountDir \"${GUEST_COUNT//\//\\}\"" | tee "$LOG_LOCAL"; then
   echo "==> Windows transparency client live PASSED"
   exit 0
 fi

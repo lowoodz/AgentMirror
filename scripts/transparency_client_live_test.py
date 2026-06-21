@@ -682,16 +682,35 @@ def audit_clean_latest(base: str, *, before_id: str | None) -> tuple[bool, str]:
 
 
 def extract_count_number(text: str, *, expected: int | None = None) -> int | None:
-    nums = [int(m) for m in re.findall(r"\b(\d{1,7})\b", text)]
-    if not nums:
-        return None
     cap = max(10_000, (expected or 0) * 5 + 1000)
-    nums = [n for n in nums if n <= cap]
-    if not nums:
+
+    def pick(candidates: list[int]) -> int | None:
+        filtered = [n for n in candidates if n <= cap]
+        if not filtered:
+            return None
+        if expected is not None:
+            return min(filtered, key=lambda n: abs(n - expected))
+        return max(filtered)
+
+    nums = [int(m) for m in re.findall(r"(?<!\d)(\d{1,7})(?!\d)", text)]
+    found = pick(nums)
+    if found is not None:
+        return found
+
+    # Agent sometimes concatenates the count twice (e.g. "8695386953").
+    run = re.sub(r"\D", "", text)
+    if not run or expected is None:
         return None
-    if expected is not None:
-        return min(nums, key=lambda n: abs(n - expected))
-    return max(nums)
+    widths = {len(str(expected)), len(str(expected)) + 1, len(str(expected)) - 1, 5, 6, 7}
+    for width in sorted(w for w in widths if w >= 1):
+        if width > len(run):
+            continue
+        if len(run) % width == 0:
+            chunks = [int(run[i : i + width]) for i in range(0, len(run), width)]
+            found = pick(chunks)
+            if found is not None:
+                return found
+    return None
 
 
 def normalize_agent_text(text: str) -> str:

@@ -8,6 +8,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="${HOME}/.cargo/bin:${PATH}"
 export CARGO_TARGET_DIR="${ROOT}/target"
+# shellcheck source=load_test_env.sh
+source "${ROOT}/scripts/load_test_env.sh"
 
 RC=(bash "${ROOT}/scripts/macos/release-cycle.sh")
 SKIP_CLEAN=false
@@ -24,7 +26,10 @@ Mac host only. Runs the complete release pipeline:
   clean (dist + UTM guest + local uninstall)
   → preflight → compile → package-all → verify
   → test → install → installed
+  → openclaw matrix (Mac)
+  → transparency client E2E (OpenClaw + Claude Code, Mac)
   → utm-run-all-tests (when UTM guest is running)
+  → transparency client live (Windows VM, when prior VM phases pass)
 
 Options (forwarded to release-cycle where applicable):
   --cli-only          CLI tar/zip only (no app, DMG, NSIS)
@@ -118,6 +123,23 @@ run "Install from dist" "${RC[@]}" install "${RC_EXTRA[@]}"
 run "Installed-app tests" "${RC[@]}" installed "${RC_EXTRA[@]}"
 run "OpenClaw matrix (Mac)" "${RC[@]}" openclaw "${RC_EXTRA[@]}"
 
+SKIP_TESTS=false
+for a in "${RC_EXTRA[@]}"; do [[ "$a" == "--skip-tests" ]] && SKIP_TESTS=true; done
+if [[ "$SKIP_TESTS" == true ]]; then
+  log "SKIP transparency client E2E (--skip-tests)"
+elif ! has_test_keys; then
+  log "SKIP transparency client E2E: set config/test.env from config/test.env.example"
+else
+  run "Transparency client mock E2E (OpenClaw + Claude Code)" \
+    python3 "${ROOT}/scripts/transparency_pass_through_test.py"
+  FIXTURE="${ROOT}/dist/transparency-count-fixture"
+  mkdir -p "${FIXTURE}"
+  touch "${FIXTURE}/a.txt" "${FIXTURE}/b.txt"
+  run "Transparency client live E2E (OpenClaw + Claude Code)" \
+    env SMR_TRANSPARENCY_COUNT_DIR="${FIXTURE}" \
+    bash "${ROOT}/scripts/run_transparency_client_live.sh" --client-only
+fi
+
 if [[ "$SKIP_VM" != true ]]; then
   # shellcheck source=vm/vm-ssh.sh
   source "${ROOT}/scripts/vm/vm-ssh.sh"
@@ -126,6 +148,12 @@ if [[ "$SKIP_VM" != true ]]; then
       log "SKIP utm-run-all-tests (--cli-only)"
     elif ls "${ROOT}"/dist/smr-*-windows-x86_64.zip >/dev/null 2>&1; then
       run "UTM full suite (functional + NSIS + blackbox)" bash "${ROOT}/scripts/vm/utm-run-all-tests.sh"
+      if [[ "$SKIP_TESTS" != true ]] && has_test_keys; then
+        run "Windows transparency client live (OpenClaw + Claude Code)" \
+          bash "${ROOT}/scripts/vm/run-transparency-client-live.sh"
+      else
+        log "SKIP Windows transparency client live (--skip-tests or missing config/test.env)"
+      fi
     else
       log "SKIP utm-run-all-tests: no Windows CLI zip in dist/"
     fi
