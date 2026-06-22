@@ -28,6 +28,9 @@ test-data/
 # Bundled poppler pdftotext (see scripts/vendor/stage-doc-tools.sh)
 /resources/doc-tools/*
 !/resources/doc-tools/.gitkeep
+!/resources/doc-tools/vendor-crt-x64/
+!/resources/doc-tools/vendor-crt-x64/README.md
+!/resources/doc-tools/vendor-crt-x64/*.dll
 /dist/vendor-cache/
 
 # Local ad-hoc smoke script (not maintained in repo)

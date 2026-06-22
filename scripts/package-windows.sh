@@ -55,6 +55,8 @@ echo "==> Stage bundled document tools (poppler pdftotext) for Windows"
 DOC_TOOLS="${ROOT}/resources/doc-tools"
 if [[ ! -f "${DOC_TOOLS}/windows-x64/bin/pdftotext.exe" ]]; then
   bash "${ROOT}/scripts/vendor/prefetch-poppler-windows.sh" "${DOC_TOOLS}"
+else
+  bash "${ROOT}/scripts/vendor/verify-windows-doc-tools.sh" "${DOC_TOOLS}/windows-x64/bin"
 fi
 
 BIN="${ROOT}/target/${TARGET}/release/smr.exe"

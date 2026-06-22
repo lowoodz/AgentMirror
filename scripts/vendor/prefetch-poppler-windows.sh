@@ -14,12 +14,17 @@ ZIP_URL="https://github.com/oschwartz10612/poppler-windows/releases/download/v${
 ZIP_PATH="${CACHE}/${ZIP_NAME}"
 EXTRACT="${CACHE}/poppler-${POPPLER_VERSION}"
 
+finalize_windows_doc_tools() {
+  bash "${ROOT}/scripts/vendor/stage-vcrt-dlls.sh" "${BIN}"
+  bash "${ROOT}/scripts/vendor/verify-windows-doc-tools.sh" "${BIN}"
+}
+
 if [[ -f "${BIN}/pdftotext.exe" ]]; then
   echo "==> prefetch-poppler-windows: already staged at ${STAGE}"
   for skip in poppler-glib.dll poppler-cpp.dll; do
     rm -f "${BIN}/${skip}" "${LIB}/${skip}"
   done
-  bash "${ROOT}/scripts/vendor/stage-vcrt-dlls.sh" "${BIN}"
+  finalize_windows_doc_tools
   exit 0
 fi
 
@@ -57,5 +62,5 @@ for dll in "${POPPLER_BIN}"/*.dll; do
 done
 
 echo "==> prefetch-poppler-windows: staged at ${STAGE} ($(du -sh "${STAGE}" | awk '{print $1}'))"
-bash "${ROOT}/scripts/vendor/stage-vcrt-dlls.sh" "${BIN}"
+finalize_windows_doc_tools
 # Do not touch resources/doc-tools/current (macOS Tauri bundle symlink).
