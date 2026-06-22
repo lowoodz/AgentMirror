@@ -1229,4 +1229,116 @@ mod file_session_tests {
         );
         let _ = repl;
     }
+
+    /// Win3 physical-machine capture: path trigger + file DLP on pdf page-100 tool result.
+    #[test]
+    fn repro_win3_pdf_page100_traffic() {
+        use std::cell::Cell;
+        use std::path::PathBuf;
+
+        let win3 = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-data/test-logs/securemodelroute-win3");
+        let traffic = win3.join("traffic/20260621T232804_request_in_4f6019b8.body");
+        if !traffic.exists() {
+            eprintln!("skip: Win3 traffic fixture missing at {}", traffic.display());
+            return;
+        }
+        let config = AppConfig::load(&win3.join("smr.yaml")).expect("config");
+        let body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&traffic).unwrap()).unwrap();
+        let dlp = DlpEngine::with_file_index_root(&config, win3.join("file-index")).expect("dlp");
+        dlp.reload(&config).expect("reload");
+        for _ in 0..400 {
+            if dlp.is_file_index_ready() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(dlp.is_file_index_ready(), "file index not ready");
+
+        let session = "win3-pdf-page100-repro";
+        let tool_blob = smr_protocol::extract_tool_call_texts(&body)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rule = config
+            .file_rules
+            .iter()
+            .find(|r| r.id == "file-1782050783999")
+            .expect("dlp rule");
+        let path_candidates = crate::dlp::file::extract_triggered_files(&tool_blob, rule);
+        eprintln!("win3: extract_triggered_files={}", path_candidates.len());
+        for p in path_candidates.iter().take(5) {
+            eprintln!("  candidate: {p}");
+        }
+
+        let file_dlp =
+            crate::dlp::file::FileDlp::with_index_root(win3.join("file-index"), &config.file_rules)
+                .expect("file dlp");
+        file_dlp.reload(&config.file_rules).expect("file reload");
+        let activated = Cell::new(0usize);
+        file_dlp.check_path_triggers_in_tool_text(session, &tool_blob, |_, r, files| {
+            activated.set(activated.get() + 1);
+            eprintln!("win3: activate rule={} files={}", r.id, files.len());
+            for f in files.iter().take(5) {
+                eprintln!("  triggered: {f}");
+            }
+        });
+        eprintln!("win3: check_path_triggers activations={}", activated.get());
+
+        dlp.register_path_triggers(session, &body);
+        let active = dlp.sessions().active_snapshot(session);
+        eprintln!(
+            "win3: active rules={}",
+            active.as_ref().map(|a| a.len()).unwrap_or(0)
+        );
+        if let Some(a) = &active {
+            for item in a {
+                eprintln!(
+                    "  rule={} triggered_files={}",
+                    item.rule.id,
+                    item.triggered_files.len()
+                );
+            }
+        }
+
+        let extracted = extract_texts(&body).unwrap();
+        let page_tool = body["messages"]
+            .as_array()
+            .and_then(|m| m.get(81))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        eprintln!("win3: page-100 tool msg len={}", page_tool.len());
+
+        let (repl, count, notice) = dlp
+            .process_request(session, &extracted, &body, false)
+            .expect("process_request");
+        eprintln!("win3: repl={count} notice={notice}");
+
+        let mut page_redacted = false;
+        for (old, new) in &repl {
+            if old.text.contains("Page number: undefined") {
+                page_redacted = old.text != *new;
+                eprintln!(
+                    "win3: page-100 field redacted={} old_len={} new_len={}",
+                    page_redacted,
+                    old.text.len(),
+                    new.len()
+                );
+            }
+        }
+        eprintln!(
+            "win3: SUMMARY path_trigger_ok={} file_dlp_redacted={}",
+            activated.get() > 0,
+            page_redacted
+        );
+
+        assert!(
+            activated.get() > 0,
+            "path normalization should enable Win3 path triggers"
+        );
+    }
 }

@@ -28,7 +28,10 @@ use crate::dlp::file::{
     basename_trigger_match, file_under_working_dir, path_basename,
     path_trigger_match, paths_equivalent, strip_verbatim_path_prefix,
 };
-use crate::dlp::fragment::{file_fragment_meets_threshold, file_min_fragment_len};
+use crate::dlp::fragment::{
+    file_accum_fragment_meets_threshold, file_fragment_meets_threshold, file_min_fragment_len,
+    FILE_ACCUM_FRAGMENT_MIN,
+};
 use crate::dlp::normalize::{normalize_with_map, Normalized};
 use crate::dlp::sanitize::{sanitize_range, sanitize_whole};
 use crate::dlp::session::ActiveFileContent;
@@ -1048,6 +1051,62 @@ fn sidecar_path(extracted_root: &Path, original_path: &str) -> PathBuf {
     extracted_root.join(format!("{hash:016x}.txt"))
 }
 
+fn extracted_root_from_db(db_path: &Path) -> Option<PathBuf> {
+    Some(
+        db_path
+            .parent()?
+            .parent()?
+            .parent()?
+            .join(EXTRACTED_DIR),
+    )
+}
+
+/// Resolve on-disk index content for an indexed path (sidecar, relocated index, or live file).
+fn resolve_index_content_file(
+    indexed_path: &str,
+    content_path: &str,
+    extracted_root: &Path,
+) -> Option<PathBuf> {
+    if !content_path.is_empty() {
+        let stored = PathBuf::from(content_path);
+        if stored.is_file() {
+            return Some(stored);
+        }
+        if let Some(name) = stored.file_name() {
+            let sidecar = extracted_root.join(name);
+            if sidecar.is_file() {
+                return Some(sidecar);
+            }
+        }
+    }
+    let sidecar = sidecar_path(extracted_root, indexed_path);
+    if sidecar.is_file() {
+        return Some(sidecar);
+    }
+    let live = PathBuf::from(indexed_path);
+    live.is_file().then_some(live)
+}
+
+fn read_index_chunk(
+    indexed_path: &str,
+    content_path: &str,
+    extracted_root: &Path,
+    offset: u64,
+    len: u32,
+) -> Option<String> {
+    let file = resolve_index_content_file(indexed_path, content_path, extracted_root)?;
+    read_literal_string(file.to_string_lossy().as_ref(), offset, len)
+}
+
+fn load_index_source_text(
+    indexed_path: &str,
+    content_path: &str,
+    extracted_root: &Path,
+) -> Option<String> {
+    let file = resolve_index_content_file(indexed_path, content_path, extracted_root)?;
+    fs::read_to_string(&file).ok()
+}
+
 struct IndexableBytes {
     data: Vec<u8>,
     is_extracted: bool,
@@ -1136,10 +1195,12 @@ fn index_extracted_document(
         fs::create_dir_all(extracted_root)?;
         let sidecar = sidecar_path(extracted_root, path_str);
         fs::write(&sidecar, &bytes.data)?;
-        (
-            sidecar.to_string_lossy().replace('\\', "/"),
-            bytes.data,
-        )
+        // Store sidecar basename only so indices remain portable across hosts.
+        let sidecar_name = sidecar
+            .file_name()
+            .map(|n| n.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|| sidecar.to_string_lossy().replace('\\', "/"));
+        (sidecar_name, bytes.data)
     } else {
         (path_str.to_string(), bytes.data)
     };
@@ -1310,6 +1371,67 @@ fn push_chunk_signatures(
         pos += stride;
         positions += 1;
     }
+
+    push_accum_chunk_signatures(
+        &chars,
+        chunk_start,
+        chunk_len,
+        path,
+        content_path,
+        rule,
+        min_len,
+        stride,
+        rows,
+    );
+}
+
+/// Shorter signatures for accumulated-fragment matching (coarser stride than primary min_len).
+fn push_accum_chunk_signatures(
+    chars: &[char],
+    chunk_start: u64,
+    chunk_len: u32,
+    path: &str,
+    content_path: &str,
+    rule: &FileRule,
+    primary_min: usize,
+    primary_stride: usize,
+    rows: &mut Vec<SigRow>,
+) {
+    if FILE_ACCUM_FRAGMENT_MIN >= primary_min {
+        return;
+    }
+    let char_len = chars.len();
+    if char_len < FILE_ACCUM_FRAGMENT_MIN {
+        return;
+    }
+    let accum_stride = primary_stride.max(4);
+    let max_positions = rule.index.signatures_per_chunk.min(256);
+    let mut pos = 0usize;
+    let mut positions = 0usize;
+    while pos + FILE_ACCUM_FRAGMENT_MIN <= char_len && positions < max_positions {
+        let slice: String = chars[pos..pos + FILE_ACCUM_FRAGMENT_MIN]
+            .iter()
+            .collect();
+        rows.push(SigRow {
+            hash: xxh64(slice.as_bytes(), 0),
+            path: path.to_string(),
+            content_path: content_path.to_string(),
+            byte_offset: chunk_start,
+            byte_len: chunk_len,
+        });
+        pos += accum_stride;
+        positions += 1;
+    }
+}
+
+fn scan_signature_lengths(primary_min: usize, chunk_len: usize) -> Vec<usize> {
+    let mut lens = signature_lengths(primary_min, chunk_len);
+    if primary_min > FILE_ACCUM_FRAGMENT_MIN && chunk_len >= FILE_ACCUM_FRAGMENT_MIN {
+        if !lens.contains(&FILE_ACCUM_FRAGMENT_MIN) {
+            lens.insert(0, FILE_ACCUM_FRAGMENT_MIN);
+        }
+    }
+    lens
 }
 
 fn signature_lengths(min_len: usize, chunk_len: usize) -> Vec<usize> {
@@ -1527,6 +1649,81 @@ impl ScanBudget {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchKind {
+    Strong,
+    Accum,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VerifiedMatch {
+    b0: usize,
+    b1: usize,
+    norm_len: usize,
+    kind: MatchKind,
+}
+
+fn classify_verified_match(
+    norm_len: usize,
+    index_norm_len: usize,
+    hay_chunk_norm_len: usize,
+    rule: &FileRule,
+) -> Option<MatchKind> {
+    if file_fragment_meets_threshold(
+        norm_len,
+        index_norm_len,
+        hay_chunk_norm_len,
+        rule.min_fragment_len,
+        rule.min_fragment_ratio,
+    ) {
+        return Some(MatchKind::Strong);
+    }
+    if norm_len >= FILE_ACCUM_FRAGMENT_MIN {
+        return Some(MatchKind::Accum);
+    }
+    None
+}
+
+fn accum_redaction_ranges(haystack: &str, matches: &[VerifiedMatch]) -> Option<Vec<(usize, usize)>> {
+    let byte_ranges: Vec<(usize, usize)> = matches
+        .iter()
+        .filter(|m| m.kind == MatchKind::Accum)
+        .map(|m| (m.b0, m.b1))
+        .collect();
+    if byte_ranges.is_empty() {
+        return None;
+    }
+    let merged = merge_byte_ranges(byte_ranges);
+    let piece_lens: Vec<usize> = merged
+        .iter()
+        .map(|&(b0, b1)| {
+            normalize_with_map(&haystack[b0..b1])
+                .text
+                .chars()
+                .count()
+        })
+        .collect();
+    if !file_accum_fragment_meets_threshold(&piece_lens) {
+        return None;
+    }
+    Some(merged)
+}
+
+fn ranges_for_redaction(
+    haystack: &str,
+    matches: &[VerifiedMatch],
+) -> Option<Vec<(usize, usize)>> {
+    let strong_ranges: Vec<(usize, usize)> = matches
+        .iter()
+        .filter(|m| m.kind == MatchKind::Strong)
+        .map(|m| (m.b0, m.b1))
+        .collect();
+    if !strong_ranges.is_empty() {
+        return Some(merge_byte_ranges(strong_ranges));
+    }
+    accum_redaction_ranges(haystack, matches)
+}
+
 fn scan_haystack(
     haystack: &str,
     rule: &FileRule,
@@ -1584,6 +1781,7 @@ fn scan_haystack(
     };
 
     let budget = ScanBudget::new(rule.index.scan_time_budget_ms);
+    let extracted_root = extracted_root_from_db(&snapshot.db_path).unwrap_or_else(PathBuf::new);
 
     let Ok(conn) = Connection::open_with_flags(
         &snapshot.db_path,
@@ -1592,7 +1790,7 @@ fn scan_haystack(
         return haystack.to_string();
     };
 
-    let mut byte_ranges = Vec::new();
+    let mut matches = Vec::new();
     let blocks = haystack_scan_blocks(hay, rule.index.chunk_size, rule.index.chunk_overlap);
 
     for (block_start, block) in blocks {
@@ -1605,19 +1803,20 @@ fn scan_haystack(
             break;
         }
         let block_norm_len = normalize_with_map(block).text.chars().count();
-        let lens = signature_lengths(min_len, block_norm_len.max(min_len));
+        let lens = scan_signature_lengths(min_len, block_norm_len.max(min_len));
 
         if rule.index.scan_rg_prefilter
             && block.len() >= RG_PREFILTER_MIN_BYTES
             && !snapshot.literals.is_empty()
         {
-            byte_ranges.extend(rg_prefilter_ranges(
+            matches.extend(rg_prefilter_ranges(
                 block,
                 block_start,
                 snapshot.literals.as_ref(),
                 &snapshot.bloom,
                 &conn,
                 &scan_paths,
+                &extracted_root,
                 rule,
                 &budget,
             ));
@@ -1632,7 +1831,7 @@ fn scan_haystack(
             break;
         }
 
-        byte_ranges.extend(scan_block_bloom(
+        matches.extend(scan_block_bloom(
             block,
             block_start,
             rule,
@@ -1640,20 +1839,29 @@ fn scan_haystack(
             min_len,
             &snapshot.bloom,
             &snapshot.db_path,
+            &extracted_root,
             &scan_paths,
             &budget,
         ));
     }
 
-    if byte_ranges.is_empty() {
+    matches.extend(scan_accum_contains_match(
+        hay,
+        rule,
+        &conn,
+        &extracted_root,
+        &scan_paths,
+        &budget,
+    ));
+
+    let Some(byte_ranges) = ranges_for_redaction(hay, &matches) else {
         return haystack.to_string();
-    }
+    };
 
     if whole_block_on_match {
         return tool_output_block_message.to_string();
     }
 
-    byte_ranges.sort_by_key(|r| r.0);
     let merged = merge_byte_ranges(byte_ranges);
     apply_byte_ranges(haystack, &merged, rule.match_mode, vault)
 }
@@ -1665,28 +1873,30 @@ fn rg_prefilter_ranges(
     bloom: &BloomFilter,
     conn: &Connection,
     allowed_paths: &HashSet<String>,
+    extracted_root: &Path,
     rule: &FileRule,
     budget: &ScanBudget,
-) -> Vec<(usize, usize)> {
+) -> Vec<VerifiedMatch> {
     let norm = normalize_with_map(hay_block);
     let hay_chars: Vec<char> = norm.text.chars().collect();
-    if hay_chars.len() < file_min_fragment_len(rule.min_fragment_len) {
+    let min_scan = FILE_ACCUM_FRAGMENT_MIN.min(file_min_fragment_len(rule.min_fragment_len));
+    if hay_chars.len() < min_scan {
         return Vec::new();
     }
     let hay_chunk_norm_len = hay_chars.len();
-    let mut ranges = Vec::new();
+    let mut matches = Vec::new();
     for lit in literals {
         if budget.expired() {
             break;
         }
         let lit_chars: Vec<char> = lit.chars().collect();
-        if lit_chars.len() < file_min_fragment_len(rule.min_fragment_len) {
+        if lit_chars.len() < min_scan {
             continue;
         }
         let mut search_from = 0usize;
         while search_from + lit_chars.len() <= hay_chars.len() {
             if budget.expired() {
-                return ranges;
+                return matches;
             }
             if hay_chars[search_from..search_from + lit_chars.len()] != lit_chars[..] {
                 search_from += 1;
@@ -1696,7 +1906,7 @@ fn rg_prefilter_ranges(
             let candidate: String = lit_chars.iter().collect();
             let h = xxh64(candidate.as_bytes(), 0);
             if bloom.may_contain(h) {
-                if let Some((b0, b1)) = verify_normalized_match(
+                if let Some(m) = verify_normalized_match(
                     conn,
                     h,
                     &candidate,
@@ -1707,15 +1917,16 @@ fn rg_prefilter_ranges(
                     hay_chunk_norm_len,
                     hay_block_start,
                     allowed_paths,
+                    extracted_root,
                     rule,
                 ) {
-                    ranges.push((b0, b1));
+                    matches.push(m);
                 }
             }
             search_from = norm_pos + 1;
         }
     }
-    ranges
+    matches
 }
 
 fn scan_block_bloom(
@@ -1726,9 +1937,10 @@ fn scan_block_bloom(
     min_len: usize,
     bloom: &BloomFilter,
     db_path: &Path,
+    extracted_root: &Path,
     allowed_paths: &HashSet<String>,
     budget: &ScanBudget,
-) -> Vec<(usize, usize)> {
+) -> Vec<VerifiedMatch> {
     let Ok(conn) = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
         return Vec::new();
     };
@@ -1740,10 +1952,114 @@ fn scan_block_bloom(
         rule.index.scan_stride.max(1),
         bloom,
         &conn,
+        extracted_root,
         allowed_paths,
         rule,
         budget,
     )
+}
+
+fn load_allowed_index_norm_texts(
+    conn: &Connection,
+    allowed_paths: &HashSet<String>,
+    extracted_root: &Path,
+) -> Vec<String> {
+    let mut texts = Vec::new();
+    let mut seen = HashSet::new();
+    for path in allowed_paths {
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT content_path FROM signatures WHERE path = ?1 LIMIT 1",
+        ) else {
+            continue;
+        };
+        let content_path: String = stmt
+            .query_row(params![path], |row| row.get(0))
+            .unwrap_or_default();
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let Some(raw) = load_index_source_text(path, &content_path, extracted_root) else {
+            continue;
+        };
+        let norm = normalize_with_map(&raw);
+        if !norm.is_empty() {
+            texts.push(norm.text);
+        }
+    }
+    texts
+}
+
+/// Direct normalized substring scan when primary min_len exceeds accum threshold.
+fn scan_accum_contains_match(
+    haystack: &str,
+    rule: &FileRule,
+    conn: &Connection,
+    extracted_root: &Path,
+    allowed_paths: &HashSet<String>,
+    budget: &ScanBudget,
+) -> Vec<VerifiedMatch> {
+    let primary_min = file_min_fragment_len(rule.min_fragment_len);
+    if FILE_ACCUM_FRAGMENT_MIN >= primary_min {
+        return Vec::new();
+    }
+    let index_norms = load_allowed_index_norm_texts(conn, allowed_paths, extracted_root);
+    if index_norms.is_empty() {
+        return Vec::new();
+    }
+    let max_index_len = index_norms
+        .iter()
+        .map(|text| text.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut matches = Vec::new();
+    let blocks = haystack_scan_blocks(
+        haystack,
+        rule.index.chunk_size,
+        rule.index.chunk_overlap,
+    );
+    for (block_start, block) in blocks {
+        if budget.expired() {
+            break;
+        }
+        let norm = normalize_with_map(block);
+        let chars: Vec<char> = norm.text.chars().collect();
+        let hay_chunk_norm_len = chars.len();
+        if hay_chunk_norm_len < FILE_ACCUM_FRAGMENT_MIN {
+            continue;
+        }
+        let mut pos = 0usize;
+        while pos + FILE_ACCUM_FRAGMENT_MIN <= hay_chunk_norm_len {
+            if pos > 0 && pos % 512 == 0 && budget.expired() {
+                break;
+            }
+            let candidate: String = chars[pos..pos + FILE_ACCUM_FRAGMENT_MIN]
+                .iter()
+                .collect();
+            if index_norms.iter().any(|idx| idx.contains(&candidate)) {
+                if let Some((b0, b1)) =
+                    norm.orig_byte_range(block, pos, FILE_ACCUM_FRAGMENT_MIN)
+                {
+                    if classify_verified_match(
+                        FILE_ACCUM_FRAGMENT_MIN,
+                        max_index_len,
+                        hay_chunk_norm_len,
+                        rule,
+                    ) == Some(MatchKind::Accum)
+                    {
+                        matches.push(VerifiedMatch {
+                            b0: block_start + b0,
+                            b1: block_start + b1,
+                            norm_len: FILE_ACCUM_FRAGMENT_MIN,
+                            kind: MatchKind::Accum,
+                        });
+                    }
+                }
+            }
+            pos += 1;
+        }
+    }
+    matches
 }
 
 fn scan_region_bloom_slice(
@@ -1754,21 +2070,23 @@ fn scan_region_bloom_slice(
     _scan_stride: usize,
     bloom: &BloomFilter,
     conn: &Connection,
+    extracted_root: &Path,
     allowed_paths: &HashSet<String>,
     rule: &FileRule,
     budget: &ScanBudget,
-) -> Vec<(usize, usize)> {
+) -> Vec<VerifiedMatch> {
     let norm = normalize_with_map(hay_block);
-    if norm.text.chars().count() < min_len {
+    let min_scan = FILE_ACCUM_FRAGMENT_MIN.min(min_len);
+    if norm.text.chars().count() < min_scan {
         return Vec::new();
     }
     let hay_chunk_norm_len = norm.text.chars().count();
     let chars: Vec<char> = norm.text.chars().collect();
-    let mut byte_ranges = Vec::new();
+    let mut matches = Vec::new();
     let mut pos = 0usize;
-    while pos + min_len <= chars.len() {
+    while pos + min_scan <= chars.len() {
         if pos > 0 && pos % 256 == 0 && budget.expired() {
-            return byte_ranges;
+            return matches;
         }
         for &len in lens {
             if pos + len > chars.len() {
@@ -1779,7 +2097,7 @@ fn scan_region_bloom_slice(
             if !bloom.may_contain(h) {
                 continue;
             }
-            if let Some((b0, b1)) = verify_normalized_match(
+            if let Some(m) = verify_normalized_match(
                 conn,
                 h,
                 &candidate,
@@ -1790,14 +2108,15 @@ fn scan_region_bloom_slice(
                 hay_chunk_norm_len,
                 hay_block_start,
                 allowed_paths,
+                extracted_root,
                 rule,
             ) {
-                byte_ranges.push((b0, b1));
+                matches.push(m);
             }
         }
         pos += 1;
     }
-    byte_ranges
+    matches
 }
 
 fn build_scan_literals(db_path: &Path, rule: &FileRule, cap: usize) -> Result<Vec<String>> {
@@ -1805,36 +2124,48 @@ fn build_scan_literals(db_path: &Path, rule: &FileRule, cap: usize) -> Result<Ve
         return Ok(Vec::new());
     }
     let min_len = file_min_fragment_len(rule.min_fragment_len).max(4);
+    let accum_min = FILE_ACCUM_FRAGMENT_MIN.min(min_len);
+    let extracted_root = extracted_root_from_db(db_path).unwrap_or_else(PathBuf::new);
     let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let fetch = cap.saturating_mul(8).min(100_000);
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT path, byte_offset, byte_len FROM signatures ORDER BY sig_hash LIMIT ?1",
+        "SELECT DISTINCT path, content_path, byte_offset, byte_len FROM signatures ORDER BY sig_hash LIMIT ?1",
     )?;
     let mut rows = stmt.query(params![fetch as i64])?;
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         let path: String = row.get(0)?;
-        let offset: i64 = row.get(1)?;
-        let len: i32 = row.get(2)?;
-        let Some(raw) = read_literal_string(&path, offset as u64, len as u32) else {
+        let content_path: String = row.get(1)?;
+        let offset: i64 = row.get(2)?;
+        let len: i32 = row.get(3)?;
+        let Some(raw) = read_index_chunk(
+            &path,
+            &content_path,
+            &extracted_root,
+            offset as u64,
+            len as u32,
+        ) else {
             continue;
         };
         let norm = normalize_with_map(&raw);
         let chars: Vec<char> = norm.text.chars().collect();
-        if chars.len() < min_len {
-            continue;
-        }
-        let sample_positions = [0usize, chars.len() / 2, chars.len().saturating_sub(min_len)];
-        for pos in sample_positions {
-            if pos + min_len > chars.len() {
+        let sample_lens = [min_len, accum_min];
+        for sample_len in sample_lens {
+            if chars.len() < sample_len {
                 continue;
             }
-            let lit: String = chars[pos..pos + min_len].iter().collect();
-            if seen.insert(lit.clone()) {
-                out.push(lit);
-                if out.len() >= cap {
-                    return Ok(out);
+            let sample_positions = [0usize, chars.len() / 2, chars.len().saturating_sub(sample_len)];
+            for pos in sample_positions {
+                if pos + sample_len > chars.len() {
+                    continue;
+                }
+                let lit: String = chars[pos..pos + sample_len].iter().collect();
+                if seen.insert(lit.clone()) {
+                    out.push(lit);
+                    if out.len() >= cap {
+                        return Ok(out);
+                    }
                 }
             }
         }
@@ -1861,8 +2192,9 @@ fn verify_normalized_match(
     hay_chunk_norm_len: usize,
     hay_block_start: usize,
     allowed_paths: &HashSet<String>,
+    extracted_root: &Path,
     rule: &FileRule,
-) -> Option<(usize, usize)> {
+) -> Option<VerifiedMatch> {
     let mut stmt = conn
         .prepare("SELECT path, content_path, byte_offset, byte_len FROM signatures WHERE sig_hash = ?1 LIMIT 16")
         .ok()?;
@@ -1882,25 +2214,34 @@ fn verify_normalized_match(
         if chunk_len <= 0 {
             continue;
         }
-        let read_path = if content_path.is_empty() { path.as_str() } else { content_path.as_str() };
-        let Some(raw_chunk) = read_literal_string(read_path, chunk_start as u64, chunk_len as u32) else {
+        let Some(raw_chunk) = read_index_chunk(
+            &path,
+            &content_path,
+            extracted_root,
+            chunk_start as u64,
+            chunk_len as u32,
+        ) else {
             continue;
         };
         let index_norm = normalize_with_map(&raw_chunk);
         if !index_norm.text.contains(candidate) {
             continue;
         }
-        if !file_fragment_meets_threshold(
+        let Some(kind) = classify_verified_match(
             norm_len,
             index_norm.text.chars().count(),
             hay_chunk_norm_len,
-            rule.min_fragment_len,
-            rule.min_fragment_ratio,
-        ) {
+            rule,
+        ) else {
             continue;
-        }
+        };
         let (b0, b1) = hay_norm.orig_byte_range(hay_block, norm_pos, norm_len)?;
-        return Some((hay_block_start + b0, hay_block_start + b1));
+        return Some(VerifiedMatch {
+            b0: hay_block_start + b0,
+            b1: hay_block_start + b1,
+            norm_len,
+            kind,
+        });
     }
     None
 }
@@ -2320,6 +2661,97 @@ mod tests {
         let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
         let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
         assert!(!out.contains(&secret_text));
+    }
+
+    #[test]
+    fn accum_fragment_redacts_multiple_split_pieces() {
+        let tmp = TempDir::new().unwrap();
+        let secret_a = test_secret("ACCUM-FRAGMENT-SECRET-ALPHA-XYZZY-ONE-TWO");
+        let secret_b = test_secret("ACCUM-FRAGMENT-SECRET-BETA-XYZZY-TWO-THREE");
+        let indexed = tmp.path().join("indexed.txt");
+        fs::write(&indexed, format!("{secret_a}\n\n{secret_b}")).unwrap();
+
+        let rule = FileRule {
+            id: "accum-split".into(),
+            path: tmp.path().to_path_buf(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 3,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["txt".into()],
+            index: FileIndexOptions {
+                bloom_megabytes: 1,
+                build_workers: 1,
+                scan_rg_prefilter: false,
+                ..Default::default()
+            },
+        };
+        let index_root = tmp.path().join("idx");
+        let snapshot = build_rule_index(&index_root, &rule).unwrap();
+        let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
+
+        let spaced_a: String = secret_a.chars().map(|c| format!("{c} ")).collect();
+        let spaced_b: String = secret_b.chars().map(|c| format!("{c} ")).collect();
+        let hay = format!("lead {spaced_a} middle noise {spaced_b} tail");
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
+
+        assert!(!out.contains(&secret_a));
+        assert!(!out.contains(&secret_b));
+    }
+
+    #[test]
+    fn resolve_index_content_file_uses_sidecar_when_stored_path_missing() {
+        let tmp = TempDir::new().unwrap();
+        let rule_base = tmp.path().join("rule");
+        let extracted = rule_base.join(EXTRACTED_DIR);
+        fs::create_dir_all(&extracted).unwrap();
+        let indexed_path = "D:/vault/report.pdf";
+        let sidecar = sidecar_path(&extracted, indexed_path);
+        fs::write(&sidecar, "sidecar-body").unwrap();
+        let stored = format!(
+            "C:/old-host/AppData/extracted/{}",
+            sidecar.file_name().unwrap().to_string_lossy()
+        );
+        let resolved = resolve_index_content_file(indexed_path, &stored, &extracted).expect("sidecar");
+        assert_eq!(resolved, sidecar);
+    }
+
+    #[test]
+    fn accum_fragment_does_not_redact_single_short_match() {
+        let tmp = TempDir::new().unwrap();
+        let indexed = tmp.path().join("doc.txt");
+        let fragment = test_secret("ACCUM-SINGLE-PIECE-SHOULD-NOT-TRIGGER-ALONE");
+        fs::write(&indexed, format!("padding {fragment} padding")).unwrap();
+
+        let rule = FileRule {
+            id: "accum-single".into(),
+            path: tmp.path().to_path_buf(),
+            enabled: true,
+            recursive: true,
+            trigger_window: 3,
+            match_mode: MatchMode::Fragment,
+            min_fragment_len: Some(65),
+            min_fragment_ratio: Some(0.5),
+            formats: vec!["txt".into()],
+            index: FileIndexOptions {
+                bloom_megabytes: 1,
+                build_workers: 1,
+                ..Default::default()
+            },
+        };
+        let index_root = tmp.path().join("idx");
+        let snapshot = build_rule_index(&index_root, &rule).unwrap();
+        let allowed: HashSet<String> = snapshot.indexed_paths.iter().cloned().collect();
+
+        let garbled = fragment.replace('-', "");
+        let hay = format!("noise {garbled} tail");
+        let out = scan_haystack(&hay, &rule, &snapshot, &allowed, None, false, "");
+        assert!(
+            out.contains("ACCUM"),
+            "one qualifying piece should not trigger accum redaction alone"
+        );
     }
 
     #[test]

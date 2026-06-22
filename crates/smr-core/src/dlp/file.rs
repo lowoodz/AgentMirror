@@ -371,11 +371,61 @@ pub fn strip_verbatim_path_prefix(path: &str) -> String {
 }
 
 pub fn normalize_trigger_path(path: &str) -> String {
-    let mut p = strip_verbatim_path_prefix(path);
+    let mut p = normalize_slashes(&strip_verbatim_path_prefix(path));
     while p.len() > 1 && p.ends_with('/') {
         p.pop();
     }
     p
+}
+
+/// `\` → `/` and collapse repeated `/` segments.
+/// Preserves `//server/...` UNC roots and normalizes `D://dlp//file` → `D:/dlp/file`.
+fn normalize_slashes(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let forward = trimmed.replace('\\', "/");
+
+    // UNC: //server/share/...
+    if forward.starts_with("//") {
+        let segments: Vec<&str> = forward.split('/').filter(|s| !s.is_empty()).collect();
+        if segments.len() >= 2 {
+            return format!("//{}", segments.join("/"));
+        }
+    }
+
+    // Windows drive letter: X:...
+    if forward.len() >= 2
+        && forward.as_bytes()[1] == b':'
+        && forward.as_bytes()[0].is_ascii_alphabetic()
+    {
+        let drive = &forward[..2];
+        let rest = forward[2..].trim_start_matches('/');
+        let body = rest
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+        return if body.is_empty() {
+            drive.to_string()
+        } else {
+            format!("{drive}/{body}")
+        };
+    }
+
+    let absolute = forward.starts_with('/');
+    let body = forward
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+    if absolute {
+        format!("/{body}")
+    } else {
+        body
+    }
 }
 
 pub fn paths_equivalent(a: &str, b: &str) -> bool {
@@ -409,7 +459,7 @@ pub fn basename_trigger_match(basename: &str, text: &str) -> bool {
 }
 
 pub(crate) fn normalize_path_str(path: &str) -> String {
-    path.replace('\\', "/")
+    normalize_slashes(path)
 }
 
 pub(crate) fn normalize_existing_path(path: &str) -> String {
@@ -1118,5 +1168,28 @@ mod tests {
             activated.iter().any(|p| p.contains("Aibaba")),
             "expected Aibaba pdf activated, got {activated:?}"
         );
+    }
+
+    #[test]
+    fn normalize_path_str_collapses_json_escaped_windows_separators() {
+        assert_eq!(
+            normalize_path_str("D:\\\\dlp\\\\file.json"),
+            "D:/dlp/file.json"
+        );
+        assert_eq!(normalize_path_str("D://dlp//file.json"), "D:/dlp/file.json");
+        assert_eq!(normalize_path_str("/foo//bar/baz"), "/foo/bar/baz");
+        assert_eq!(normalize_path_str("//server/share//dir"), "//server/share/dir");
+    }
+
+    #[test]
+    fn json_escaped_d_drive_path_passes_path_under_rule() {
+        assert!(path_under_rule(
+            "D:\\\\dlp\\\\annual-report.json",
+            "D:/dlp"
+        ));
+        assert!(path_under_rule(
+            "D://dlp//annual-report.json",
+            "D:/dlp"
+        ));
     }
 }

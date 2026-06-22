@@ -3,6 +3,13 @@
 pub const DEFAULT_FILE_MIN_FRAGMENT_LEN: usize = 65;
 pub const DEFAULT_FILE_MIN_FRAGMENT_RATIO: f64 = 0.5;
 
+/// Accumulated fragment match: each piece must exceed this many normalized chars (>20).
+pub const FILE_ACCUM_FRAGMENT_MIN: usize = 21;
+/// Sum of qualifying piece lengths must exceed this many normalized chars (>64).
+pub const FILE_ACCUM_FRAGMENT_TOTAL: usize = 65;
+/// Minimum number of qualifying pieces for accumulated redaction.
+pub const FILE_ACCUM_FRAGMENT_MIN_COUNT: usize = 2;
+
 /// File DLP: normalized exact substring must meet min length; ratio applies to short
 /// haystacks or when the match covers enough of the indexed window.
 pub fn file_fragment_meets_threshold(
@@ -27,6 +34,19 @@ pub fn file_fragment_meets_threshold(
     }
     // Verified substring match at min_len in a large tool payload (common for agent reads).
     norm_haystack_chunk_len > min_len * 4 && norm_match_len >= min_len
+}
+
+/// Multiple normalized matches each longer than 20 chars whose total length exceeds 64.
+pub fn file_accum_fragment_meets_threshold(match_norm_lens: &[usize]) -> bool {
+    let qualifying: Vec<usize> = match_norm_lens
+        .iter()
+        .copied()
+        .filter(|len| *len >= FILE_ACCUM_FRAGMENT_MIN)
+        .collect();
+    if qualifying.len() < FILE_ACCUM_FRAGMENT_MIN_COUNT {
+        return false;
+    }
+    qualifying.iter().sum::<usize>() >= FILE_ACCUM_FRAGMENT_TOTAL
 }
 
 pub fn file_min_fragment_len(min_fragment_len: Option<usize>) -> usize {
@@ -89,6 +109,14 @@ mod tests {
             Some(65),
             Some(0.5)
         ));
+    }
+
+    #[test]
+    fn accum_threshold_requires_multiple_pieces_and_total_len() {
+        assert!(!file_accum_fragment_meets_threshold(&[44]));
+        assert!(!file_accum_fragment_meets_threshold(&[21, 21, 21]));
+        assert!(file_accum_fragment_meets_threshold(&[21, 22, 22]));
+        assert!(file_accum_fragment_meets_threshold(&[44, 21]));
     }
 
     #[test]
