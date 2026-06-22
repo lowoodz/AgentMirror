@@ -10,6 +10,16 @@ use zip::ZipArchive;
 
 use crate::tool_bundle::{bundled_tool_env, resolve_tool};
 
+/// Avoid flashing console windows when GUI saves trigger background doc indexing.
+fn configure_hidden_subprocess(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
 /// Extract readable text from supported document formats.
 pub fn extract_text(path: &Path) -> Result<String> {
     let ext = path
@@ -106,6 +116,7 @@ fn extract_pdf_pdftotext(path: &Path) -> Result<String> {
     for (key, value) in bundled_tool_env(&pdftotext) {
         cmd.env(key, value);
     }
+    configure_hidden_subprocess(&mut cmd);
     let output = cmd.output().with_context(|| {
         format!(
             "spawn pdftotext ({})",
@@ -233,8 +244,10 @@ fn extract_textutil(path: &Path) -> Result<String> {
 }
 
 fn extract_external_file(program: &str, path: &Path) -> Result<String> {
-    let output = Command::new(program)
-        .arg(path)
+    let mut cmd = Command::new(program);
+    cmd.arg(path);
+    configure_hidden_subprocess(&mut cmd);
+    let output = cmd
         .output()
         .with_context(|| format!("spawn {program} for {}", path.display()))?;
     if !output.status.success() {
