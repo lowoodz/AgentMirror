@@ -18,6 +18,7 @@ pub use session::SessionGuard;
 pub use vault::TokenVault;
 
 use crate::config::{AppConfig, UiLanguage};
+use parking_lot::RwLock;
 use smr_protocol::{
     extract_tool_call_texts, is_model_input, is_tool_result_content,
     ExtractedText,
@@ -25,13 +26,13 @@ use smr_protocol::{
 use std::path::PathBuf;
 
 pub struct DlpEngine {
-    content: ContentDlp,
+    content: RwLock<ContentDlp>,
     file: FileDlp,
     sessions: SessionGuard,
     vault: TokenVault,
-    enabled: bool,
-    reversible: bool,
-    ui_language: parking_lot::RwLock<UiLanguage>,
+    enabled: RwLock<bool>,
+    reversible: RwLock<bool>,
+    ui_language: RwLock<UiLanguage>,
 }
 
 impl DlpEngine {
@@ -74,13 +75,13 @@ impl DlpEngine {
             None => FileDlp::new(&config.file_rules)?,
         };
         Ok(Self {
-            content: ContentDlp::new(&config.content_rules, &config.pipeline)?,
+            content: RwLock::new(ContentDlp::new(&config.content_rules, &config.pipeline)?),
             file,
             sessions,
             vault,
-            enabled,
-            reversible,
-            ui_language: parking_lot::RwLock::new(config.server.ui_language),
+            enabled: RwLock::new(enabled),
+            reversible: RwLock::new(reversible),
+            ui_language: RwLock::new(config.server.ui_language),
         })
     }
 
@@ -105,6 +106,9 @@ impl DlpEngine {
 
     pub fn reload(&self, config: &AppConfig) -> anyhow::Result<()> {
         self.sync_runtime_config(config);
+        *self.content.write() = ContentDlp::new(&config.content_rules, &config.pipeline)?;
+        *self.enabled.write() = config.pipeline.dlp_active();
+        *self.reversible.write() = config.pipeline.dlp_reversible;
         self.file.reload(&config.file_rules)
     }
 
@@ -160,7 +164,7 @@ impl DlpEngine {
         request_json: &serde_json::Value,
         reboost_windows: bool,
     ) -> anyhow::Result<(Vec<(ExtractedText, String)>, usize, bool)> {
-        if !self.enabled {
+        if !*self.enabled.read() {
             return Ok((Vec::new(), 0, false));
         }
 
@@ -245,7 +249,7 @@ impl DlpEngine {
         response_json: &serde_json::Value,
         extracted: &[ExtractedText],
     ) -> anyhow::Result<(Vec<(ExtractedText, String)>, usize)> {
-        if !self.enabled {
+        if !*self.enabled.read() {
             return Ok((Vec::new(), 0));
         }
 
@@ -256,7 +260,9 @@ impl DlpEngine {
         let mut replacements = Vec::new();
         for item in extracted {
             let scan_files = is_model_input(item, response_json);
-            let new_text = if self.reversible && smr_protocol::is_tool_related(item, response_json) {
+            let new_text = if *self.reversible.read()
+                && smr_protocol::is_tool_related(item, response_json)
+            {
                 self.vault.restore(session_id, &item.text)
             } else {
                 let whole_block = scan_files && is_tool_result_content(item, response_json);
@@ -284,13 +290,15 @@ impl DlpEngine {
         scan_files: bool,
         whole_block_on_match: bool,
     ) -> anyhow::Result<String> {
-        let content_protected = self.content.has_protected_content(text);
-        let sanitized = if self.reversible {
-            self.content
-                .sanitize_text_reversible(text, session_id, &self.vault)?
+        let content = self.content.read();
+        let content_protected = content.has_protected_content(text);
+        let reversible = *self.reversible.read();
+        let sanitized = if reversible {
+            content.sanitize_text_reversible(text, session_id, &self.vault)?
         } else {
-            self.content.sanitize_text(text)?
+            content.sanitize_text(text)?
         };
+        drop(content);
 
         // Api-key / password / secret / content-rule hits: span-level redaction only.
         // Skip file DLP on the same text so surrounding task context stays intact and
@@ -310,7 +318,7 @@ impl DlpEngine {
                         &sanitized,
                         active,
                         &self.file,
-                        if self.reversible {
+                        if reversible {
                             Some((session_id, &self.vault))
                         } else {
                             None
@@ -359,7 +367,7 @@ impl DlpEngine {
         if is_tool_result_content(item, request_json) {
             return true;
         }
-        if !self.reversible {
+        if !*self.reversible.read() {
             return true;
         }
         if is_pure_reversible_token_substitution(old, new) {
@@ -1340,5 +1348,56 @@ mod file_session_tests {
             activated.get() > 0,
             "path normalization should enable Win3 path triggers"
         );
+    }
+}
+
+#[cfg(test)]
+mod content_reload_tests {
+    use super::*;
+    use crate::config::{
+        AppConfig, ContentCategory, ContentRule, LoggingConfig, MatchMode, PipelineConfig,
+        ServerConfig,
+    };
+    use smr_protocol::extract_texts;
+
+    #[test]
+    fn reload_applies_new_content_rules_without_restart() {
+        let mut config = AppConfig {
+            server: ServerConfig::default(),
+            pipeline: PipelineConfig {
+                dlp_enabled: true,
+                dlp_reversible: true,
+                ..Default::default()
+            },
+            logging: LoggingConfig::default(),
+            fallback_groups: Default::default(),
+            content_rules: vec![],
+            file_rules: vec![],
+            operation_rules: vec![],
+            path_protection_rules: vec![],
+            insight: Default::default(),
+        };
+
+        let dlp = DlpEngine::new(&config).unwrap();
+        let body = serde_json::json!({
+            "messages": [{"role": "user", "content": "my password is Sky@420117"}]
+        });
+        let extracted = extract_texts(&body).unwrap();
+        let (_, count_before, _) = dlp.process_request("s1", &extracted, &body, false).unwrap();
+        assert_eq!(count_before, 0, "no rules yet");
+
+        config.content_rules.push(ContentRule {
+            id: "secret-test".into(),
+            enabled: true,
+            match_mode: MatchMode::Full,
+            value: "Sky@420117".into(),
+            category: ContentCategory::Secret,
+            min_fragment_len: None,
+            min_fragment_ratio: None,
+        });
+        dlp.reload(&config).unwrap();
+
+        let (_, count_after, _) = dlp.process_request("s1", &extracted, &body, false).unwrap();
+        assert_eq!(count_after, 1, "reload should pick up new content rule");
     }
 }

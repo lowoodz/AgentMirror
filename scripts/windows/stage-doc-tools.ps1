@@ -55,6 +55,22 @@ function Invoke-VcredistExtract {
     Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+function Copy-VcRuntimeFromDir {
+    param([string]$SrcDir, [string]$BinDir, [string]$Label)
+    foreach ($dll in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+        $src = Join-Path $SrcDir $dll
+        if (-not (Test-Path $src)) { return $false }
+        if (-not (Test-PeX64 $src)) {
+            throw "${src} is $(Get-PeMachine $src), expected x64"
+        }
+    }
+    foreach ($dll in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+        Copy-Item (Join-Path $SrcDir $dll) (Join-Path $BinDir $dll) -Force
+        Write-Host "==> staged $(Join-Path $BinDir $dll) (from ${Label})"
+    }
+    return $true
+}
+
 function Invoke-StageVcRuntime {
     param([string]$BinDir, [string]$RepoRoot)
     $VcrtScript = Join-Path $RepoRoot "scripts\vendor\stage-vcrt-dlls.sh"
@@ -66,16 +82,12 @@ function Invoke-StageVcRuntime {
             return
         }
     }
-    $cacheDir = Join-Path $RepoRoot "dist\vendor-cache\vcrt-x64"
-    $cached = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") | Where-Object {
-        Test-Path (Join-Path $cacheDir $_)
+    $vendorDir = Join-Path $RepoRoot "resources\doc-tools\vendor-crt-x64"
+    if (Copy-VcRuntimeFromDir -SrcDir $vendorDir -BinDir $BinDir -Label $vendorDir) {
+        return
     }
-    if ($cached.Count -eq 3) {
-        foreach ($dll in $cached) {
-            $src = Join-Path $cacheDir $dll
-            if (-not (Test-PeX64 $src)) { throw "${src} is not x64" }
-            Copy-Item $src (Join-Path $BinDir $dll) -Force
-        }
+    $cacheDir = Join-Path $RepoRoot "dist\vendor-cache\vcrt-x64"
+    if (Copy-VcRuntimeFromDir -SrcDir $cacheDir -BinDir $BinDir -Label $cacheDir) {
         return
     }
     Invoke-VcredistExtract -BinDir $BinDir -RepoRoot $RepoRoot

@@ -175,11 +175,11 @@ impl SharedApp {
         drop(inner);
 
         let engines = if let Some(dlp) = reused_dlp {
+            dlp.reload(&config)?;
             AppEngines::from_existing_dlp(config.clone(), dlp)?
         } else {
             AppEngines::from_config_with_sessions_and_vault(config.clone(), sessions, vault)?
         };
-        engines.dlp.sync_runtime_config(&config);
         engines.ops.sync_runtime_config(config.server.ui_language);
         *self.inner.write() = engines;
         self.sync_insight_safety();
