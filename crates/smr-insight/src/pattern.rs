@@ -88,11 +88,12 @@ fn collect_patterns(map: HashMap<String, (u32, u32)>, step_count: usize) -> Vec<
 }
 
 fn normalize_token(s: &str) -> String {
+    const MAX_CHARS: usize = 48;
     let t = s.trim().to_ascii_lowercase();
-    if t.len() <= 48 {
+    if t.chars().count() <= MAX_CHARS {
         t
     } else {
-        t[..48].to_string()
+        t.chars().take(MAX_CHARS).collect()
     }
 }
 
@@ -158,5 +159,14 @@ mod tests {
         ];
         assert!(pattern_matches_run(&pattern, &actions));
         assert!(!pattern_matches_run(&pattern, &["read file".into(), "run tests".into()]));
+    }
+
+    #[test]
+    fn normalize_token_truncates_on_char_boundary() {
+        // 47 ASCII + 3-byte CJK — old byte slice at 48 panicked inside the character.
+        let s = "x".repeat(47) + "流程";
+        let out = super::normalize_token(&s);
+        assert!(out.chars().count() <= 48);
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
     }
 }
