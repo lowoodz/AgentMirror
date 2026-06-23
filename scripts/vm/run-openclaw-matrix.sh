@@ -70,14 +70,18 @@ KEEP_FLAG=""
 [[ "$KEEP_MATRIX_CONFIG" == true ]] && KEEP_FLAG="-KeepMatrixConfig"
 
 rm -f "$LOG_LOCAL"
+# Do not use pipefail on the SSH pipeline: guest may keep AgentMirror workers alive
+# after the matrix summary; judge pass/fail from the log, not vm_ssh exit code.
+set +o pipefail
 vm_ssh "cmd.exe /c \"set SMR_GUEST_STAGING=${GUEST_STAGING}&& set SMR_GUEST_WORK=${GUEST_WORK}&& powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${REMOTE_PS} ${KEEP_FLAG}\"" \
   2>&1 | tee "$LOG_LOCAL"
+set -o pipefail
 
+if grep -q "Summary: 12/12 passed" "$LOG_LOCAL"; then
+  echo "==> Windows OpenClaw matrix PASSED (strict E2E)"
+  exit 0
+fi
 if grep -qE "Summary: [0-9]+/[0-9]+ passed" "$LOG_LOCAL"; then
-  if grep -q "Summary: 12/12 passed" "$LOG_LOCAL"; then
-    echo "==> Windows OpenClaw matrix PASSED (strict E2E)"
-    exit 0
-  fi
   echo "==> Windows OpenClaw matrix FAILED (see log)" >&2
   exit 1
 fi
