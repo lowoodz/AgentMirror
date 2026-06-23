@@ -697,4 +697,48 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert!(out[0].1.contains("路径防护"));
     }
+
+    #[test]
+    fn blocks_remove_item_when_operation_rule_enabled() {
+        let ops = test_ops(
+            &[OperationRule {
+                id: "block-remove-item".into(),
+                enabled: true,
+                operation: OperationType::CommandExec,
+                object: OperationObject {
+                    pattern: "(?i)remove-item".into(),
+                    is_regex: true,
+                },
+            }],
+            &[],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        );
+        let cmd = r#"{"command":"Remove-Item -Path D:\\docs\\hello.txt -Force"}"#;
+        let blocked = ops.enforce_tool_call(cmd).expect("should block");
+        assert!(blocked.0.contains("SMR BLOCKED"));
+    }
+
+    #[test]
+    fn disabled_operation_rules_do_not_block() {
+        let ops = test_ops(
+            &[OperationRule {
+                id: "block-remove-item".into(),
+                enabled: false,
+                operation: OperationType::CommandExec,
+                object: OperationObject {
+                    pattern: "(?i)remove-item".into(),
+                    is_regex: true,
+                },
+            }],
+            &[],
+            OperationSecurityMode::Enforce,
+            OperationSecurityMode::Enforce,
+        );
+        let cmd = r#"{"command":"Remove-Item -Path D:\\docs\\hello.txt -Force"}"#;
+        assert!(
+            ops.enforce_tool_call(cmd).is_none(),
+            "disabled rules must not block even when pattern matches"
+        );
+    }
 }

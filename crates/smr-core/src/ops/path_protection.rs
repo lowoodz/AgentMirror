@@ -104,6 +104,7 @@ fn detect_intent(text: &str) -> OpIntent {
 fn is_delete_intent(lower: &str) -> bool {
     lower.contains("delete_file")
         || lower.contains("remove_file")
+        || lower.contains("remove-item")
         || lower.contains("unlink")
         || lower.contains("rmdir")
         || lower.contains("shred")
@@ -113,6 +114,10 @@ fn is_delete_intent(lower: &str) -> bool {
         || lower.starts_with("rm ")
         || lower.contains(" rm-")
         || lower.contains("del /")
+        || lower.contains("del \"")
+        || lower.starts_with("del ")
+        || lower.contains(" rd /")
+        || lower.starts_with("rd /")
         || lower.contains("remove(")
 }
 
@@ -529,5 +534,21 @@ mod tests {
     fn tokenize_command_paths_handles_quoted_paths() {
         let paths = tokenize_command_paths(r#"ls -la "/data/my dir/file.txt""#);
         assert_eq!(paths, vec!["/data/my dir/file.txt"]);
+    }
+
+    #[test]
+    fn deny_delete_blocks_powershell_remove_item() {
+        let guard = PathProtection::new(&[rule("docs", "D:\\docs", PathProtectionLevel::DenyDelete)]);
+        let cmd = r#"{"command":"Remove-Item -Path D:\\docs\\hello.txt -Force"}"#;
+        let hit = guard.check(cmd).expect("Remove-Item on protected path should block");
+        assert_eq!(hit.0, "docs");
+        assert_eq!(hit.2.replace('\\', "/"), "D:/docs/hello.txt");
+    }
+
+    #[test]
+    fn deny_delete_blocks_cmd_del_f() {
+        let guard = PathProtection::new(&[rule("docs", "D:\\docs", PathProtectionLevel::DenyDelete)]);
+        let cmd = r#"{"command":"del /f \"D:\\docs\\hello.txt\""}"#;
+        assert!(guard.check(cmd).is_some(), "del /f should be delete intent");
     }
 }
