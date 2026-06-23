@@ -1,10 +1,10 @@
 # AgentMirror
 
-**Desktop app for agent observability & reflection and LLM API proxy/router.**
+**Desktop app for LLM safe routing, agent observability & reflection.**
 
-- Lightweight local model proxy/router compatible with OpenAI and Anthropic client protocols; on API failure, exhausted quota, or rate limits, fallback runs automatically with no interruption.
+- Lightweight local model proxy/router compatible with OpenAI and Anthropic client protocols; on API failure, exhausted quota/token limits, or rate limits, automatic fallback with no interruption.
 - Built-in safeguards: data-leak prevention, redaction, operation blocking, and file-path protection.
-- Reconstructs agent goals, decisions, and actions from LLM proxy traffic; provides causal trajectory maps, action reflection reports, and agent daily digests—addressing observability for multi-agent and long-running agents, and helping improve agent-loop reliability and task success rates.
+- Reconstructs agent goals, decisions, and actions from LLM proxy traffic; provides causal trajectory maps, action reflection reports, and agent daily digests—addressing observability for multi-agent and long-running agents, and helping improve Agent Orchestration Loop (outer orchestration loop) reliability and task success rates.
 - macOS and Windows desktop apps with one-click install.
 
 **中文文档:** [README.zh-CN.md](README.zh-CN.md)
@@ -39,12 +39,12 @@
 ## Product positioning
 
 
-|            |                                                                                                                                                                           |
+| Dimension  | Description                                                                                                                                                               |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Route**  | `high` / `medium` / `low` ordered fallback groups; auto-switch on upstream failure, malformed JSON, or missing first stream token; built-in OpenAI ↔ Anthropic conversion |
-| **Fast**   | Rust core, local forwarding, native streaming; single config file, hot reload; AgentMirror tray app stays out of your way                                                   |
-| **Safe**   | Content/file DLP, tool operation rules, path protection; master switch to enable or disable all security features                                                         |
-| **Mirror** | Reconstruct agent goals, decisions, and actions from LLM proxy traffic; causal trajectory maps, reflection reports, and agent daily digests                             |
+| **Fast**   | Rust core, local forwarding, native streaming; single config file, hot reload; AgentMirror tray app stays out of your way                                                 |
+| **Safe**   | Content/file DLP, tool operation rules, path protection; master switch to enable or disable all security features                                                       |
+| **Mirror** | Reconstruct agent goals, decisions, and actions from LLM proxy traffic; causal trajectory maps, reflection reports, and agent daily digests                               |
 
 
 > Change one line in your client. Run AgentMirror. A faster, more reliable path to models—with built-in safety and agent observability.
@@ -83,14 +83,14 @@ AgentMirror detects the client protocol from headers and JSON body, then convert
 Works like OpenClaw / Cursor **provider mode**: AgentMirror is one provider; high / medium / low fallback groups appear as three models. `GET /models` or `GET /v1/models` lists them.
 
 
-| Item | Value |
-| ---- | ----- |
-| **Universal API base URL** | `http://127.0.0.1:8080/v1` |
-| **OpenAI-style path** | `POST /chat/completions` (alias of `/v1/chat/completions`) |
-| **Anthropic-style path** | `POST /messages` (alias of `/v1/messages`) |
-| **Models** | `saferoute-high`, `saferoute-medium`, `saferoute-lite` |
-| **Admin UI** | `http://127.0.0.1:8080/ui` |
-| **Health** | `http://127.0.0.1:8080/health` |
+| Item                       | Value                                                    |
+| -------------------------- | -------------------------------------------------------- |
+| **Universal API base URL** | `http://127.0.0.1:8080/v1`                               |
+| **OpenAI-style path**      | `POST /chat/completions` (alias of `/v1/chat/completions`) |
+| **Anthropic-style path**   | `POST /messages` (alias of `/v1/messages`)                 |
+| **Models**                 | `saferoute-high`, `saferoute-medium`, `saferoute-lite`   |
+| **Admin UI**               | `http://127.0.0.1:8080/ui`                               |
+| **Health**                 | `http://127.0.0.1:8080/health`                           |
 
 Legacy tier path prefixes (`/high/messages`, `/medium/chat/completions`, …) and header `X-SMR-Fallback-Group` still work. Path/header override the `model` field when both are set. Session id: `X-SMR-Session-Id`.
 
@@ -100,23 +100,22 @@ Legacy tier path prefixes (`/high/messages`, `/medium/chat/completions`, …) an
 
 Pre-built packages are on [GitHub Releases](https://github.com/lowoodz/AgentMirror/releases/latest).
 
-| Platform | Package | Install |
-|----------|---------|---------|
-| **macOS** (Apple Silicon) | `AgentMirror_*_arm64.dmg` | Open the DMG, drag **AgentMirror.app** to Applications, launch from the menu bar tray |
-| **macOS** (Apple Silicon) | `smr-*-darwin-arm64-app.tar.gz` | Extract `AgentMirror.app` to `/Applications` |
-| **macOS** (Intel) | `AgentMirror_*_x86_64.dmg` | Same as arm64 DMG (cross-built on Apple Silicon hosts) |
-| **macOS** (Intel) | `smr-*-darwin-x86_64-app.tar.gz` | Extract `AgentMirror.app` to `/Applications` |
-| **macOS** (Intel) | `smr-*-darwin-x86_64.tar.gz` | CLI only |
-| **Windows** x86_64 | `AgentMirror_*_x64-setup.exe` | **Recommended:** run the NSIS installer — registers in **Settings → Apps**, installs tray GUI + `smr.exe` CLI, includes uninstaller |
-| **Windows** x86_64 | `smr-*-windows-x86_64-app.zip` | Portable GUI + optional `*-setup.exe`; or extract and run `install.ps1 -All` |
-| **Windows** x86_64 | `smr-*-windows-x86_64.zip` | CLI only: extract, run `install.ps1`, then `securemodelroute` |
+| Platform                   | Package                          | Install                                                                                  |
+| -------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------- |
+| **macOS** (Apple Silicon)  | `AgentMirror_*_arm64.dmg`        | Open the DMG, drag **AgentMirror.app** to Applications, launch from the menu bar tray   |
+| **macOS** (Apple Silicon)  | `smr-*-darwin-arm64-app.tar.gz`  | Extract `AgentMirror.app` to `/Applications`                                             |
+| **macOS** (Intel)          | `AgentMirror_*_x86_64.dmg`       | Same as arm64 DMG (cross-built on Apple Silicon hosts)                                   |
+| **macOS** (Intel)          | `smr-*-darwin-x86_64-app.tar.gz` | Extract `AgentMirror.app` to `/Applications`                                             |
+| **macOS** (Intel)          | `smr-*-darwin-x86_64.tar.gz`     | CLI only                                                                                 |
+| **Windows** x86_64         | `AgentMirror_*_x64-setup.exe`    | **Recommended:** run the NSIS installer — registers in **Settings → Apps**, installs tray GUI + `smr.exe` CLI, includes uninstaller |
+| **Windows** x86_64         | `smr-*-windows-x86_64-app.zip`   | Portable GUI + optional `*-setup.exe`; or extract and run `install.ps1 -All`             |
+| **Windows** x86_64         | `smr-*-windows-x86_64.zip`       | CLI only: extract, run `install.ps1`, then `securemodelroute`                            |
 
 Uninstall on Windows: **Settings → Apps → AgentMirror** (NSIS), or run `.\uninstall.ps1` to remove the NSIS app and CLI companion files.
 
 Build the NSIS installer on Windows: `.\scripts\package.ps1` (requires Node.js + Rust). From macOS with UTM: `./scripts/vm/package-windows-gui.sh`.
 
-From source on macOS: `./scripts/install.sh --all` (CLI + tray + login autostart).  
-From source on Windows: `.\install.ps1 -All` (zip layout) or use `AgentMirror_*_x64-setup.exe` (NSIS).
+From source: on macOS run `./scripts/install.sh --all`; on Windows use `AgentMirror_*_x64-setup.exe` (NSIS) or `.\install.ps1 -All` inside the zip.
 
 Config after install: `~/.local/etc/securemodelroute/smr.yaml` (macOS/Linux/Windows NSIS or `install.ps1`). Add upstream API keys in the admin UI or YAML—never commit secrets.
 
@@ -193,7 +192,7 @@ Steps:
 3. Add every `saferoute/<public-id>` you use to `agents.defaults.models` (OpenClaw allowlist). Switch tiers with `openclaw models set saferoute/saferoute-medium` or set `agents.defaults.model.primary`.
 4. Restart the gateway: `openclaw gateway restart` (or restart the OpenClaw app).
 
-Tip: admin UI → **Overview** → **OpenClaw configuration** lists the same base URL and model ids; use **Copy** there.
+Tip: admin UI → **Overview** → **OpenClaw configuration example** lists the same base URL and model ids; use **Copy** there.
 
 **Legacy alternatives** (when a client cannot set `model` to `saferoute-*`):
 
@@ -234,7 +233,7 @@ See [AgentMirror design](docs/AgentMirror-Design.md) for the full API reference.
 
 ### Data safety (DLP)
 
-Redact sensitive data before it reaches the model, so secrets (private data) are not leaked through LLM calls.
+Automatically redact sensitive data before the model accesses or retrieves it, preventing leakage through LLM calls.
 
 - **Content rules** — full-text or fragment match for secrets, phrases, extensionless sensitive strings
 - **Reversible tokens** — with `pipeline.dlp_reversible: true` (default), secrets are replaced by session tokens (`[[smr:…]]`) before they reach the model. **Only tool-call / tool-result fields are restored** on the response path; ordinary assistant text is not auto-restored. Per-session vault is capped at 4096 unique secrets (overflow falls back to irreversible redaction).
@@ -303,10 +302,10 @@ fallback_groups:
 **Config paths**
 
 
-| Platform                       | Typical location                         |
-| ------------------------------ | ---------------------------------------- |
-| macOS / Linux (install script) | `~/.local/etc/securemodelroute/smr.yaml` |
-| macOS / Linux (direct `smr`)   | `~/.config/securemodelroute/smr.yaml`    |
+| Platform                       | Typical location                                     |
+| ------------------------------ | ---------------------------------------------------- |
+| macOS / Linux (install script) | `~/.local/etc/securemodelroute/smr.yaml`             |
+| macOS / Linux (direct `smr`)   | `~/.config/securemodelroute/smr.yaml`                |
 | Windows                        | `%USERPROFILE%\.local\etc\securemodelroute\smr.yaml` |
 
 
@@ -333,17 +332,17 @@ Files: `{config_dir}/traffic/*.body`
 Open `http://127.0.0.1:8080/ui` — overview, routing, DLP, path rules, operation rules, agent reflection, logs, full YAML editor. Screenshots: see [Admin UI preview](#admin-ui-screenshots) above.
 
 
-| API                              | Description                                     |
-| -------------------------------- | ----------------------------------------------- |
-| `GET /api/status`                | Listen address, security flags, index readiness |
-| `GET/PUT /api/config`            | Read/write config; PUT hot-reloads              |
-| `GET /api/traffic`               | Traffic snapshot list                           |
-| `GET /api/traffic/{id}`          | Full snapshot body                              |
-| `GET /api/events`, `/api/audits` | Events and audit rows                           |
+| API                                                                      | Description                                     |
+| ------------------------------------------------------------------------ | ----------------------------------------------- |
+| `GET /api/status`                                                        | Listen address, security flags, index readiness |
+| `GET/PUT /api/config`                                                    | Read/write config; PUT hot-reloads              |
+| `GET /api/traffic`                                                       | Traffic snapshot list                           |
+| `GET /api/traffic/{id}`                                                  | Full snapshot body                              |
+| `GET /api/events`, `/api/audits`                                         | Events and audit rows                           |
 | `GET /api/insight/agents`, `/runs`, `/runs/{id}/graph`, `/runs/{id}/report` | AgentMirror runs, graphs, reflection reports |
-| `GET /api/insight/daily/{date}`, `POST /api/insight/daily/generate` | Daily digests |
-| `GET /api/insight/agents/{id}/profile` | Agent capability profile |
-| `POST /api/insight/reset`        | Clear insight data; optional traffic replay     |
+| `GET /api/insight/daily/{date}`, `POST /api/insight/daily/generate`       | Daily digests                                   |
+| `GET /api/insight/agents/{id}/profile`                                   | Agent capability profile                        |
+| `POST /api/insight/reset`                                                | Clear insight data; optional traffic replay     |
 
 Full insight API: [docs/AgentMirror-Design.md](docs/AgentMirror-Design.md#6-api).
 
