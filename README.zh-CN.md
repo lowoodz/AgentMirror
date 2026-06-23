@@ -9,29 +9,30 @@
 
 **English:** [README.md](README.md)
 
+<a id="admin-ui-screenshots"></a>
 
+<p align="center"><sub>管理界面截图 — 点击标题翻页查看 · 1–5</sub></p>
 
-管理界面截图 — 点击标题翻页查看 · 1–5
-
-**1 / 5 · 概览**
-
-
-
-**2 / 5 · 智能体反思**
-
-
-
-**3 / 5 · 模型路由**
-
-
-
-**4 / 5 · DLP**
-
-
-
-**5 / 5 · 日志查看**
-
-
+<details open>
+<summary><strong>1 / 5 · 概览</strong></summary>
+<p align="center"><img src="docs/overview-cn.png" width="780" alt="管理界面 — 概览"/></p>
+</details>
+<details>
+<summary><strong>2 / 5 · 智能体反思</strong></summary>
+<p align="center"><img src="docs/Agent-Reflection-cn.png" width="780" alt="管理界面 — 智能体反思"/></p>
+</details>
+<details>
+<summary><strong>3 / 5 · 模型路由</strong></summary>
+<p align="center"><img src="docs/routing-cn.png" width="780" alt="管理界面 — 模型路由"/></p>
+</details>
+<details>
+<summary><strong>4 / 5 · DLP</strong></summary>
+<p align="center"><img src="docs/dlp-cn.png" width="780" alt="管理界面 — DLP 规则"/></p>
+</details>
+<details>
+<summary><strong>5 / 5 · 日志查看</strong></summary>
+<p align="center"><img src="docs/log-json-cn.png" width="780" alt="管理界面 — 流量日志"/></p>
+</details>
 
 ---
 
@@ -195,7 +196,7 @@ Windows 卸载：**设置 → 应用 → AgentMirror**（NSIS），或运行 `.\
 
 提示：管理界面 → **概览** → **OpenClaw 配置示例** 会列出相同的 base URL 与 model id，可直接 **复制**。
 
-**旧版替代方式**（客户端无法设置 `model` 为 `saferoute-`* 时）：
+**旧版替代方式**（客户端无法设置 `model` 为 `saferoute-*` 时）：
 
 - 档位路径前缀：`baseUrl: "http://127.0.0.1:8080/high/v1"`（亦可用 `/medium/v1`、`/lite/v1`）
 - 请求头覆盖：在 `http://127.0.0.1:8080/v1` 上设置 `headers: { "X-SMR-Fallback-Group": "high" }`
